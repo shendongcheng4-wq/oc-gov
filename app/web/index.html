@@ -294,8 +294,76 @@ body{
 .stage{height:calc(100vh - 46px); display:flex; gap:12px; padding:12px; min-width:1180px}
 .panel{background:var(--card); border:1px solid var(--line); border-radius:12px}
 
-/* 左：问答 */
-.ask{width:336px; flex:0 0 336px; display:flex; flex-direction:column; overflow:hidden}
+/* 左：问答。宽度按比例给到整条内容的 1/3（336px 那版在 1500 宽的屏上只有 22%，
+   问数长答案一多就竖向拉成一条；比例宽跟着屏幕走，不用每档再补一个断点）。
+   剩下的 2/3 减掉一个 gap 全归城市罗盘。 */
+.ask{width:33.3333%; flex:0 0 33.3333%; display:flex; flex-direction:column; overflow:hidden}
+/* 侧栏收起：只剩一条 54px 的竖条，罗盘自己涨到满宽。
+   状态挂在 <html> 上而不是 .ask 上 —— 页面加载前的内联脚本就能定，开页不闪一下。 */
+html.ask-fold .ask{width:54px;flex:0 0 54px}
+/* 用「除了窄条以外全隐藏」而不是逐个点名：点名那版漏了 .ask.show-chats .ask-chats
+   这条更高优先级的规则，收起时历史屏照样留在 54px 里（"边上还有显示"就是这个）。 */
+html.ask-fold .ask > *:not(.ask-rail){display:none}
+html.ask-fold .ask-rail{display:flex}
+
+.ask-rail{
+  display:none;flex:1;flex-direction:column;align-items:center;gap:10px;
+  padding:12px 0;cursor:pointer;color:var(--muted)
+}
+.ask-rail:hover{color:var(--brand)}
+.ask-rail .rail-ic{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
+.ask-rail .rail-tx{writing-mode:vertical-rl;letter-spacing:2px;font-size:12px;font-weight:700;color:var(--ink-2)}
+.ask-rail:hover .rail-tx{color:var(--brand)}
+.ask-rail .rail-dot{width:6px;height:6px;border-radius:50%;background:var(--ok);margin-top:auto}
+
+/* 头部两个图标按钮：左开历史对话，右收侧栏 */
+.hd-btn{
+  width:24px;height:24px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  border:0;background:transparent;color:var(--muted);border-radius:6px;cursor:pointer;padding:0
+}
+.hd-btn svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.hd-btn:hover{background:var(--hover-2);color:var(--brand)}
+
+/* 面板里的两屏：对话 / 历史会话。同一块地方轮换，不叠浮层 */
+.ask-body{flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0}
+.ask-chats{display:none;flex:1;flex-direction:column;min-height:0}
+.ask.show-chats .ask-body{display:none}
+.ask.show-chats .ask-chats{display:flex}
+.chats-hd{display:flex;align-items:center;gap:7px;padding:0 12px 9px}
+.chats-hd b{font-size:11.5px;color:var(--muted);font-weight:600;letter-spacing:.4px}
+.chats-n{font-size:10.5px;color:var(--faint)}
+.chats-hd .hd-btn{margin-left:auto}
+.chats-scroll{flex:1;overflow-y:auto;padding:0 8px 8px}
+.chats-scroll::-webkit-scrollbar{width:5px}
+.chats-scroll::-webkit-scrollbar-thumb{background:var(--thumb);border-radius:3px}
+/* 列表第一行：和会话条目同宽同高的一张「新建」，不是标题栏里的按钮 */
+.chat-new{
+  display:flex;align-items:center;gap:8px;width:100%;margin:0 0 2px;padding:7px 8px;
+  border:0;border-radius:8px;background:transparent;
+  font:inherit;font-size:12px;font-weight:600;color:var(--ink-2);cursor:pointer;text-align:left
+}
+.chat-new:hover{background:var(--hover-2);color:var(--brand)}
+.chat-new .cn-ic{
+  width:18px;height:18px;flex:0 0 auto;border-radius:50%;border:1px solid var(--brand);
+  color:var(--brand);display:inline-flex;align-items:center;justify-content:center;
+  font-size:11px;line-height:1;font-weight:700
+}
+.chat-new:hover .cn-ic{background:var(--brand-soft)}
+.chats-list{padding:0}
+.chats-grp{font-size:10.5px;color:var(--faint);padding:9px 6px 4px;letter-spacing:.5px}
+.chat-item{display:flex;gap:8px;padding:7px 8px;border-radius:8px;cursor:pointer;align-items:flex-start}
+.chat-item:hover{background:var(--hover-2)}
+.chat-item.on{background:var(--brand-soft)}
+.chat-item .ci-main{min-width:0;flex:1}
+.chat-item .ci-t{font-size:12px;color:var(--ink);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-item .ci-p{font-size:11px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-item .ci-n{font-size:10px;color:var(--faint);flex:0 0 auto;padding-top:2px}
+.chats-empty{padding:30px 14px;text-align:center;color:var(--faint);font-size:11.5px;line-height:1.9}
+.chats-foot{
+  display:flex;align-items:center;gap:7px;padding:8px 12px;border-top:1px solid var(--line-2);
+  font-size:11px;color:var(--muted);flex:0 0 auto
+}
+.chats-foot .cf-label{flex:0 0 auto}
 .ask-head{display:flex;align-items:center;padding:13px 14px 9px; gap:8px}
 .ask-head h2{margin:0;font-size:13.5px;font-weight:700;letter-spacing:.1px}
 .ask-head h2 b{color:var(--brand)}
@@ -351,7 +419,7 @@ body{
 .es-item.sep{margin-top:5px;padding-top:9px;border-top:1px solid var(--line-2)}
 
 /* ---------- 斜杠唤起（输入框里打 / 弹这一层） ----------
-   贴着输入框上沿弹出，宽度跟整行一致：336px 的面板里，做成跟在光标后面的
+   贴着输入框上沿弹出，宽度跟整行一致：左栏只有屏宽 1/3，做成跟在光标后面的
    小气泡会把输入框挡掉一半。 */
 .slash-menu{
   position:absolute;left:0;right:0;bottom:calc(100% + 6px);z-index:32;
@@ -383,12 +451,8 @@ body{
 }
 
 /* 底部操作行：会话 / 新对话 / 模型状态，靠右排。免责声明单独占一行，
-   不跟这堆控件抢宽度 —— 336px 的面板里挤一行会把它压成竖排单字。 */
+   不跟这堆控件抢宽度 —— 挤一行会把它压成竖排单字。 */
 .sub-ops{display:flex;align-items:center;justify-content:flex-end;gap:5px;margin-top:7px}
-.sub-ops select{
-  font:inherit;font-size:10.5px;color:var(--muted);background:var(--surface);border:1px solid var(--line);
-  border-radius:5px;padding:2px 4px;max-width:104px;cursor:pointer
-}
 
 .thread{flex:1;overflow-y:auto;padding:2px 14px 8px;display:flex;flex-direction:column;gap:12px}
 .thread::-webkit-scrollbar{width:5px}
@@ -684,7 +748,7 @@ body{
 .toast.on{opacity:1;transform:translate(-50%,0)}
 
 @media (max-width:1320px){
-  .ask{width:300px;flex:0 0 300px}
+  /* 左栏不再在这里收回固定宽：1/3 是比例，窄屏自然跟着缩，收成 300px 反而破坏比例 */
   .kpi .v{font-size:22px}
   .card .big{font-size:20px}
 }
@@ -695,7 +759,8 @@ html.embedded .topbar{display:none}
 html.embedded .stage{height:100vh}
 html.embedded .drawer{top:0;height:100%}
 
-/* 嵌进平台后可用宽度只有 1100 出头，不再强制 1180 的最小宽度，改为压缩左栏 */
+/* 嵌进平台后可用宽度只有 1100 出头，不再强制 1180 的最小宽度，改为压缩左栏。
+   这是唯一不按 1/3 的档：1/3 在这里等于把罗盘的四列 KPI 压到 170 出头，数字要换行。 */
 @media (max-width:1200px){
   .stage{min-width:0;gap:10px;padding:10px}
   .ask{width:286px;flex:0 0 286px}
@@ -704,9 +769,8 @@ html.embedded .drawer{top:0;height:100%}
 }
 
 /* ---------------- 会话头 / 模型入口 ---------------- */
-/* 左栏只有 336px，标题和三个控件挤不进一行 —— 拆成「标题行 + 工具行」 */
-.ask-tools{display:flex;align-items:center;gap:6px;padding:0 14px 9px}
-.ask-tools #threadSel{flex:1 1 auto;min-width:0;max-width:none}
+/* .ask-tools / #threadSel 的规则随下拉框一起去掉了：会话切换现在是「历史对话」那一屏的列表，
+   模型状态是底部那颗药丸，没有第三个并排控件要挤在标题行里 */
 .model-pill{
   display:inline-flex;align-items:center;gap:4px;max-width:140px;flex:0 0 auto;
   padding:2px 8px;border-radius:20px;border:1px solid var(--info-line);
@@ -721,10 +785,6 @@ html.embedded .drawer{top:0;height:100%}
 }
 .mini:hover{border-color:var(--brand);color:var(--brand)}
 .mini:disabled{opacity:.5;cursor:default}
-#threadSel{
-  font-size:11px;padding:3px 4px;border:1px solid var(--line);border-radius:6px;
-  background:var(--surface);color:var(--ink-2);
-}
 /* 阶段提示（真流式的进度，不是打字机） */
 .stage-hint{color:var(--brand);font-size:11.5px;display:flex;align-items:center;gap:5px}
 .stage-hint::before{
@@ -1333,6 +1393,8 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
 <script>
   // 在解析 <body> 之前判定嵌入状态，避免顶栏闪一下
   if (window.self !== window.top) document.documentElement.classList.add("embedded");
+  // 侧栏上次是收起的就继续收起：这条也得赶在首屏前跑，否则会看到它先铺开再缩回去
+  try { if (localStorage.getItem("ocgov.askfold") === "1") document.documentElement.classList.add("ask-fold"); } catch (e) {}
 </script>
 </head>
 <body>
@@ -1341,7 +1403,6 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
   <div class="brand"><span class="logo">政</span><span id="cityTitle">AI市长工作台</span></div>
   <div class="tools">
     <span data-tool="meeting"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H4z"/><path d="M9 20h6M12 16v4"/></svg>会议助手</span>
-    <span data-tool="oversight" title="统筹推进 · 督办台账（常驻入口）"><svg viewBox="0 0 24 24"><path d="M4 6h8M4 12h8M4 18h8"/><path d="M15 16l2.5 2.5L22 13"/></svg>统筹推进<i class="tool-badge" id="ovBadge" hidden></i></span>
     <span data-tool="cal"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg>AI日程</span>
     <span data-tool="doc"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>材料助手</span>
     <span data-tool="bell" title="消息提醒 · 到期、逾期、会前、指标"><svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 20h4"/></svg>消息提醒<i class="tool-badge" id="ntBadge" hidden></i></span>
@@ -1359,9 +1420,43 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
   <!-- 左：AI 参谋 -->
   <section class="panel ask">
     <div class="ask-head">
+      <button class="hd-btn" id="askFold" title="收起侧栏" aria-label="收起侧栏">
+        <svg viewBox="0 0 24 24"><path d="M19 5v14"/><path d="M14 7l-5 5 5 5"/></svg>
+      </button>
       <h2><i class="ask-dot"></i><b>智能问政</b></h2>
       <span class="live"><i></i>在线</span>
+      <button class="hd-btn" id="askChats" title="历史对话" aria-label="历史对话">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h15M4 18h11"/></svg>
+      </button>
     </div>
+    <!-- 收起后剩下的窄条：点哪都能展开 -->
+    <div class="ask-rail" id="askRail" title="展开智能问政" role="button" aria-label="展开智能问政">
+      <svg class="rail-ic" viewBox="0 0 24 24"><path d="M10 7l5 5-5 5"/><path d="M5 5v14"/></svg>
+      <span class="rail-tx">智能问政</span>
+      <i class="rail-dot" title="在线"></i>
+    </div>
+    <!-- 历史对话：和对话共用这块地方轮换，不做浮层 —— 收起侧栏时它也跟着收 -->
+    <div class="ask-chats" id="askChatsPane">
+      <div class="chats-hd">
+        <b>历史对话</b>
+        <span class="chats-n" id="chatsCount"></span>
+        <button class="hd-btn" id="chatsBack" title="回到对话" aria-label="回到对话">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <!-- 「＋新对话」是和下面会话列表并列的第一行，不跟标题挤在一起（WorkBuddy 的「新建任务」就长这样） -->
+      <div class="chats-scroll">
+        <button class="chat-new" id="chatsNew" title="开一个新会话">
+          <span class="cn-ic">＋</span><span>新对话</span>
+        </button>
+        <div class="chats-list" id="chatsList"></div>
+      </div>
+      <div class="chats-foot">
+        <span class="cf-label">当前模型</span>
+        <span class="model-pill" data-model-pill title="点击配置模型">未配置模型</span>
+      </div>
+    </div>
+    <div class="ask-body">
     <!-- 专家是「当前对话的参谋」，单选。全组叫参谋团，放在菜单最后一项，
          不是并排一堆胶囊 —— 一次只能有一个角色在对话中，选谁就谁答。
          没选人时这一行只剩「AI参谋 ▾」，不写「不召唤」这种占位词。 -->
@@ -1396,11 +1491,12 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
         <div class="slash-menu" id="slashMenu" hidden></div>
       </div>
       <div class="sub-ops">
-        <select id="threadSel" title="切换会话（第一项=开新会话）"></select>
-        <button class="mini" id="newChat" title="开一个新会话">＋ 新对话</button>
-        <span class="model-pill" id="modelPill" title="点击配置模型">未配置模型</span>
+        <!-- 会话切换挪去头部「历史对话」那一屏了，这里只留模型状态：
+             同一件事不再有两个入口 -->
+        <span class="model-pill" data-model-pill title="点击配置模型">未配置模型</span>
       </div>
       <div class="disclaim">AI 输出仅供参考 · 数值以数据接口返回为准</div>
+    </div>
     </div>
   </section>
 
@@ -1759,10 +1855,14 @@ function renderBoards(list, focus) {
   $("#grid").innerHTML = cards + focusCard;
 }
 
+/* 预警条即督办台账的唯一入口：顶栏不再单列「统筹推进」——
+   同一件事两个入口，右上角那个还带逾期角标，用户会以为是两套东西。
+   逾期数角标就挂在这里的标题上，信息没丢，入口只剩一个。 */
 function renderAlerts(list, ov) {
   const shown = list.slice(0, 2);
+  const overdue = (ov && ov.overdue) || 0;
   $("#alertbar").innerHTML = `
-    <h3><span class="dot"></span>追踪推进 · 预警提醒</h3>
+    <h3><span class="dot"></span>追踪推进 · 预警提醒${overdue ? `<i class="tool-badge" title="${overdue} 件已逾期">${overdue}</i>` : ""}</h3>
     <div class="alert-list">
       ${shown.map((a) => `
         <div class="alert-item" data-item="${esc(a.id)}" title="${esc(a.why)}">
@@ -1773,15 +1873,6 @@ function renderAlerts(list, ov) {
       ${list.length > 2 ? `<span class="tag" style="color:var(--faint)">另有 ${list.length - 2} 条</span>` : ""}
     </div>
     <button class="go" id="goCoord">进入统筹推进</button>`;
-
-  // 常驻入口的角标：逾期数。没有预警条也要更新，所以放在渲染之外。
-  const badge = $("#ovBadge");
-  if (badge) {
-    const n = (ov && ov.overdue) || 0;
-    badge.textContent = n;
-    badge.hidden = !n;
-    badge.title = n ? `${n} 件已逾期` : "";
-  }
 }
 
 /* ---------- 问答 ---------- */
@@ -2251,7 +2342,7 @@ async function ask(question) {
 
   box.scrollTop = box.scrollHeight;
   $("#go").disabled = false;
-  refreshThreadOptions();
+  refreshThreads();
 }
 
 /* ---------- 会话与模型状态 ---------- */
@@ -2298,44 +2389,105 @@ function renderThread(thread) {
   box.scrollTop = box.scrollHeight;
 }
 
-async function refreshThreadOptions() {
+/* 会话列表：一个数组喂两处 —— 历史那一屏、设置里的「会话记录 N 个」。
+   sel 时代的 options.length 计数散在三个地方，改成数组之后只认这一个源。 */
+let THREADS = [];
+
+function dayLabel(ts) {
+  const d = new Date((ts || 0) * 1000);
+  const now = new Date();
+  const same = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  if (same(d, now)) return "今天";
+  const y = new Date(now.getTime() - 864e5);
+  if (same(d, y)) return "昨天";
+  const gap = (now - d) / 864e5;
+  if (gap < 7) return `${d.getMonth() + 1}月${d.getDate()}日`;
+  return `${d.getFullYear()}年${d.getMonth() + 1}月`;
+}
+
+function renderChats() {
+  const box = $("#chatsList");
+  if (!box) return;
+  const cnt = $("#chatsCount");
+  if (cnt) cnt.textContent = THREADS.length ? `· ${THREADS.length}` : "";
+  if (!THREADS.length) {
+    box.innerHTML = `<div class="chats-empty">还没有会话。<br>问第一个问题就会自动建一条。</div>`;
+    return;
+  }
+  let last = "";
+  box.innerHTML = THREADS.map((t) => {
+    const lb = dayLabel(t.updated_at || t.created_at);
+    const grp = lb !== last ? `<div class="chats-grp">${lb}</div>` : "";
+    last = lb;
+    return `${grp}
+      <div class="chat-item${t.id === THREAD ? " on" : ""}" data-tid="${esc(t.id)}" title="${esc(t.title || "未命名对话")}">
+        <div class="ci-main">
+          <div class="ci-t">${esc(t.title || "未命名对话")}</div>
+          <div class="ci-p">${esc(t.last_preview || "（空会话）")}</div>
+        </div>
+        <span class="ci-n">${t.message_count || 0}</span>
+      </div>`;
+  }).join("");
+}
+
+async function refreshThreads() {
   try {
     const d = await (await fetch("/api/threads")).json();
-    const sel = $("#threadSel");
-    sel.innerHTML = `<option value="">新会话</option>` + (d.items || [])
-      .map((t) => `<option value="${t.id}">${esc(t.title || "未命名")} · ${t.message_count}</option>`).join("");
-    sel.value = THREAD || "";
-    if (!THREAD) sel.value = "";
+    THREADS = d.items || [];
+    renderChats();
   } catch (e) { /* 列表拉不到不影响问数 */ }
 }
 
 async function openThread(id) {
   THREAD = id || null;
+  renderChats();
   if (!id) {
     renderThread(null);
-    $("#threadSel").value = "";
     return;
   }
   const res = await fetch(`/api/threads/${id}`);
-  if (!res.ok) { THREAD = null; renderThread(null); return; }
+  if (!res.ok) { THREAD = null; renderThread(null); renderChats(); return; }
   const d = await res.json();
   renderThread(d.thread);
-  $("#threadSel").value = id;
+}
+
+/* 历史对话那一屏：从头部按钮进，点某一条就回到对话 */
+function showChats(on) {
+  const pane = document.querySelector(".ask");
+  if (!pane) return;
+  pane.classList.toggle("show-chats", !!on);
+  if (on) { refreshThreads(); return; }
+  $("#q").focus();
+}
+
+/* 侧栏收起：状态记在本机，换屏不丢；罗盘靠 flex 自己补上宽度 */
+function setAskFold(on) {
+  document.documentElement.classList.toggle("ask-fold", !!on);
+  try { localStorage.setItem("ocgov.askfold", on ? "1" : "0"); } catch (e) {}
+}
+
+async function newThread() {
+  THREAD = null;
+  renderThread(null);
+  renderChats();
+  showChats(false);
 }
 
 async function loadModels() {
   MODELS = await (await fetch("/api/models")).json();
-  const pill = $("#modelPill");
-  if (!MODELS.ready) {
-    pill.textContent = "未配置模型";
-    pill.classList.add("off");
-    pill.title = "点这里配置模型。不配置也能用，问数会退回规则解析";
-  } else {
-    const ref = MODELS.active || "";
-    pill.textContent = ref.split("/").slice(1).join("/") || ref;
-    pill.classList.remove("off");
-    pill.title = `当前模型 ${ref}，点击管理`;
-  }
+  // 模型状态在对话底部和历史那一屏的页脚各有一份，一起刷
+  document.querySelectorAll("[data-model-pill]").forEach((pill) => {
+    if (!MODELS.ready) {
+      pill.textContent = "未配置模型";
+      pill.classList.add("off");
+      pill.title = "点这里配置模型。不配置也能用，问数会退回规则解析";
+    } else {
+      const ref = MODELS.active || "";
+      pill.textContent = ref.split("/").slice(1).join("/") || ref;
+      pill.classList.remove("off");
+      pill.title = `当前模型 ${ref}，点击管理`;
+    }
+  });
   return MODELS;
 }
 
@@ -2363,7 +2515,7 @@ function renderSettings() {
 
 function renderGeneralPanel() {
   const cur = PID.get();
-  const threads = Math.max(0, $("#threadSel").options.length - 1);
+  const threads = THREADS.length;
   $("#mmBody").innerHTML = `
     <div class="set-row">
       <div class="set-l"><b>默认身份</b><span>打开工作台时以谁的身份进入。这是演示切换，没有权限校验，切到谁就能看谁的关注。</span></div>
@@ -2398,7 +2550,7 @@ function renderAboutPanel() {
   const kpis = (OV && OV.kpis) || [];
   const people = (PP.people || []).length;
   const exps = (EXP.list || []).length;
-  const threads = Math.max(0, $("#threadSel").options.length - 1);
+  const threads = THREADS.length;
   $("#mmBody").innerHTML = `
     <div class="about-grid">
       <div class="about-cell"><b>v0.2</b><span>版本 · 纯标准库，无第三方依赖</span></div>
@@ -2786,8 +2938,8 @@ function acctRow(it) {
 function renderIdMenu() {
   const cur = PID.get();
   const p = (PP.people || []).find((x) => x.id === cur) || { avatar: "市", name: "市长", scope: "全市" };
-  // 会话数从下拉里数：会话列表本来就存在 DOM 里，没必要再拉一次接口
-  const threads = Math.max(0, $("#threadSel").options.length - 1);
+  // 会话数直接用已经拉到内存里的那一份，不再为计数单独拉接口
+  const threads = THREADS.length;
   ACCT_ACTIONS = {
     settings: () => openSettings("model"),
     theme: () => openThemeModal(),
@@ -2831,8 +2983,8 @@ function showIdPicker() {
 }
 
 async function resetLocalPrefs() {
-  if (!confirm("只清这台机器上的身份、主题、外观偏好。\n服务端的关注列表、跟进清单、督办台账都不动。继续？")) return;
-  ["ocgov.person", "ocgov.theme", "ocgov.accent"].forEach((k) => localStorage.removeItem(k));
+  if (!confirm("只清这台机器上的身份、主题、外观、侧栏折叠状态。\n服务端的关注列表、跟进清单、督办台账都不动。继续？")) return;
+  ["ocgov.person", "ocgov.theme", "ocgov.accent", "ocgov.askfold"].forEach((k) => localStorage.removeItem(k));
   THEME.apply();
   $("#idMenu").hidden = true;
   toast("本机偏好已重置，正在重新加载");
@@ -4637,9 +4789,8 @@ async function boot() {
 
   // 模型配置 + 最近一次会话（没有会话就停在空态，不自动建空记录）
   await loadModels();
-  await refreshThreadOptions();
-  const first = $("#threadSel").options[1];
-  if (first) await openThread(first.value);
+  await refreshThreads();
+  if (THREADS[0]) await openThread(THREADS[0].id);
 
   // 直接带 #models 打开设置面板，方便收藏一个「配模型」的直达链接
   if (location.hash === "#models") openSettings("model");
@@ -4654,6 +4805,8 @@ async function boot() {
   if (location.hash === "#doc") openDocModal();
   // #cal 直达 AI 日程（日程按当前身份现算，收藏链接换人也跟着换）
   if (location.hash === "#cal") openCalModal();
+  // #chats 直达历史对话（侧栏收起时也能用，收藏一个"我的会话"链接）
+  if (location.hash === "#chats") showChats(true);
 
   // #ask=问题 可以直接发问 —— 把一个问题作为链接发给同事，打开就有答案
   const preset = location.hash.match(/^#ask=(.+)$/);
@@ -4844,7 +4997,6 @@ document.addEventListener("click", (e) => {
   const tool = e.target.closest("[data-tool]");
   if (tool) {
     if (tool.dataset.tool === "meeting") return openMeetModal();
-    if (tool.dataset.tool === "oversight") return openOversight();
     if (tool.dataset.tool === "doc") return openDocModal();
     if (tool.dataset.tool === "cal") return openCalModal();
     if (tool.dataset.tool === "bell") return openNtModal();
@@ -4861,15 +5013,24 @@ document.addEventListener("click", (e) => {
   if (e.target.closest("#focusMore")) return toast("民情焦点：共 3 条，均来自 12345 热线聚类");
 });
 
-$("#newChat").onclick = () => {
-  THREAD = null;
-  renderThread(null);
-  $("#threadSel").value = "";
-  $("#q").focus();
+/* ---------- 侧栏：历史对话 / 收起 ---------- */
+$("#askChats").onclick = () => showChats(true);
+$("#chatsBack").onclick = () => showChats(false);
+$("#askFold").onclick = () => setAskFold(true);
+$("#askRail").onclick = () => setAskFold(false);
+$("#chatsNew").onclick = () => {
+  newThread();
   toast("已开新会话，下一句提问会自动创建");
 };
-$("#threadSel").onchange = (e) => openThread(e.target.value);
-$("#modelPill").onclick = () => openSettings("model");
+// 列表项整行可点：点哪一条就切哪一条，切换完直接回对话屏
+$("#chatsList").onclick = (e) => {
+  const it = e.target.closest(".chat-item");
+  if (!it) return;
+  openThread(it.dataset.tid).then(() => showChats(false));
+};
+document.querySelectorAll("[data-model-pill]").forEach((p) => {
+  p.onclick = () => openSettings("model");
+});
 
 /* ---------- 专家下拉：点整行开合，点菜单项定人 ----------
    单独绑而不是走全局委托：菜单项和「开合」是两种语义，混进 data-* 规则里
