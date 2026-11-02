@@ -1,0 +1,3460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI市长工作台</title>
+<script>
+/* 主题必须在首帧之前定下来，否则深色用户每次刷新都会先白闪一下再变暗。
+   这段只读 localStorage 设属性，不依赖任何请求，所以能赶在样式生效前跑完。 */
+(function () {
+  try {
+    var t = localStorage.getItem("ocgov.theme") || "light";
+    var dark = t === "dark" || (t === "auto" && matchMedia("(prefers-color-scheme:dark)").matches);
+    if (dark) document.documentElement.dataset.theme = "dark";
+    var a = localStorage.getItem("ocgov.accent");
+    if (a && a !== "blue") document.documentElement.dataset.accent = a;
+  } catch (e) {}
+})();
+</script>
+<style>
+:root{
+  --brand:#0d54c8; --brand-2:#1163e6; --brand-soft:#e8f0fe;
+  --nav-a:#0a2a63; --nav-b:#10428f; --nav-c:#0e4bb0;
+  --bg:#eef2f8; --card:#fff; --line:#e5eaf2; --line-2:#eef2f8;
+  --ink:#16213a; --ink-2:#3c4a63; --muted:#6b7a90; --faint:#98a6ba;
+  --ok:#0f9d58; --ok-bg:#e6f7ed; --ok-line:#bfe8d2;
+  --warn:#d98200; --warn-bg:#fff3e0; --warn-line:#f6dfb8;
+  --danger:#d33c3c; --danger-bg:#fdecec; --danger-line:#f5cdcd;
+  --info:#1668d6; --info-bg:#e9f1fd; --info-line:#c9dcf8;
+  --up:#d33c3c; --down:#0f9d58;
+  --r:10px;
+  /* 表面色：写死 #fff 会让深色主题到处露白块，所以统一收在这里。
+     surface=卡片/弹窗/输入框底，surface-2=次级面（表单区、侧栏），
+     surface-3=小标签底，hover=行悬停 */
+  --surface:#fff; --surface-2:#fbfcfe; --surface-3:#f1f4f9; --hover:#f7faff;
+  --shadow:0 12px 34px rgba(12,28,56,.2);
+  /* 第二轮补齐：语义面 / 悬停加深 / 浅边框 / 圆形底 / 滚动条 / 暖底文字 */
+  --surface-4:#f7f9fc; --hover-2:#dbe8fd; --line-3:var(--line-3);
+  --chip-bg:#dfe8fb; --disabled:#b9c8dd; --thumb:#d7dfea;
+  --warn-ink:#8a6a30; --ink-3:#4a5b75;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:"Microsoft YaHei","PingFang SC","Hiragino Sans GB",system-ui,-apple-system,sans-serif;
+  font-size:13px; -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+}
+.mono{font-variant-numeric:tabular-nums}
+
+/* ---------------- 顶栏 ---------------- */
+.topbar{
+  height:46px; display:flex; align-items:center; gap:18px; padding:0 16px;
+  background:linear-gradient(90deg,var(--nav-a),var(--nav-b) 55%,var(--nav-c));
+  color:#fff; flex:0 0 auto;
+}
+.brand{display:flex; align-items:center; gap:9px; font-size:14.5px; font-weight:700; letter-spacing:.2px}
+.brand .logo{
+  width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#5ea8ff,#1b6ee0);
+  display:grid;place-items:center;font-size:12px;box-shadow:0 1px 4px rgba(0,0,0,.25)
+}
+/* 顶级板块：城市罗盘 / 个人工作台，文字 + 选中下划线 */
+.cp-tabs{display:flex;align-items:center;gap:22px}
+.cp-tabs a{
+  position:relative;color:var(--muted);font-size:14px;font-weight:600;
+  text-decoration:none;cursor:pointer;padding:2px 0 7px;white-space:nowrap;
+}
+.cp-tabs a:hover{color:var(--ink)}
+.cp-tabs a.on{color:var(--brand)}
+.cp-tabs a.on::after{
+  content:"";position:absolute;left:0;right:0;bottom:0;height:2px;
+  background:var(--brand);border-radius:2px;
+}
+
+/* 视图容器：罗盘 / 个人工作台，同一套 flex 骨架 */
+.view{display:flex;flex-direction:column;gap:10px;flex:1;min-height:0}
+.view[hidden]{display:none}
+
+/* 个人工作台：我的关注 + 关注动态 + 我跟进的
+   三块内容加起来可能超过一屏，所以让这个视图自己纵向滚动，而不是把每块压扁 ——
+   压缩会让标题行塌成 0 高、被下面的卡片盖住（3 列 8 张卡时必然发生）。 */
+#viewDesk{overflow-y:auto;overflow-x:hidden}
+#viewDesk .desk-sec{flex:0 0 auto}
+.desk-sec{display:flex;flex-direction:column;gap:8px;min-height:0}
+/* 动态卡片高度贴合内容，不强行撑满 —— 否则条目少时下半部会空一大块 */
+.desk-feed{flex:0 1 auto}
+.desk-follow{flex:0 1 auto}
+/* 标题行右侧的操作按钮（管理关注 / 全部已读）：靠 auto 顶到行尾 */
+.sec-act{margin-left:auto}
+.sec-head{display:flex;align-items:center;gap:8px;padding:0 2px}
+.sec-head h3{margin:0;font-size:13.5px;font-weight:700;letter-spacing:.1px}
+.sec-count{
+  font-size:11px;color:var(--faint);background:var(--surface);border:1px solid var(--line);
+  border-radius:20px;padding:1px 8px;
+}
+/* 工作台页头：一块都不显示时也要能看见"我是谁"和「自定义」入口，
+   所以身份标签放在这里，不挂在「我的关注」头上（那块可以被藏起来）。 */
+.desk-hd{display:flex;align-items:center;gap:8px;padding:0 2px 2px}
+.desk-hd h2{margin:0;font-size:15px;font-weight:700;letter-spacing:.2px}
+/* 身份名可能很长（「市生态环境局局长 · 生态环境」），给个上限加省略，别硬挤出容器 */
+.dh-who{
+  font-size:11px;color:var(--muted);background:var(--surface);border:1px solid var(--line);
+  border-radius:20px;padding:1px 8px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+}
+.kpis.cols-3{grid-template-columns:repeat(3,1fr)}
+.kpis.cols-3 .kpi{padding:14px 16px 15px}
+.kpis.cols-3 .kpi .v{font-size:27px}
+.kpis.cols-3 .kpi .f{margin-top:8px}
+
+.feed{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  flex:0 1 auto;min-height:0;overflow:auto;display:flex;flex-direction:column;
+  max-height:268px;
+}
+.feed-item{
+  display:flex;align-items:center;gap:10px;padding:13px 16px;
+  border-bottom:1px solid var(--line-2);font-size:12.5px;color:var(--ink-2);
+}
+.feed-item:last-child{border-bottom:0}
+.feed-item .fd{width:6px;height:6px;border-radius:50%;flex:0 0 auto}
+.fd.danger{background:var(--danger)} .fd.warn{background:var(--warn)}
+.fd.info{background:var(--info)} .fd.ok{background:var(--ok)} .fd.muted{background:var(--faint)}
+.feed-item .ft{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.feed-item .fsrc{font-size:10.5px;color:var(--faint);flex:0 0 auto}
+.feed-item .ftag{font-size:10.5px;padding:1px 8px;border-radius:20px;flex:0 0 auto;font-weight:600}
+.ftag.danger{background:var(--danger-bg);color:var(--danger)}
+.ftag.warn{background:var(--warn-bg);color:var(--warn)}
+.ftag.info{background:var(--info-bg);color:var(--info)}
+.ftag.ok{background:var(--ok-bg);color:var(--ok)}
+.ftag.muted{background:var(--surface-3);color:var(--muted)}
+/* 未读：数字用红点角标，条目本身加粗、颜色压深；读过的整条转灰，一眼能分出来 */
+.sec-count.unread{background:var(--danger-bg);color:var(--danger);border-color:var(--danger-line);font-weight:600}
+.feed-item{cursor:pointer}
+.feed-item:hover{background:var(--hover)}
+.feed-item:not(.unread) .ft{color:var(--faint)}
+.feed-item:not(.unread) .fd{opacity:.45}
+/* 重点注意事项：一行一件事，左边标题与单位，右边进度条 + 百分比 + 剩余天数。
+   这里不设 max-height：条目数一般十来条，让整页滚一次，比卡片内再套一层滚动条好 ——
+   内层滚动会把最后一行拦腰截断，看着像坏了。 */
+.follow{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  overflow:hidden;
+}
+.frow{
+  display:flex;align-items:center;gap:12px;padding:11px 16px;
+  border-bottom:1px solid var(--line-2);cursor:pointer;
+}
+.frow:last-child{border-bottom:0}
+.frow:hover{background:var(--hover)}
+.frow .fl{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.frow .fl b{
+  font-size:12.5px;font-weight:600;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.frow .fl span{font-size:10.5px;color:var(--faint)}
+/* 流程类风险（签收超时/停滞）的标签：这类事项的"剩余天数"照样宽裕，
+   不加这个标签就会被读成"还早、不急"。
+   选择器必须带 .frow .fl 前缀，否则被上面那条 .frow .fl span 的灰色盖掉。 */
+.frow .fl span.frisk{
+  display:inline-block;margin-left:6px;padding:0 6px;border-radius:20px;
+  font-size:10px;line-height:15px;vertical-align:1px;
+  background:var(--surface-3);color:var(--muted)
+}
+.frow .fl span.frisk.warn{background:var(--warn-bg);color:var(--warn)}
+.frow .fl span.frisk.danger{background:var(--danger-bg);color:var(--danger)}
+.frow .fl span.frisk.info{background:var(--info-bg);color:var(--info)}
+.frow .fdot{width:6px;height:6px;border-radius:50%;flex:0 0 auto}
+.fbar{width:104px;height:5px;border-radius:3px;background:var(--line-2);overflow:hidden;flex:0 0 auto}
+.fbar i{display:block;height:100%;border-radius:3px;background:var(--brand);transition:width .3s}
+.fbar i.ok{background:var(--ok)} .fbar i.warn{background:var(--warn)} .fbar i.danger{background:var(--danger)}
+.fnum{
+  font-size:11.5px;color:var(--ink-2);font-variant-numeric:tabular-nums;
+  flex:0 0 auto;width:118px;text-align:right;
+}
+.fnum.danger{color:var(--danger);font-weight:600}
+.fnum.warn{color:var(--warn);font-weight:600}
+.fdot.danger{background:var(--danger)} .fdot.warn{background:var(--warn)}
+.fdot.info{background:var(--info)} .fdot.ok{background:var(--ok)} .fdot.muted{background:var(--faint)}
+.tools{margin-left:auto; display:flex; align-items:center; gap:2px}
+.tools span{
+  display:flex;align-items:center;gap:5px; font-size:12.5px; color:rgba(255,255,255,.9);
+  padding:6px 10px; border-radius:7px; cursor:pointer; transition:.15s;
+}
+.tools span:hover{background:rgba(255,255,255,.13)}
+.tools svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.6}
+.tool-badge{font-style:normal;font-size:9.5px;line-height:1;padding:3px 4px;border-radius:9px;background:var(--danger);color:#fff;font-weight:700;margin-left:5px}
+.tool-badge[hidden]{display:none}
+.avatar{
+  display:flex;align-items:center;gap:7px; margin-left:10px; padding:4px 10px 4px 5px;
+  background:rgba(255,255,255,.14); border-radius:20px; font-size:12.5px; cursor:pointer;
+}
+.avatar:hover{background:rgba(255,255,255,.22)}
+.avatar i{
+  width:22px;height:22px;border-radius:50%;background:var(--chip-bg);color:var(--brand);
+  display:grid;place-items:center;font-style:normal;font-size:11px;font-weight:700
+}
+/* 演示身份切换菜单。写「演示」不是谦虚：这里没有任何鉴权，谁都能切成市长 */
+.id-wrap{position:relative}
+.id-menu{
+  position:absolute;right:0;top:40px;width:288px;background:var(--surface);border:1px solid var(--line);
+  border-radius:12px;box-shadow:0 16px 42px rgba(8,22,45,.24);padding:8px;z-index:70
+}
+.id-menu[hidden]{display:none}
+
+/* 顶部：当前身份。原来说明"这是演示身份"要滚到底才看得见，现在和身份放一起 */
+.acct-top{padding:1px 1px 7px;border-bottom:1px solid var(--line-2);margin-bottom:5px}
+.acct-id{display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:8px;background:var(--surface-2)}
+.acct-av{
+  width:30px;height:30px;border-radius:50%;background:var(--brand);color:#fff;
+  display:grid;place-items:center;font-size:13px;font-weight:700;flex:0 0 auto
+}
+.acct-who{min-width:0;flex:1}
+.acct-who b{display:block;font-size:13px;line-height:1.3}
+.acct-who span{
+  display:block;font-size:10.5px;color:var(--faint);margin-top:1px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+}
+.acct-swap{
+  font:inherit;font-size:11px;color:var(--brand);cursor:pointer;flex:0 0 auto;
+  padding:3px 8px;border-radius:6px;border:1px solid var(--line);background:var(--surface)
+}
+.acct-swap:hover{border-color:var(--brand);background:var(--brand-soft)}
+
+/* 菜单条目 */
+.acct-list{display:flex;flex-direction:column;gap:1px}
+.acct-row{
+  display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:7px;
+  cursor:pointer;color:var(--ink);font-size:12.5px;line-height:1.2
+}
+.acct-row:hover{background:var(--hover)}
+.acct-row svg{width:15px;height:15px;stroke:var(--muted);fill:none;stroke-width:1.7;flex:0 0 auto}
+.acct-row:hover svg{stroke:var(--brand)}
+.acct-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acct-row .hint{font-size:10.5px;color:var(--faint);flex:0 0 auto;margin:0}
+.acct-row .chev{width:10px;height:10px;stroke:var(--faint);opacity:.65}
+.acct-row.danger{color:var(--ink)}
+.acct-row.danger svg{stroke:var(--muted)}
+/* 危险操作平时不喊，悬停才变红：常驻红色会让"重置"比"设置"还抢眼 */
+.acct-row.danger:hover{background:var(--danger-bg);color:var(--danger)}
+.acct-row.danger:hover svg{stroke:var(--danger)}
+.acct-sep{height:1px;background:var(--line-2);margin:5px 5px}
+
+/* 设置：横向 tab。用横排而不是左侧竖排 —— 只有三项，竖排会空出一大块 */
+.set-tabs{display:flex;gap:2px;padding:0 18px;border-bottom:1px solid var(--line)}
+.set-tab{
+  font:inherit;font-size:12px;color:var(--muted);cursor:pointer;border:0;background:none;
+  padding:9px 11px 8px;border-bottom:2px solid transparent;margin-bottom:-1px
+}
+.set-tab:hover{color:var(--ink)}
+.set-tab.on{color:var(--brand);border-bottom-color:var(--brand);font-weight:600}
+.set-box{width:min(720px,94vw)}
+
+/* 外观：主题卡 + 强调色 */
+.tm-sec{margin-bottom:18px}
+.tm-sec>h4{margin:0 0 3px;font-size:12.5px}
+.tm-sec>p{margin:0 0 10px;font-size:11px;color:var(--faint);line-height:1.6}
+.tm-themes{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.tm-card{
+  border:1px solid var(--line);border-radius:10px;padding:8px;cursor:pointer;background:var(--surface);
+  display:flex;flex-direction:column;gap:7px;transition:.15s
+}
+.tm-card:hover{border-color:var(--brand)}
+.tm-card.on{border-color:var(--brand);box-shadow:0 0 0 2px var(--brand-soft)}
+.tm-prev{height:52px;border-radius:6px;overflow:hidden;display:flex;border:1px solid var(--line)}
+.tm-prev i{display:block}
+.tm-prev .pv-nav{width:26%;height:100%}
+.tm-prev .pv-body{flex:1;display:flex;flex-direction:column;gap:3px;padding:5px}
+.tm-prev .pv-body b{display:block;height:6px;border-radius:2px}
+.tm-prev .pv-body b:last-child{width:62%}
+.tm-name{display:flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600}
+.tm-name em{font-style:normal;font-size:10px;color:var(--brand);background:var(--brand-soft);padding:1px 5px;border-radius:20px}
+.tm-accent{display:flex;gap:9px}
+.ac-dot{
+  width:34px;height:34px;border-radius:9px;cursor:pointer;border:2px solid transparent;
+  display:grid;place-items:center;position:relative
+}
+.ac-dot.on{border-color:var(--ink)}
+.ac-dot span{width:12px;height:12px;border-radius:50%;background:#fff;display:block;opacity:.9}
+.tm-note{
+  font-size:10.5px;color:var(--faint);line-height:1.7;padding:9px 11px;
+  background:var(--surface-2);border-radius:8px
+}
+.id-item{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:7px;cursor:pointer;color:var(--ink)}
+.id-item:hover{background:var(--brand-soft)}
+.id-item.on{background:var(--brand-soft)}
+.id-item i{width:22px;height:22px;border-radius:50%;background:var(--chip-bg);color:var(--brand);font-style:normal;display:grid;place-items:center;font-size:11px;font-weight:700;flex:0 0 auto}
+.id-item.on i{background:var(--brand);color:#fff}
+.id-item .nm{font-size:12.5px;font-weight:600;line-height:1.3}
+.id-item .sub{display:block;font-size:10.5px;color:var(--faint);font-weight:400}
+.id-note{padding:7px 8px 3px;margin-top:4px;border-top:1px solid var(--line-2);font-size:10.5px;color:var(--faint);line-height:1.65}
+
+/* ---------------- 主体 ---------------- */
+.stage{height:calc(100vh - 46px); display:flex; gap:12px; padding:12px; min-width:1180px}
+.panel{background:var(--card); border:1px solid var(--line); border-radius:12px}
+
+/* 左：问答 */
+.ask{width:336px; flex:0 0 336px; display:flex; flex-direction:column; overflow:hidden}
+.ask-head{display:flex;align-items:center;padding:13px 14px 9px; gap:8px}
+.ask-head h2{margin:0;font-size:13.5px;font-weight:700;letter-spacing:.1px}
+.ask-head h2 b{color:var(--brand)}
+.live{
+  margin-left:auto;display:flex;align-items:center;gap:5px;font-size:11px;color:var(--ok);
+  background:var(--ok-bg);border:1px solid var(--ok-line);padding:2px 7px;border-radius:20px
+}
+.live i{width:5px;height:5px;border-radius:50%;background:var(--ok);display:block}
+.chips{display:flex;gap:6px;padding:0 14px 10px;flex-wrap:wrap}
+.chips button{
+  font:inherit;font-size:11.5px;color:var(--brand);background:var(--brand-soft);
+  border:1px solid var(--line-3);border-radius:6px;padding:4px 9px;cursor:pointer
+}
+.chips button:hover{background:var(--hover-2)}
+/* 标题前的实心点，和右侧「在线」一起构成状态感 */
+.ask-dot{width:7px;height:7px;border-radius:50%;background:var(--brand);display:inline-block;margin-right:6px;vertical-align:1px}
+
+/* 专家：当前对话绑定的那一位，单选。整组会诊收进菜单最后一项，
+   不再并排一堆胶囊 —— 一排胶囊看着像筛选项，实际是「谁在跟我说话」 */
+.expert-select{
+  position:relative;display:flex;align-items:center;gap:6px;margin:0 14px 8px;
+  background:var(--surface-4);border:1px solid var(--line-2);border-radius:8px;
+  padding:7px 10px;cursor:pointer;user-select:none;transition:background .15s,border-color .15s
+}
+.expert-select:hover{background:var(--hover-2);border-color:var(--line-3)}
+.expert-select:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
+.expert-select .es-label{font-size:10.5px;color:var(--faint);flex:0 0 auto}
+.expert-select .es-name{font-size:12px;color:var(--ink);font-weight:700;flex:0 0 auto}
+.expert-select .es-state{font-size:10.5px;color:var(--faint);flex:1 1 auto;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.expert-select .es-caret{width:13px;height:13px;color:var(--muted);flex:0 0 auto;transition:transform .15s}
+.expert-select.open .es-caret{transform:rotate(180deg)}
+.es-menu{
+  position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:30;
+  background:var(--surface);border:1px solid var(--line);border-radius:9px;
+  box-shadow:0 8px 24px rgba(23,43,77,.13);padding:5px;max-height:264px;overflow-y:auto
+}
+.es-item{
+  display:flex;align-items:center;gap:7px;padding:7px 8px;border-radius:6px;
+  cursor:pointer;font-size:12px;color:var(--ink-2)
+}
+.es-item:hover{background:var(--hover-2)}
+.es-item.on{background:var(--brand-soft);color:var(--brand);font-weight:700}
+.es-item i{
+  width:17px;height:17px;border-radius:50%;background:var(--brand-soft);color:var(--brand);
+  font-style:normal;font-size:9px;display:grid;place-items:center;font-weight:700;flex:0 0 auto
+}
+.es-item.on i{background:var(--brand);color:#fff}
+.es-item em{font-style:normal;font-size:10px;color:var(--faint);margin-left:auto;flex:0 0 auto}
+.es-item.sep{margin-top:5px;padding-top:9px;border-top:1px solid var(--line-2)}
+
+/* 底部操作行：会话 / 新对话 / 模型状态，靠右排。免责声明单独占一行，
+   不跟这堆控件抢宽度 —— 336px 的面板里挤一行会把它压成竖排单字。 */
+.sub-ops{display:flex;align-items:center;justify-content:flex-end;gap:5px;margin-top:7px}
+.sub-ops select{
+  font:inherit;font-size:10.5px;color:var(--muted);background:var(--surface);border:1px solid var(--line);
+  border-radius:5px;padding:2px 4px;max-width:104px;cursor:pointer
+}
+
+.thread{flex:1;overflow-y:auto;padding:2px 14px 8px;display:flex;flex-direction:column;gap:12px}
+.thread::-webkit-scrollbar{width:5px}
+.thread::-webkit-scrollbar-thumb{background:var(--thumb);border-radius:3px}
+
+.bub-user{
+  align-self:flex-end;max-width:88%;background:var(--brand);color:#fff;padding:9px 12px;
+  border-radius:10px 10px 3px 10px;font-size:12.5px;line-height:1.62;white-space:pre-wrap
+}
+.bub-ai{align-self:flex-start;max-width:100%;width:100%}
+.ai-tag{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);margin-bottom:5px}
+.ai-tag i{width:15px;height:15px;border-radius:4px;background:var(--brand-soft);color:var(--brand);
+  display:grid;place-items:center;font-style:normal;font-size:9px;font-weight:700}
+.ai-body{
+  background:var(--surface-4);border:1px solid var(--line);border-radius:3px 10px 10px 10px;
+  padding:10px 12px;font-size:12.5px;line-height:1.75;color:var(--ink-2)
+}
+.ai-body b{color:var(--ink)}
+.ai-body .num{color:var(--brand);font-weight:700}
+.ai-src{
+  margin-top:9px;padding-top:8px;border-top:1px dashed var(--line-3);
+  display:flex;flex-wrap:wrap;gap:4px
+}
+.src-pill{
+  font-size:10px;color:var(--muted);background:var(--surface);border:1px solid var(--line);
+  border-radius:5px;padding:2px 6px;display:inline-flex;align-items:center;gap:4px;cursor:pointer;
+  line-height:1.5;white-space:nowrap
+}
+.src-pill:hover{border-color:var(--line-3);color:var(--brand)}
+.src-pill em{font-style:normal;color:var(--faint)}
+.notes{margin-top:8px;display:flex;flex-direction:column;gap:4px}
+/* 专家解读：只给「怎么看」，数字一律不在这块出现 */
+.ev-wrap{margin-top:9px;display:flex;flex-direction:column;gap:6px}
+.ev{border:1px solid var(--line-3);border-radius:9px;padding:7px 10px;background:linear-gradient(180deg,#fbfcff,#f7f9fd)}
+.ev-head{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+.ev-head i{
+  width:16px;height:16px;border-radius:50%;background:var(--brand);color:#fff;
+  font-style:normal;font-size:9px;display:grid;place-items:center;font-weight:700;flex:0 0 auto
+}
+.ev-head b{font-size:11.5px;color:var(--ink)}
+.ev-head span{font-size:10px;color:var(--faint)}
+.ev p{margin:0;font-size:12px;line-height:1.72;color:var(--ink-2)}
+.ev.off{background:var(--surface-2);border-style:dashed}
+.ev.off p{color:var(--faint);font-size:11px}
+.ev.off .ev-head i{background:var(--chip-bg)}
+.note-row{font-size:10.5px;color:var(--warn-ink);background:var(--warn-bg);border-left:2px solid var(--warn-line);
+  padding:4px 8px;border-radius:0 4px 4px 0;line-height:1.55}
+.warnbox{
+  background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-ink);
+  border-radius:8px;padding:8px 10px;font-size:11.5px;line-height:1.6;margin-top:8px
+}
+.trace-fold{margin-top:8px;font-size:11px;color:var(--muted);cursor:pointer;user-select:none}
+.trace-fold:hover{color:var(--brand)}
+.trace{margin-top:6px;border-left:2px solid var(--line-3);padding-left:9px;display:none}
+.trace.open{display:block}
+.trace .t{font-size:10.5px;color:var(--muted);margin-bottom:5px;line-height:1.55}
+.trace .t b{color:var(--ink-2);font-weight:600}
+.trace .t code{background:var(--line-2);padding:1px 4px;border-radius:3px;font-size:10px;color:var(--ink-3)}
+
+.ask-foot{padding:9px 14px 11px;border-top:1px solid var(--line-2)}
+.inputbar{display:flex;gap:7px}
+.inputbar input{
+  flex:1;height:34px;border:1px solid var(--line);border-radius:8px;padding:0 11px;
+  font:inherit;font-size:12.5px;color:var(--ink);background:var(--surface-2);outline:none
+}
+.inputbar input:focus{border-color:var(--brand);background:var(--surface);box-shadow:0 0 0 3px rgba(13,84,200,.07)}
+.inputbar button{
+  width:56px;height:34px;border:0;border-radius:8px;background:var(--brand);color:#fff;
+  font:inherit;font-size:12.5px;font-weight:600;cursor:pointer
+}
+.inputbar button:hover{background:var(--brand-2)}
+.inputbar button:disabled{background:var(--disabled);cursor:default}
+.disclaim{font-size:10.5px;color:var(--faint);text-align:center;margin-top:7px;line-height:1.5}
+
+/* 右：罗盘 */
+.compass{flex:1;display:flex;flex-direction:column;gap:10px;overflow:hidden;min-width:0}
+.cp-head{display:flex;align-items:center;gap:9px;padding:0 2px}
+.cp-head .sub{font-size:11.5px;color:var(--faint);padding-left:2px}
+.cp-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.period{
+  font-size:11.5px;color:var(--ink-2);background:var(--surface);border:1px solid var(--line);
+  border-radius:7px;padding:4px 10px;display:flex;align-items:center;gap:6px
+}
+.period i{width:6px;height:6px;border-radius:50%;background:var(--brand);display:block}
+.icon-btn{
+  width:28px;height:28px;border-radius:7px;background:var(--surface);border:1px solid var(--line);
+  display:grid;place-items:center;cursor:pointer;color:var(--muted)
+}
+.icon-btn:hover{color:var(--brand);border-color:var(--line-3)}
+
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.kpi{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:11px 14px 12px;
+  cursor:pointer;transition:.15s;position:relative;overflow:hidden
+}
+.kpi:hover{border-color:var(--line-3);box-shadow:0 3px 12px rgba(20,45,90,.06);transform:translateY(-1px)}
+.kpi .k{font-size:11.5px;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:5px}
+.kpi .k svg{width:11px;height:11px;stroke:var(--faint);fill:none;stroke-width:1.8}
+.kpi .v{font-size:25px;font-weight:700;letter-spacing:-.4px;line-height:1.1;color:var(--ink)}
+.kpi .v small{font-size:12px;font-weight:600;color:var(--muted);margin-left:2px;letter-spacing:0}
+.kpi .v small.pct{margin-left:0;font-size:17px;font-weight:700;color:var(--ink-2)}
+.kpi .f{margin-top:6px;display:flex;align-items:center;gap:7px;font-size:11.5px}
+.kpi .yoy{font-weight:700}
+.kpi .yoy.up{color:var(--up)} .kpi .yoy.down{color:var(--down)} .kpi .yoy.flat{color:var(--muted)}
+.kpi .note{color:var(--faint);font-size:11px}
+
+.grid{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr);gap:10px;flex:1;min-height:0}
+.card{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:11px 13px 9px;
+  display:flex;flex-direction:column;min-height:0;cursor:pointer;transition:.15s
+}
+.card:hover{border-color:var(--line-3);box-shadow:0 3px 14px rgba(20,45,90,.07)}
+.card-head{display:flex;align-items:center;gap:6px}
+.card-head .dot{width:6px;height:6px;border-radius:50%;background:var(--brand);flex:0 0 auto}
+.card-head h3{margin:0;font-size:12.5px;font-weight:700;color:var(--ink)}
+.badge{
+  margin-left:auto;font-size:10.5px;padding:1px 7px;border-radius:4px;font-weight:600;
+  border:1px solid transparent;white-space:nowrap
+}
+.badge.ok{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-line)}
+.badge.warn{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-line)}
+.badge.danger{background:var(--danger-bg);color:var(--danger);border-color:var(--danger-line)}
+.badge.info{background:var(--info-bg);color:var(--info);border-color:var(--info-line)}
+.badge.muted{background:var(--surface-4);color:var(--muted);border-color:var(--line-3)}
+
+.card .big{font-size:23px;font-weight:700;letter-spacing:-.3px;margin-top:7px;line-height:1.1}
+.card .big small{font-size:11.5px;color:var(--muted);font-weight:600;margin-left:2px;letter-spacing:0}
+.card .desc{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.45;min-height:16px}
+.trendline svg{height:100% !important;max-height:96px}
+.bar{height:5px;border-radius:3px;background:var(--line-2);margin-top:12px;flex:0 0 auto;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,#4a90ee,#1163e6)}
+.bar.warn i{background:linear-gradient(90deg,#f0b25a,#dd8b0f)}
+.trendline{flex:1;display:flex;align-items:stretch;margin-top:6px;min-height:0}
+.trendcap{font-size:10px;color:var(--faint);margin-top:2px;flex:0 0 auto}
+
+/* 焦点卡 */
+.focus-card{cursor:default}
+.focus-list{margin-top:8px;display:flex;flex-direction:column;gap:7px;overflow:hidden}
+.focus-item{display:flex;gap:7px;align-items:flex-start;font-size:11.5px;line-height:1.5;cursor:pointer}
+.focus-item:hover .ft{color:var(--brand)}
+.focus-item .fd{width:5px;height:5px;border-radius:50%;margin-top:5px;flex:0 0 auto;background:var(--warn)}
+.focus-item .fd.info{background:var(--info)}
+.focus-item .fd.muted{background:var(--faint)}
+.focus-item .ft{color:var(--ink-2);font-weight:600}
+.focus-item .fm{color:var(--faint);font-size:10.5px}
+.focus-more{margin-top:auto;font-size:11.5px;color:var(--brand);text-align:right;cursor:pointer;font-weight:600}
+
+/* 预警条 */
+.alertbar{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  padding:9px 14px;display:flex;align-items:center;gap:14px;flex:0 0 auto
+}
+.alertbar h3{margin:0;font-size:12.5px;font-weight:700;white-space:nowrap;display:flex;align-items:center;gap:6px}
+.alertbar h3 .dot{width:6px;height:6px;border-radius:50%;background:var(--danger)}
+.alert-list{display:flex;align-items:center;gap:18px;min-width:0;overflow:hidden}
+.alert-item{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-2);white-space:nowrap;cursor:pointer}
+.alert-item:hover{color:var(--brand)}
+.alert-item .ad{width:5px;height:5px;border-radius:50%;flex:0 0 auto}
+.alert-item .ad.danger{background:var(--danger)} .alert-item .ad.warn{background:var(--warn)}
+.alert-item .ad.info{background:var(--info)}
+.alert-item .tag{color:var(--faint);font-size:10.5px}
+.go{
+  margin-left:auto;font:inherit;font-size:11.5px;font-weight:600;color:var(--brand);
+  background:var(--brand-soft);border:1px solid var(--line-3);border-radius:6px;padding:4px 10px;
+  cursor:pointer;white-space:nowrap
+}
+.go:hover{background:var(--hover-2)}
+
+/* ---------------- 溯源抽屉 ---------------- */
+.mask{
+  position:fixed;inset:0;background:rgba(14,26,48,.34);opacity:0;pointer-events:none;
+  transition:.18s;z-index:40;backdrop-filter:blur(1.5px)
+}
+.mask.on{opacity:1;pointer-events:auto}
+.drawer{
+  position:fixed;top:0;right:0;height:100%;width:432px;background:var(--surface);z-index:41;
+  box-shadow:-8px 0 32px rgba(12,28,58,.16);transform:translateX(100%);transition:.24s cubic-bezier(.32,.72,0,1);
+  display:flex;flex-direction:column
+}
+.drawer.on{transform:none}
+.dr-head{padding:15px 18px 11px;border-bottom:1px solid var(--line-2);display:flex;align-items:flex-start;gap:10px}
+.dr-head h3{margin:0;font-size:14.5px;font-weight:700}
+.dr-head .kind{font-size:11px;color:var(--faint);margin-top:3px}
+.dr-close{margin-left:auto;cursor:pointer;color:var(--faint);line-height:1;padding:2px 4px;font-size:18px}
+.dr-close:hover{color:var(--ink)}
+.dr-body{padding:14px 18px 24px;overflow-y:auto;flex:1}
+.dr-body::-webkit-scrollbar{width:5px}
+.dr-body::-webkit-scrollbar-thumb{background:var(--thumb);border-radius:3px}
+.dr-valor{display:flex;align-items:baseline;gap:8px;margin-bottom:4px}
+.dr-valor .v{font-size:30px;font-weight:700;letter-spacing:-.6px}
+.dr-valor .u{font-size:12.5px;color:var(--muted)}
+.dr-yoy{font-size:12px;font-weight:700;margin-bottom:16px}
+.dr-yoy.up{color:var(--up)} .dr-yoy.down{color:var(--down)} .dr-yoy.flat{color:var(--muted)}
+.dr-sec{margin-top:16px}
+.dr-sec h4{
+  margin:0 0 7px;font-size:11px;font-weight:700;color:var(--faint);letter-spacing:.6px;
+  text-transform:uppercase
+}
+.dr-sec p{margin:0;font-size:12.5px;line-height:1.75;color:var(--ink-2)}
+.dr-sec ul{margin:0;padding-left:16px}
+.dr-sec li{font-size:12px;line-height:1.72;color:var(--ink-2);margin-bottom:5px}
+.kv{display:grid;grid-template-columns:78px 1fr;gap:6px 10px;font-size:12px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;color:var(--ink);font-weight:600;word-break:break-all}
+.dr-chart{margin-top:6px;background:var(--surface-4);border:1px solid var(--line);border-radius:8px;padding:10px 8px 4px}
+
+/* toast */
+.toast{
+  position:fixed;left:50%;bottom:34px;transform:translate(-50%,14px);background:rgba(20,32,56,.94);
+  color:#fff;font-size:12.5px;padding:8px 16px;border-radius:8px;opacity:0;pointer-events:none;
+  transition:.2s;z-index:60;max-width:70vw
+}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+
+@media (max-width:1320px){
+  .ask{width:300px;flex:0 0 300px}
+  .kpi .v{font-size:22px}
+  .card .big{font-size:20px}
+}
+
+/* 被平台以 iframe 嵌入（8088 → /workbench）时：
+   平台已有页头和侧边栏，这里去掉自带顶栏，让内容铺满整个 iframe 高度 */
+html.embedded .topbar{display:none}
+html.embedded .stage{height:100vh}
+html.embedded .drawer{top:0;height:100%}
+
+/* 嵌进平台后可用宽度只有 1100 出头，不再强制 1180 的最小宽度，改为压缩左栏 */
+@media (max-width:1200px){
+  .stage{min-width:0;gap:10px;padding:10px}
+  .ask{width:286px;flex:0 0 286px}
+  .kpis{gap:8px}
+  .grid{gap:8px}
+}
+
+/* ---------------- 会话头 / 模型入口 ---------------- */
+/* 左栏只有 336px，标题和三个控件挤不进一行 —— 拆成「标题行 + 工具行」 */
+.ask-tools{display:flex;align-items:center;gap:6px;padding:0 14px 9px}
+.ask-tools #threadSel{flex:1 1 auto;min-width:0;max-width:none}
+.model-pill{
+  display:inline-flex;align-items:center;gap:4px;max-width:140px;flex:0 0 auto;
+  padding:2px 8px;border-radius:20px;border:1px solid var(--info-line);
+  background:var(--info-bg);color:var(--info);font-size:11px;cursor:pointer;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.model-pill:hover{filter:brightness(.97)}
+.model-pill.off{border-color:var(--warn-line);background:var(--warn-bg);color:var(--warn)}
+.mini{
+  border:1px solid var(--line);background:var(--surface);color:var(--ink-2);flex:0 0 auto;
+  font-size:11px;padding:2px 8px;border-radius:6px;cursor:pointer;font-family:inherit;
+}
+.mini:hover{border-color:var(--brand);color:var(--brand)}
+.mini:disabled{opacity:.5;cursor:default}
+#threadSel{
+  font-size:11px;padding:3px 4px;border:1px solid var(--line);border-radius:6px;
+  background:var(--surface);color:var(--ink-2);
+}
+/* 阶段提示（真流式的进度，不是打字机） */
+.stage-hint{color:var(--brand);font-size:11.5px;display:flex;align-items:center;gap:5px}
+.stage-hint::before{
+  content:"";width:6px;height:6px;border-radius:50%;background:var(--brand);
+  animation:pulse 1s ease-in-out infinite;
+}
+@keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
+.thread-empty{color:var(--faint);font-size:12px;text-align:center;padding:26px 12px;line-height:1.9}
+
+/* ---------------- 模型配置弹窗 ---------------- */
+.modal{position:fixed;inset:0;background:rgba(12,22,40,.42);display:none;place-items:center;z-index:60}
+.modal.on{display:grid}
+.modal-box{
+  width:min(700px,94vw);max-height:86vh;background:var(--surface);border-radius:14px;
+  display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(10,30,60,.28);
+}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:13px 18px;border-bottom:1px solid var(--line)}
+.modal-head h3{margin:0;font-size:14px}
+.modal-head p{margin:3px 0 0;font-size:11px;color:var(--muted)}
+.modal-x{cursor:pointer;color:var(--faint);font-size:15px;line-height:1}
+.modal-x:hover{color:var(--ink)}
+.modal-body{padding:14px 18px 18px;overflow:auto}
+.prov{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px}
+.prov.off{opacity:.6}
+.prov-hd{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.prov-hd b{font-size:13px}
+.prov-url{font-size:11px;color:var(--muted);word-break:break-all;margin-top:3px}
+/* 注意：不能叫 .badge —— 罗盘卡片的 .badge 带 margin-left:auto，会把这个标签顶到行尾 */
+.mbadge{font-size:10px;padding:1px 6px;border-radius:20px;background:var(--brand-soft);color:var(--brand);flex:0 0 auto}
+.mbadge.ok{background:var(--ok-bg);color:var(--ok)}
+.mbadge.warn{background:var(--warn-bg);color:var(--warn)}
+.mrow{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.mchip{
+  font-size:11px;padding:3px 9px;border-radius:20px;border:1px solid var(--line);
+  cursor:pointer;background:var(--surface);color:var(--ink-2);font-family:inherit;
+}
+.mchip:hover{border-color:var(--brand)}
+.mchip.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand);font-weight:600}
+.prow-acts{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.form-grid label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted)}
+.form-grid input{
+  padding:6px 9px;border:1px solid var(--line);border-radius:7px;
+  font-size:12px;font-family:inherit;color:var(--ink);background:var(--surface);
+}
+.form-grid input:focus{outline:none;border-color:var(--brand)}
+.form-grid .full{grid-column:1 / -1}
+.hint{font-size:11px;color:var(--faint);margin-top:8px;line-height:1.7}
+.test-out{font-size:11.5px;margin-top:8px;padding:6px 9px;border-radius:7px}
+.test-out.ok{background:var(--ok-bg);color:var(--ok);border:1px solid var(--ok-line)}
+.test-out.bad{background:var(--danger-bg);color:var(--danger);border:1px solid var(--danger-line)}
+/* ---------------- 会议助手 ---------------- */
+.mt-box{width:min(1120px,96vw);max-height:88vh}
+.mt-body{display:grid;grid-template-columns:236px 1fr;gap:0;flex:1;min-height:0}
+.mt-list{
+  border-right:1px solid var(--line);padding:12px;overflow:auto;
+  display:flex;flex-direction:column;gap:6px;background:var(--surface-2);
+}
+.mt-new{width:100%;padding:6px 8px;font-size:12px}
+.mt-item{
+  border:1px solid var(--line);border-radius:8px;padding:8px 9px;cursor:pointer;
+  background:var(--surface);transition:.14s;
+}
+.mt-item:hover{border-color:var(--brand);}
+.mt-item.on{border-color:var(--brand);background:var(--brand-soft);}
+.mt-item b{display:block;font-size:12px;font-weight:600;line-height:1.45;margin-bottom:3px}
+.mt-item span{font-size:10.5px;color:var(--muted);display:block}
+.mt-detail{padding:14px 18px 18px;overflow:auto;min-width:0}
+.mt-head{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+.mt-head h4{margin:0;font-size:14px}
+.mt-meta{font-size:11.5px;color:var(--muted);margin:4px 0 0}
+.mt-acts{display:flex;gap:6px;margin:10px 0 4px;flex-wrap:wrap}
+.mt-warn{
+  margin:8px 0;padding:7px 10px;border-radius:7px;font-size:11.5px;line-height:1.7;
+  background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line);
+}
+.mt-warn.info{background:var(--info-bg);color:var(--info);border-color:var(--info-line)}
+.mt-row{
+  border:1px solid var(--line);border-radius:9px;padding:9px 11px;margin-bottom:8px;background:var(--surface);
+}
+.mt-row.bad{border-color:var(--warn-line);background:var(--surface)}
+.mt-row.done{border-color:var(--ok-line);background:var(--surface)}
+.mt-row-top{display:flex;align-items:center;gap:7px}
+.mt-row-top input[type=checkbox]{margin:0;cursor:pointer}
+.mt-title{
+  flex:1;min-width:0;border:1px solid transparent;background:transparent;font:inherit;
+  font-size:12.5px;font-weight:600;padding:3px 5px;border-radius:5px;color:var(--ink);
+}
+.mt-title:hover,.mt-title:focus{border-color:var(--line);background:var(--surface);outline:none}
+.mt-grid{display:grid;grid-template-columns:1.1fr .8fr 1.6fr;gap:6px;margin-top:6px}
+.mt-f{display:flex;flex-direction:column;gap:2px;min-width:0}
+.mt-f label{font-size:9.5px;color:var(--faint);letter-spacing:.3px}
+.mt-f input,.mt-f select,.mt-f textarea{
+  font:inherit;font-size:11.5px;padding:3px 6px;border:1px solid var(--line);border-radius:5px;
+  background:var(--surface);color:var(--ink-2);width:100%;box-sizing:border-box;
+}
+.mt-f input:focus,.mt-f select:focus{outline:none;border-color:var(--brand)}
+.mt-quote{
+  margin-top:6px;font-size:11px;color:var(--muted);line-height:1.65;
+  padding-left:8px;border-left:2px solid var(--line);word-break:break-all;
+}
+.mt-issues{margin-top:5px;display:flex;flex-wrap:wrap;gap:4px}
+.mt-iss{font-size:10px;padding:1px 6px;border-radius:20px;background:var(--warn-bg);color:var(--warn)}
+.mt-tag{font-size:10px;padding:1px 6px;border-radius:20px;flex:0 0 auto}
+.mt-tag.ok{background:var(--ok-bg);color:var(--ok)}
+.mt-tag.bad{background:var(--warn-bg);color:var(--warn)}
+.mt-tag.done{background:var(--info-bg);color:var(--info)}
+.mt-tag.done.ov-link{cursor:pointer}
+.mt-tag.done.ov-link:hover{text-decoration:underline;background:var(--brand-soft);color:var(--brand)}
+.mt-empty{color:var(--faint);font-size:12px;text-align:center;padding:40px 16px;line-height:1.9}
+.mt-form{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.mt-form label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--muted)}
+.mt-form label.full{grid-column:1/-1}
+.mt-form input,.mt-form textarea{
+  font:inherit;font-size:12px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;
+  color:var(--ink);background:var(--surface);box-sizing:border-box;
+}
+.mt-form textarea{min-height:190px;resize:vertical;line-height:1.7}
+.mt-form input:focus,.mt-form textarea:focus{outline:none;border-color:var(--brand)}
+@media (max-width:900px){.mt-body{grid-template-columns:1fr}.mt-list{border-right:none;border-bottom:1px solid var(--line);max-height:150px}}
+/* ---------------- 督办台账 ---------------- */
+.ov-box{width:min(1160px,96vw);max-height:88vh}
+.ov-body{display:grid;grid-template-columns:284px 1fr;flex:1;min-height:0}
+.ov-side{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:var(--surface-2)}
+.ov-filters{display:flex;flex-wrap:wrap;gap:5px;padding:10px;border-bottom:1px solid var(--line)}
+.ov-chip{font:inherit;font-size:11px;padding:3px 8px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);cursor:pointer}
+.ov-chip:hover{border-color:var(--brand)}
+.ov-chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.ov-chip b{font-weight:600;margin-left:2px;opacity:.85}
+.ov-list{overflow:auto;padding:8px;display:flex;flex-direction:column;gap:6px}
+.ov-card{border:1px solid var(--line);border-radius:8px;padding:8px 9px;background:var(--surface);cursor:pointer;transition:.14s}
+.ov-card:hover{border-color:var(--brand)}
+.ov-card.on{border-color:var(--brand);background:var(--brand-soft)}
+.ov-card-top{display:flex;align-items:center;gap:5px;margin-bottom:3px}
+.ov-dot{width:5px;height:5px;border-radius:50%;flex:0 0 auto}
+.ov-dot.danger{background:var(--danger)} .ov-dot.warn{background:var(--warn)}
+.ov-dot.info{background:var(--info)} .ov-dot.muted{background:var(--faint)} .ov-dot.ok{background:var(--ok)}
+.ov-card b{font-size:12px;font-weight:600;line-height:1.45;display:block}
+.ov-card .ov-sub{font-size:10.5px;color:var(--muted);display:block;margin-top:3px}
+.ov-main{padding:14px 18px 18px;overflow:auto;min-width:0}
+.ov-h h4{margin:0;font-size:15px;line-height:1.45}
+.ov-tags{display:flex;gap:5px;flex-wrap:wrap;margin:8px 0 12px}
+.ov-tag{font-size:10.5px;padding:2px 7px;border-radius:20px;border:1px solid var(--line);color:var(--muted);background:var(--surface)}
+.ov-tag.danger{background:var(--danger-bg);color:var(--danger);border-color:var(--danger-line)}
+.ov-tag.warn{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-line)}
+.ov-tag.info{background:var(--info-bg);color:var(--info);border-color:var(--info-line)}
+.ov-tag.ok{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-line)}
+.ov-kv{display:grid;grid-template-columns:76px 1fr;gap:5px 10px;font-size:12px;color:var(--ink-2);margin:0 0 14px}
+.ov-kv dt{color:var(--faint);font-size:11px;padding-top:1px}
+.ov-kv dd{margin:0;line-height:1.65}
+.ov-form{border:1px solid var(--line);border-radius:9px;padding:10px;background:var(--surface-2);margin:0 0 14px}
+.ov-form textarea{width:100%;box-sizing:border-box;font:inherit;font-size:12px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;min-height:56px;resize:vertical;line-height:1.65;background:var(--surface);color:var(--ink)}
+.ov-form textarea:focus{outline:none;border-color:var(--brand)}
+.ov-form-row{display:flex;gap:6px;margin-top:6px}
+.ov-form-row input{flex:1;min-width:0;font:inherit;font-size:11.5px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink-2);box-sizing:border-box}
+.ov-form-row input:focus{outline:none;border-color:var(--brand)}
+.ov-btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.ov-btns .mini.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+.ov-btns .mini.primary:hover{background:var(--brand-2);color:#fff}
+.ov-btns .mini.red{color:var(--danger);border-color:var(--danger-line)}
+.ov-btns .mini.red:hover{background:var(--danger-bg);border-color:var(--danger);color:var(--danger)}
+.ov-events{border-top:1px solid var(--line-2);padding-top:8px}
+.ov-ev{display:grid;grid-template-columns:104px 1fr;gap:2px 10px;padding:7px 0;border-bottom:1px dashed var(--line-2);font-size:11.5px}
+.ov-ev:last-child{border-bottom:none}
+.ov-ev .t{color:var(--faint);font-size:10.5px;line-height:1.55}
+.ov-ev .k{color:var(--ink-2);line-height:1.65}
+.ov-ev .k b{font-weight:600;color:var(--ink);margin-right:4px}
+.ov-ev .ev-meta{display:block;color:var(--faint);font-size:10.5px;margin-top:2px}
+@media (max-width:900px){.ov-body{grid-template-columns:1fr}.ov-side{border-right:none;border-bottom:1px solid var(--line);max-height:180px}}
+/* 从会议助手跳进来时才有「返回」；平时不占位 */
+.ov-head-r{display:flex;align-items:center;gap:12px;flex:0 0 auto}
+.ov-back{font-size:11.5px;color:var(--brand);cursor:pointer;padding:2px 8px;border-radius:20px;background:var(--brand-soft)}
+.ov-back:hover{background:var(--hover-2)}
+.ov-back[hidden]{display:none}
+/* 个人工作台的关注卡片：hover 出「取消关注」，末尾一张虚线的「添加关注」 */
+.kpi.watch{cursor:pointer}
+.kpi .rm{
+  position:absolute;top:7px;right:7px;width:17px;height:17px;border-radius:50%;
+  display:grid;place-items:center;font-size:10px;color:var(--faint);
+  background:var(--surface);border:1px solid var(--line);opacity:0;transition:.15s
+}
+.kpi.watch:hover .rm{opacity:1}
+.kpi .rm:hover{color:var(--danger);border-color:var(--danger-line);background:var(--danger-bg)}
+.watch-empty{grid-column:1/-1;font-size:12px;color:var(--faint);line-height:1.8;padding:6px 2px}
+/* 添加关注选择器 */
+.wm-tip{font-size:11.5px;color:var(--muted);margin:0 0 8px;line-height:1.7}
+.wm-list{display:flex;flex-direction:column;gap:2px;max-height:52vh;overflow:auto}
+.wm-row{display:flex;align-items:center;gap:10px;padding:8px 9px;border-radius:8px;cursor:pointer}
+.wm-row:hover{background:var(--hover)}
+.wm-row .nm{flex:1;min-width:0}
+.wm-row .nm b{font-size:12.5px;font-weight:600;color:var(--ink);display:block}
+.wm-row .nm span{font-size:10.5px;color:var(--faint)}
+.wm-row .val{font-size:13px;font-weight:700;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.wm-row .val small{font-size:10.5px;font-weight:600;color:var(--muted);margin-left:1px}
+.wm-row .st{font-size:10.5px;padding:2px 8px;border-radius:20px;flex:0 0 auto}
+.wm-row .st.on{background:var(--ok-bg);color:var(--ok)}
+.wm-row .st.off{background:var(--surface-3);color:var(--muted)}
+.wm-row.dis{opacity:.55}
+.wm-foot{display:flex;justify-content:flex-end;padding:8px 9px 0;border-top:1px solid var(--line);margin-top:8px}
+.wm-foot span{font-size:11px;color:var(--muted);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.wm-foot span:hover{color:var(--brand)}
+
+/* 自定义板块：一行一块，左边勾选、右边上下移 */
+.lm-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;background:var(--surface)}
+.lm-row.off{opacity:.52;background:var(--surface-2)}
+.lm-row .ck{
+  width:15px;height:15px;border-radius:4px;border:1.5px solid var(--line-3);flex:0 0 auto;
+  display:grid;place-items:center;font-size:10px;color:#fff
+}
+.lm-row .ck.on{background:var(--brand);border-color:var(--brand)}
+.lm-row .nm{flex:1;min-width:0;font-size:12.5px;font-weight:600;color:var(--ink)}
+.lm-row .mv{display:flex;gap:3px}
+.lm-row .mv button{
+  font:inherit;font-size:11px;line-height:1;padding:4px 7px;border-radius:5px;cursor:pointer;
+  border:1px solid var(--line);background:var(--surface);color:var(--muted)
+}
+.lm-row .mv button:hover:not(:disabled){border-color:var(--brand);color:var(--brand)}
+.lm-row .mv button:disabled{opacity:.35;cursor:default}
+.lm-tip{font-size:11px;color:var(--faint);margin:2px 0 8px;line-height:1.7}
+
+/* 管理跟进：一行一件，左边勾选，右边状态 */
+.fm-row{display:flex;align-items:center;gap:10px;padding:8px 9px;border-radius:8px;cursor:pointer}
+.fm-row:hover{background:var(--hover)}
+.fm-row .ck{
+  width:15px;height:15px;border-radius:4px;border:1.5px solid var(--line-3);flex:0 0 auto;
+  display:grid;place-items:center;font-size:10px;color:#fff
+}
+.fm-row .ck.on{background:var(--brand);border-color:var(--brand)}
+.fm-row .nm{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.fm-row .nm b{font-size:12.5px;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fm-row .nm span{font-size:10.5px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fm-row .st{font-size:10px;padding:1px 7px;border-radius:20px;flex:0 0 auto;background:var(--surface-3);color:var(--muted)}
+.fm-row .st.auto{background:var(--info-bg);color:var(--info)}
+.fm-row .st.mine{background:var(--brand-soft);color:var(--brand)}
+
+/* 跟进行上的「我挑的」小标：不标出来，用户会以为系统派了一件不属于他的事。
+   选择器同样要带 .frow .fl 前缀，否则被 .frow .fl span 的灰色和字号盖掉。 */
+.frow .fl span.fsrc{
+  font-size:9.5px;padding:0 5px;border-radius:20px;margin-left:5px;vertical-align:1px;
+  background:var(--brand-soft);color:var(--brand)
+}
+
+/* ---------------- AI 日程 ----------------
+   不做月历网格：14 天里绝大多数格子是空的，一屏放不下又看不出"下一件是几号"。
+   按天分组的竖排时间线，信息密度和可读性都更好；日期分组标题吸顶，滚动时知道在哪天。 */
+.cal-box{width:min(780px,95vw);max-height:88vh}
+.cal-body{padding:0 0 14px;overflow:auto}
+
+/* 今日重点：AI 只写这一句 + 每条一行理由，其余全部是台账里搬来的字段 */
+.cal-brief{
+  margin:12px 18px 2px;padding:11px 13px;border-radius:10px;
+  background:var(--brand-soft);border:1px solid var(--line);
+}
+.cal-brief-hd{display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--muted)}
+.cal-brief-hd b{font-size:11px;color:var(--brand);letter-spacing:.3px}
+.cal-brief-hd .who{margin-left:auto;color:var(--faint)}
+.cal-brief p{margin:6px 0 0;font-size:12.5px;line-height:1.75;color:var(--ink)}
+.cal-brief .note{margin-top:6px;font-size:10.5px;color:var(--warn);line-height:1.6}
+.cal-sk{height:15px;border-radius:5px;background:var(--surface-3);margin-top:7px;animation:calPulse 1.4s ease-in-out infinite}
+@keyframes calPulse{0%,100%{opacity:.55}50%{opacity:1}}
+
+.cal-sum{display:flex;gap:12px;flex-wrap:wrap;margin:8px 18px 0;font-size:10.5px;color:var(--muted)}
+.cal-sum b{color:var(--ink-2);font-variant-numeric:tabular-nums}
+
+.cal-day{padding:0 18px}
+.cal-day-hd{
+  display:flex;align-items:baseline;gap:7px;padding:9px 0 5px;
+  position:sticky;top:0;background:var(--surface);z-index:2;border-bottom:1px solid var(--line-2);
+}
+.cal-day-hd b{font-size:12.5px;font-weight:700}
+.cal-day-hd .d{font-size:10.5px;color:var(--faint)}
+.cal-day-hd .n{margin-left:auto;font-size:10px;color:var(--faint);background:var(--surface-3);border-radius:20px;padding:1px 8px}
+.cal-day.today .cal-day-hd b{color:var(--brand)}
+
+.cal-row{display:grid;grid-template-columns:50px 1fr;gap:10px;padding:6px 0 0}
+.cal-t{text-align:right;padding-top:7px;font-size:10px;color:var(--faint);font-variant-numeric:tabular-nums}
+.cal-t b{display:block;font-size:12px;color:var(--ink-2);font-weight:600}
+.cal-card{
+  border:1px solid var(--line);border-left:3px solid var(--line-3);border-radius:8px;
+  padding:7px 10px 8px;background:var(--surface);
+}
+.cal-card.link{cursor:pointer;transition:.14s}
+.cal-card.link:hover{border-color:var(--brand);border-left-color:var(--brand);background:var(--hover)}
+.cal-card.brand{border-left-color:var(--brand)}
+.cal-card.info{border-left-color:var(--info)}
+.cal-card.warn{border-left-color:var(--warn)}
+.cal-card.danger{border-left-color:var(--danger)}
+.cal-card.muted{border-left-color:var(--faint)}
+.cal-top{display:flex;align-items:center;gap:7px}
+.cal-top b{font-size:12.5px;font-weight:600;flex:1;min-width:0;line-height:1.45}
+.cal-tag{font-size:9.5px;padding:0 6px;border-radius:20px;flex:0 0 auto;white-space:nowrap}
+.cal-tag.brand{background:var(--brand-soft);color:var(--brand)}
+.cal-tag.info{background:var(--info-bg);color:var(--info)}
+.cal-tag.warn{background:var(--warn-bg);color:var(--warn)}
+.cal-tag.danger{background:var(--danger-bg);color:var(--danger)}
+.cal-tag.muted{background:var(--surface-3);color:var(--muted)}
+.cal-sub{font-size:10.5px;color:var(--muted);margin-top:3px;line-height:1.65}
+/* 理由行：规则算的写「按台账」，模型写的写「AI」，前缀靠 ::before 区分 —— 不能让人
+   把一句模型润色过的判断当成台账里的原始事实 */
+.cal-why{font-size:10.5px;color:var(--faint);margin-top:4px;line-height:1.65}
+.cal-why.rule::before{content:"按台账 · ";color:var(--faint)}
+.cal-why.ai::before{content:"AI · ";color:var(--brand)}
+
+.cal-quiet{padding:12px 0 4px;font-size:11.5px;color:var(--muted)}
+.cal-empty{padding:30px 18px;text-align:center;color:var(--muted);font-size:12px;line-height:1.8}
+.cal-foot{
+  margin:14px 18px 0;padding-top:10px;border-top:1px solid var(--line);
+  font-size:10.5px;color:var(--faint);line-height:1.8;
+}
+.cal-foot b{color:var(--muted);font-weight:600}
+.cal-refresh{
+  font:inherit;font-size:10.5px;padding:2px 8px;border-radius:5px;cursor:pointer;
+  border:1px solid var(--line);background:var(--surface);color:var(--muted);
+}
+.cal-refresh:hover{border-color:var(--brand);color:var(--brand)}
+
+/* ---------------- 深色主题 ----------------
+   只覆盖变量，不重写任何规则：样式里颜色全走 var()，换主题等于换这一组值。
+   少数直接写死的地方（顶栏渐变、遮罩层）保持原样 —— 深色下本来就合适。
+   涨跌色仍是「红涨绿跌」，深色下只是提高明度保证可读。 */
+:root[data-theme="dark"]{
+  --brand:#5b95ff; --brand-2:#6ba1ff; --brand-soft:#17253c;
+  --nav-a:#071322; --nav-b:#0c2138; --nav-c:#0b2540;
+  --bg:#0c131d; --card:#151d2b;
+  --surface:#151d2b; --surface-2:#111925; --surface-3:#1e2836; --hover:#1b2534;
+  --line:#28323f; --line-2:#1f2835;
+  --ink:#e7eef8; --ink-2:#c3cedd; --muted:#8e9db2; --faint:#6c7d92;
+  --ok:#3ecf8e; --ok-bg:#122a20; --ok-line:#204434;
+  --warn:#e9a53f; --warn-bg:#2b2213; --warn-line:#463317;
+  --danger:#f07171; --danger-bg:#2e1a1a; --danger-line:#4b2727;
+  --info:#5f9ef9; --info-bg:#132238; --info-line:#20395c;
+  --up:#f07171; --down:#3ecf8e;
+  --shadow:0 12px 34px rgba(0,0,0,.55);
+  --surface-4:#18212f; --hover-2:#22304a; --line-3:#33415a;
+  --chip-bg:#1d2c44; --disabled:#33405a; --thumb:#33415a;
+  --warn-ink:#e8bc74; --ink-3:#9aa9bd;
+}
+/* 深色下白底按钮上的字会反过来：--brand 变亮了，纯白字仍够对比，不需额外处理。
+   只有顶栏这种本身深色的区域要防止被 brand-soft 之类冲淡，这里不涉及。 */
+
+/* 设置：条目行 */
+.set-row{display:flex;align-items:center;gap:14px;padding:11px 0;border-bottom:1px solid var(--line-2)}
+.set-row:last-of-type{border-bottom:0}
+.set-l{flex:1;min-width:0}
+.set-l b{display:block;font-size:12.5px}
+.set-l span{display:block;font-size:10.5px;color:var(--faint);margin-top:2px;line-height:1.65}
+.set-row select{
+  font:inherit;font-size:11.5px;color:var(--ink);background:var(--surface);
+  border:1px solid var(--line);border-radius:6px;padding:4px 6px;cursor:pointer;flex:0 0 auto
+}
+.set-v{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 auto}
+.set-kbd{display:flex;align-items:center;gap:7px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);flex-wrap:wrap}
+kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid var(--line);
+  border-bottom-width:2px;border-radius:5px;padding:1px 6px;color:var(--muted)}
+.about-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.about-cell{border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--surface-2)}
+.about-cell b{display:block;font-size:15px;font-variant-numeric:tabular-nums}
+.about-cell span{display:block;font-size:10.5px;color:var(--faint);margin-top:2px;line-height:1.6}
+.about-note{font-size:10.5px;color:var(--faint);line-height:1.8;margin-top:14px;padding:10px 12px;
+  background:var(--surface-2);border-radius:8px}
+
+/* ---------------- 深色下的浮层层次 ----------------
+   浅色主题靠黑色阴影分层次，深色下阴影吃在深底上几乎看不见，弹窗会"贴"在页面上。
+   补一条更重的投影，并给弹窗加一条细边框 —— 用边界而不是阴影区分，才靠得住。 */
+:root[data-theme="dark"] .modal-box,
+:root[data-theme="dark"] .drawer{box-shadow:0 26px 72px rgba(0,0,0,.75)}
+:root[data-theme="dark"] .modal-box{border:1px solid var(--line)}
+:root[data-theme="dark"] .id-menu,
+:root[data-theme="dark"] .es-menu{box-shadow:0 18px 46px rgba(0,0,0,.66)}
+
+/* ---------------- 深色下的"亮底白字" ----------------
+   深色主题把 brand / danger 提亮了（不然深底上的链接看不清），副作用是
+   原来"亮底 + 白字"的按钮和气泡变成"亮底 + 半糊的白字"，实测对比度只有 2.9。
+   这几处翻成深色字，对比度回到 7 以上。不是把品牌色压暗 —— 压暗会让正文链接糊掉。
+
+   名单只收「实心品牌色/警示色做底」的元素。背景是 --brand-soft 的（比如模型胶囊）
+   深色下本身就深，翻了反而变成深底深字，那是更糟的结果。 */
+:root[data-theme="dark"] .bub-user,
+:root[data-theme="dark"] .inputbar button,
+:root[data-theme="dark"] .tool-badge,
+:root[data-theme="dark"] .id-item.on i,
+:root[data-theme="dark"] .es-item.on i,
+:root[data-theme="dark"] .acct-av,
+:root[data-theme="dark"] .mini.primary,
+:root[data-theme="dark"] .ov-chip.on,
+:root[data-theme="dark"] .ck.on,
+:root[data-theme="dark"] .ov-act.primary{color:#0b1220}
+
+/* ---------------- 强调色 ----------------
+   顶栏渐变一起换：只换 --brand 会让顶栏还是蓝的，和按钮撞色。
+   深色下单独一组，因为亮色版在深底上对比度不够。 */
+:root[data-accent="teal"]{
+  --brand:#0b7a75; --brand-2:#0d8b85; --brand-soft:#e3f4f2;
+  --nav-a:#052c2a; --nav-b:#0a4644; --nav-c:#0c5551;
+}
+:root[data-accent="red"]{
+  --brand:#b02229; --brand-2:#c22a32; --brand-soft:#fbeaea;
+  --nav-a:#3a0e12; --nav-b:#5a151b; --nav-c:#711b22;
+}
+:root[data-theme="dark"][data-accent="teal"]{
+  --brand:#45bdb3; --brand-2:#52cbc0; --brand-soft:#10302d;
+  --nav-a:#04100f; --nav-b:#07201f; --nav-c:#062a28;
+}
+:root[data-theme="dark"][data-accent="red"]{
+  --brand:#ef757c; --brand-2:#f5878e; --brand-soft:#2f191b;
+  --nav-a:#150607; --nav-b:#240a0c; --nav-c:#3a0c10;
+}
+</style>
+<script>
+  // 在解析 <body> 之前判定嵌入状态，避免顶栏闪一下
+  if (window.self !== window.top) document.documentElement.classList.add("embedded");
+</script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><span class="logo">政</span><span id="cityTitle">AI市长工作台</span></div>
+  <div class="tools">
+    <span data-tool="meeting"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H4z"/><path d="M9 20h6M12 16v4"/></svg>会议助手</span>
+    <span data-tool="oversight" title="统筹推进 · 督办台账（常驻入口）"><svg viewBox="0 0 24 24"><path d="M4 6h8M4 12h8M4 18h8"/><path d="M15 16l2.5 2.5L22 13"/></svg>统筹推进<i class="tool-badge" id="ovBadge" hidden></i></span>
+    <span data-tool="cal"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg>AI日程</span>
+    <span data-tool="doc"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>材料助手</span>
+    <span data-tool="bell"><svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 20h4"/></svg>消息提醒</span>
+  </div>
+  <div class="id-wrap">
+    <div class="avatar" id="avatar"><i id="avatarChar">市</i><span id="avatarName">市长</span>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+    </div>
+    <div class="id-menu" id="idMenu" hidden></div>
+  </div>
+</div>
+
+<div class="stage">
+
+  <!-- 左：AI 参谋 -->
+  <section class="panel ask">
+    <div class="ask-head">
+      <h2><i class="ask-dot"></i><b>智能问政</b></h2>
+      <span class="live"><i></i>在线</span>
+    </div>
+    <!-- 专家是「当前对话的参谋」，单选。整组会诊放在菜单最后一项，
+         不是并排一堆胶囊 —— 一次只能有一个角色在对话中，选谁就谁答。 -->
+    <div class="expert-select" id="expertSelect" tabindex="0" role="button" aria-haspopup="true" aria-expanded="false">
+      <span class="es-label">AI参谋</span>
+      <b class="es-name" id="esName">不召唤</b>
+      <span class="es-state" id="esState"></span>
+      <svg class="es-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+      <div class="es-menu" id="esMenu" hidden></div>
+    </div>
+    <div class="chips">
+      <button data-tool="meeting">查会议资料</button>
+      <button data-ask="今年1-9月全市规上工业增加值是多少？同比增速如何？">查统计数据</button>
+      <button data-ask="重大项目投资完成率有多少，跟时序进度比怎么样">查项目进展</button>
+    </div>
+    <div class="thread" id="thread">
+      <div class="thread-empty" id="threadEmpty">还没有对话。上面挑一个问题，或直接输入。<br>数值全部来自指标接口，可点开卡片核对口径。</div>
+    </div>
+    <div class="ask-foot">
+      <div class="inputbar">
+        <input id="q" placeholder="请输入您的问题…" autocomplete="off">
+        <button id="go">发送</button>
+      </div>
+      <div class="sub-ops">
+        <select id="threadSel" title="切换会话（第一项=开新会话）"></select>
+        <button class="mini" id="newChat" title="开一个新会话">＋ 新对话</button>
+        <span class="model-pill" id="modelPill" title="点击配置模型">未配置模型</span>
+      </div>
+      <div class="disclaim">AI 输出仅供参考 · 数值以数据接口返回为准</div>
+    </div>
+  </section>
+
+  <!-- 右：城市罗盘 -->
+  <section class="compass">
+    <div class="cp-head">
+      <div class="cp-tabs">
+        <a class="on" data-nav="compass">城市罗盘</a>
+        <a data-nav="desk">个人工作台</a>
+      </div>
+      <div class="cp-right">
+        <span class="period"><i></i><span id="periodText">—</span></span>
+        <div class="icon-btn" id="bellBtn" title="预警提醒">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 20h4"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <div class="view" id="viewCompass">
+      <div class="kpis" id="kpis"></div>
+      <div class="grid" id="grid"></div>
+      <div class="alertbar" id="alertbar"></div>
+    </div>
+
+    <div class="view" id="viewDesk" hidden>
+      <div class="desk-hd">
+        <h2>个人工作台</h2>
+        <span class="dh-who" id="deskWho" title="当前演示身份；切换可看别人的配置">—</span>
+        <button class="mini sec-act" id="deskCustom" title="选择显示哪些板块、谁排前面">自定义</button>
+      </div>
+      <div class="desk-sec" data-block="watch">
+        <div class="sec-head">
+          <h3>我的关注</h3>
+          <span class="sec-count" id="watchCount">—</span>
+          <button class="mini sec-act" id="watchManage" title="从已注册指标里增删关注">管理关注</button>
+        </div>
+        <div class="kpis cols-3" id="watchGrid"></div>
+      </div>
+      <div class="desk-sec desk-feed" data-block="feed">
+        <div class="sec-head">
+          <h3>关注动态 · 今日提醒</h3>
+          <span class="sec-count" id="feedCount"></span>
+          <span class="sec-count unread" id="feedUnread" hidden></span>
+          <button class="mini sec-act" id="feedReadAll" hidden>全部已读</button>
+        </div>
+        <div class="feed" id="feedList"></div>
+      </div>
+      <div class="desk-sec desk-follow" data-block="follow">
+        <div class="sec-head">
+          <h3>重点注意事项 · 我跟进的</h3>
+          <span class="sec-count" id="followCount"></span>
+          <span class="sec-count" id="followBasis" title="按分管单位从督办台账派生，不是另一份名单"></span>
+          <button class="mini sec-act" id="followManage" title="从督办台账里挑几件自己盯着">管理跟进</button>
+        </div>
+        <div class="follow" id="followList"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="mask" id="mask"></div>
+<aside class="drawer" id="drawer">
+  <div class="dr-head">
+    <div>
+      <h3 id="drTitle">指标详情</h3>
+      <div class="kind" id="drKind"></div>
+    </div>
+    <span class="dr-close" id="drClose">✕</span>
+  </div>
+  <div class="dr-body" id="drBody"></div>
+</aside>
+<div class="toast" id="toast"></div>
+
+<div class="modal" id="modelModal">
+  <div class="modal-box set-box">
+    <div class="modal-head">
+      <div>
+        <h3>设置</h3>
+        <p>模型决定问答质量，其余是本机偏好。密钥只存本机 data/models.json，不进仓库。</p>
+      </div>
+      <span class="modal-x" id="mmClose">✕</span>
+    </div>
+    <div class="set-tabs">
+      <button class="set-tab on" data-stab="model">模型与引擎</button>
+      <button class="set-tab" data-stab="general">通用</button>
+      <button class="set-tab" data-stab="about">关于</button>
+    </div>
+    <div class="modal-body" id="mmBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="themeModal">
+  <div class="modal-box theme-box">
+    <div class="modal-head">
+      <div>
+        <h3>外观</h3>
+        <p>只影响这台机器上的显示，不改变别人的界面，也不影响数据。</p>
+      </div>
+      <span class="modal-x" id="tmClose">✕</span>
+    </div>
+    <div class="modal-body" id="tmBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="calModal">
+  <div class="modal-box cal-box">
+    <div class="modal-head">
+      <div>
+        <h3>AI 日程</h3>
+        <p>只收已经写进系统的时间：督办时限与状态、会议时间、统计数据披露日。没有手工排期，也不会凭空多出一件事。</p>
+      </div>
+      <span class="modal-x" id="calClose">✕</span>
+    </div>
+    <div class="cal-body" id="calBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="meetModal">
+  <div class="modal-box mt-box">
+    <div class="modal-head">
+      <div>
+        <h3>会议助手</h3>
+        <p>会议记录 → 议定事项 → 督办台账。每条事项必须能对上原文引文、且数字都能在原文里找到，才允许落库；落库前仍需人工勾选。</p>
+      </div>
+      <span class="modal-x" id="mtClose">✕</span>
+    </div>
+    <div class="mt-body">
+      <aside class="mt-list">
+        <button class="mini mt-new" id="mtNew">＋ 新建会议</button>
+        <div id="mtList"></div>
+      </aside>
+      <section class="mt-detail" id="mtDetail"></section>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="ovModal">
+  <div class="modal-box ov-box">
+    <div class="modal-head">
+      <div>
+        <h3>督办台账</h3>
+        <p>议定事项落库后的办理闭环。签收、进展、办结、退回、催办全部走状态机守卫；被拒绝的操作不落任何数据，拒绝原因直接回显。</p>
+      </div>
+      <div class="ov-head-r">
+        <span class="ov-back" id="ovBack" hidden title="回到刚才那条会议记录">← 会议助手</span>
+        <span class="modal-x" id="ovClose">✕</span>
+      </div>
+    </div>
+    <div class="ov-body">
+      <aside class="ov-side">
+        <div class="ov-filters" id="ovFilters"></div>
+        <div style="padding:8px 10px 0"><button class="mini" id="ovUrge" style="width:100%">批量催办当前筛选</button></div>
+        <div class="ov-list" id="ovList"></div>
+      </aside>
+      <section class="ov-main" id="ovMain"></section>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="watchModal">
+  <div class="modal-box" style="width:min(560px,94vw)">
+    <div class="modal-head">
+      <div>
+        <h3>管理关注</h3>
+        <p>点一行即可加入或移除，只影响「我的关注」这一栏，不动城市罗盘。每人一份，切换身份看到的是各自的。</p>
+      </div>
+      <span class="modal-x" id="wmClose">✕</span>
+    </div>
+    <div class="modal-body" id="wmBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="followModal">
+  <div class="modal-box" style="width:min(620px,94vw)">
+    <div class="modal-head">
+      <div>
+        <h3>管理跟进</h3>
+        <p>从督办台账里挑几件自己盯着。分管单位派生的那些本来就在，这里加的是"不属于你分管、但你要看"的事。</p>
+      </div>
+      <span class="modal-x" id="fmClose">✕</span>
+    </div>
+    <div class="modal-body" id="fmBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="layoutModal">
+  <div class="modal-box" style="width:min(470px,94vw)">
+    <div class="modal-head">
+      <div>
+        <h3>自定义工作台</h3>
+        <p>勾掉不想看的板块，用箭头调顺序。只改你自己这份，切回别的身份还是别人的配置。</p>
+      </div>
+      <span class="modal-x" id="lmClose">✕</span>
+    </div>
+    <div class="modal-body" id="lmBody"></div>
+  </div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+let OV = null;
+
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.add("on");
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove("on"), 2400);
+}
+
+/* ---------- 迷你走势线 ---------- */
+function spark(points, tone) {
+  if (!points || points.length < 2) return "";
+  const W = 300, H = 42, P = 5;
+  const min = Math.min(...points), max = Math.max(...points);
+  const span = max - min || 1;
+  const xs = points.map((_, i) => P + (i * (W - P * 2)) / (points.length - 1));
+  const ys = points.map((v) => H - P - ((v - min) / span) * (H - P * 2));
+  // 平滑曲线：相邻点的中点作为控制点
+  let d = `M ${xs[0].toFixed(1)} ${ys[0].toFixed(1)}`;
+  for (let i = 1; i < xs.length; i++) {
+    const cx = (xs[i - 1] + xs[i]) / 2;
+    d += ` C ${cx.toFixed(1)} ${ys[i - 1].toFixed(1)}, ${cx.toFixed(1)} ${ys[i].toFixed(1)}, ${xs[i].toFixed(1)} ${ys[i].toFixed(1)}`;
+  }
+  // 颜色走 CSS 变量而不是写死：换强调色时折线得跟着变，否则整个页面换了色
+  // 只有这条线还是蓝的。stroke/fill 用 currentColor，var() 在 SVG 呈现属性里
+  // 各浏览器表现不一致，靠 color 继承最稳。
+  const color = tone === "warn" ? "var(--warn)" : "var(--brand)";
+  const last = points.length - 1;
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="display:block;width:100%;height:42px;color:${color}">
+    <path d="${d}" fill="none" stroke="currentColor" stroke-width="1.8" vector-effect="non-scaling-stroke"
+      stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="${xs[last].toFixed(1)}" cy="${ys[last].toFixed(1)}" r="2.6" fill="currentColor"/>
+  </svg>`;
+}
+
+/* ---------- 渲染 ---------- */
+function kpiCard(k, opts = {}) {
+  return `
+    <div class="kpi ${opts.cls || ""}" data-metric="${esc(k.code)}">
+      ${opts.extra || ""}
+      <div class="k">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+        ${esc(k.name)}
+      </div>
+      <div class="v mono">${esc(k.display)}<small class="${k.unit === "%" ? "pct" : ""}">${esc(k.unit)}</small></div>
+      <div class="f">
+        <span class="yoy ${esc(k.yoy_tone)}">${esc(k.yoy_text)}</span>
+        ${k.note ? `<span class="note">${esc(k.note)}</span>` : ""}
+      </div>
+    </div>`;
+}
+
+function renderKpis(list, sel = "#kpis") {
+  $(sel).innerHTML = list.map((k) => kpiCard(k)).join("");
+}
+
+function renderBoards(list, focus) {
+  const cards = list.map((b) => {
+    const badge = b.status_tone === "warn" ? "warn" : "ok";
+    return `
+    <div class="card" data-metric="${esc(b.code)}" title="${esc(b.status_why)}">
+      <div class="card-head">
+        <span class="dot" style="background:${b.status_tone === "warn" ? "var(--warn)" : "var(--brand)"}"></span>
+        <h3>${esc(b.title)}</h3>
+        <span class="badge ${badge}">${esc(b.status)}</span>
+      </div>
+      <div class="big mono">${esc(b.value_display).replace(/(\s*\/\s*\S+\s*项)$/, "<small>$1</small>")}</div>
+      <div class="desc">${esc(b.sub)}</div>
+      <div class="bar ${b.status_tone === "warn" ? "warn" : ""}"><i style="width:${b.progress}%"></i></div>
+      <div class="trendline">${spark(b.trend, b.status_tone)}</div>
+      <div class="trendcap">近 6 月走势 · 数据截至 ${esc(b.source.period)}</div>
+    </div>`;
+  }).join("");
+
+  const focusCard = `
+    <div class="card focus-card">
+      <div class="card-head">
+        <span class="dot" style="background:var(--warn)"></span>
+        <h3>焦点推送 · 民情焦点</h3>
+        <span class="badge warn">今日 ${focus.count} 条</span>
+      </div>
+      <div class="focus-list">
+        ${focus.items.map((f) => `
+          <div class="focus-item" data-focus="${esc(f.title)}" title="来源：${esc(f.source)}">
+            <span class="fd ${esc(f.tone)}"></span>
+            <span>
+              <span class="ft">${esc(f.title)}</span>
+              <span class="fm">（${esc(f.meta)}）</span>
+            </span>
+          </div>`).join("")}
+      </div>
+      <div class="focus-more" id="focusMore">查看全部焦点 →</div>
+    </div>`;
+
+  $("#grid").innerHTML = cards + focusCard;
+}
+
+function renderAlerts(list, ov) {
+  const shown = list.slice(0, 2);
+  $("#alertbar").innerHTML = `
+    <h3><span class="dot"></span>追踪推进 · 预警提醒</h3>
+    <div class="alert-list">
+      ${shown.map((a) => `
+        <div class="alert-item" data-item="${esc(a.id)}" title="${esc(a.why)}">
+          <span class="ad ${esc(a.tone)}"></span>
+          <span>${esc(a.title)} · ${esc(a.tag)}</span>
+          <span class="tag">${a.remind_count ? `已催办 ${a.remind_count} 次` : esc(a.status)}</span>
+        </div>`).join("")}
+      ${list.length > 2 ? `<span class="tag" style="color:var(--faint)">另有 ${list.length - 2} 条</span>` : ""}
+    </div>
+    <button class="go" id="goCoord">进入统筹推进</button>`;
+
+  // 常驻入口的角标：逾期数。没有预警条也要更新，所以放在渲染之外。
+  const badge = $("#ovBadge");
+  if (badge) {
+    const n = (ov && ov.overdue) || 0;
+    badge.textContent = n;
+    badge.hidden = !n;
+    badge.title = n ? `${n} 件已逾期` : "";
+  }
+}
+
+/* ---------- 问答 ---------- */
+function plannerLabel(info) {
+  if (info && info.available) return `AI参谋 · ${info.model || "大模型"}`;
+  return "AI参谋 · 规则解析";
+}
+function aiBubble(r) {
+  const srcs = (r.sources || []).map((s) => [
+    `<span class="src-pill" data-src="${esc(s.code || "")}">${esc(s.report || "指标接口")}</span>`,
+    s.department ? `<span class="src-pill">${esc(s.department)}</span>` : "",
+    s.published_at ? `<span class="src-pill">披露 ${esc(s.published_at)}</span>` : "",
+  ].join("")).join("");
+
+  const notes = (r.notes || []).slice(0, 2).map((n) => `<div class="note-row">${esc(n)}</div>`).join("");
+  const notesBlock = notes ? `<div class="notes">${notes}</div>` : "";
+
+  // 专家解读：失败的项也显示（写清为什么没给），免得"召唤了却没反应"
+  const evs = (r.expert_views || []).map((v) => `
+    <div class="ev ${v.ok ? "" : "off"}">
+      <div class="ev-head"><i>${esc(v.avatar)}</i><b>${esc(v.name)}</b><span>${esc(v.focus)}</span></div>
+      <p>${esc(v.ok ? v.text : v.why || "未给出解读")}</p>
+    </div>`).join("");
+  const evBlock = evs ? `<div class="ev-wrap">${evs}</div>` : "";
+
+  const traceItems = (r.trace || []).map((t) => `
+    <div class="t"><b>${t.step}. ${esc(t.tool)}</b> · <code>${esc(t.status)}</code><br>${esc(t.summary)}</div>`).join("");
+  // 历史消息不回放调用链路（只存了 headline/sources/notes），所以 trace 空时不留折叠条
+  const traceBlock = traceItems
+    ? `<div class="trace-fold" data-fold>展开调用链路</div><div class="trace">${traceItems}</div>`
+    : "";
+
+  return `
+    <div class="ai-tag"><i>AI</i>${esc(plannerLabel(r.planner_info))}</div>
+    <div class="ai-body">
+      <div>${r.headline_html || esc(r.headline)}</div>
+      ${r.detail ? `<div style="margin-top:6px;color:var(--muted);font-size:12px">${esc(r.detail)}</div>` : ""}
+      ${notesBlock}
+      ${evBlock}
+      ${srcs ? `<div class="ai-src">${srcs}</div>` : ""}
+      ${traceBlock}
+    </div>`;
+}
+
+/* ---------- 可召唤的专家团 ----------
+   专家不取数：数值仍由后端按指标接口拼，专家只在答案之上补一段「怎么看」，
+   而且那段被要求不含任何数字 —— 含数字整段丢弃（规则在 core/experts.py）。
+   所以这里选了谁，只影响"多几段解读"，不影响数字从哪来。 */
+const EXP = { list: [], cur: null, max: 3, ready: false };
+// cur：null = 不召唤；"__all" = 整组；否则是某位专家的 id。
+// 一次只可能有一位「对话中」—— 专家是对话角色，不是一排筛选项。
+
+async function loadExperts() {
+  try {
+    const d = await (await fetch("/api/experts")).json();
+    EXP.list = d.experts || [];
+    EXP.max = d.max || 3;
+    EXP.ready = !!d.model_ready;
+  } catch {
+    EXP.list = [];
+  }
+  // 名单变了而当前这位不在了（后端删了角色），退回不召唤，别留个空名字
+  if (EXP.cur && EXP.cur !== "__all" && !EXP.list.some((e) => e.id === EXP.cur)) EXP.cur = null;
+  if (EXP.cur === "__all" && EXP.list.length < 2) EXP.cur = null;
+  renderExpertSelect();
+}
+
+/* 实际发给后端的专家。整组按 max 截，和 core 的 MAX_PER_CALL 同源 */
+function currentExperts() {
+  if (!EXP.cur) return [];
+  if (EXP.cur === "__all") return EXP.list.slice(0, EXP.max).map((e) => e.id);
+  return [EXP.cur];
+}
+
+function renderExpertSelect() {
+  const name = $("#esName");
+  const state = $("#esState");
+  const menu = $("#esMenu");
+  if (!name || !menu) return;
+
+  const cur = EXP.list.find((e) => e.id === EXP.cur);
+  if (EXP.cur === "__all") {
+    name.textContent = "专家组";
+    state.textContent = `（${Math.min(EXP.list.length, EXP.max)} 位会诊中）`;
+  } else if (cur) {
+    name.textContent = cur.name;
+    state.textContent = "（对话中）";
+  } else {
+    name.textContent = "不召唤";
+    state.textContent = EXP.list.length ? "（只答数值与口径）" : "（名单未加载）";
+  }
+
+  const item = (eid, avatar, label, hint, on, cls = "") =>
+    `<div class="es-item ${cls} ${on ? "on" : ""}" data-eid="${esc(eid)}" title="${esc(hint)}">` +
+    `<i>${esc(avatar)}</i>${esc(label)}${on ? "<em>对话中</em>" : ""}</div>`;
+
+  menu.innerHTML =
+    item("", "—", "不召唤", "只给数值、口径和出处，不要解读", !EXP.cur) +
+    EXP.list.map((e) => item(e.id, e.avatar, e.name, e.focus, EXP.cur === e.id)).join("") +
+    // 整组只在真能一次叫上时才出现：否则点下去会静默漏人，用户以为叫了全组
+    (EXP.list.length > 1 && EXP.list.length <= EXP.max
+      ? item("__all", "组", "整组会诊", `${EXP.list.length} 位一起看，角度更多`, EXP.cur === "__all", "sep")
+      : "");
+}
+
+function selectExpert(eid) {
+  EXP.cur = eid || null;
+  closeExpertMenu();
+  renderExpertSelect();
+}
+
+function closeExpertMenu() {
+  const box = $("#expertSelect");
+  if (!box) return;
+  box.classList.remove("open");
+  box.setAttribute("aria-expanded", "false");
+  $("#esMenu").hidden = true;
+}
+
+async function ask(question) {
+  if (!question.trim()) return;
+  const box = $("#thread");
+  const empty = $("#threadEmpty");
+  if (empty) empty.remove();
+
+  box.insertAdjacentHTML("beforeend", `<div class="bub-user">${esc(question)}</div>`);
+  const holder = document.createElement("div");
+  holder.className = "bub-ai";
+  holder.innerHTML = `<div class="ai-tag"><i>AI</i>AI参谋</div>
+    <div class="ai-body"><div class="stage-hint">正在调用模型解析意图…</div></div>`;
+  box.appendChild(holder);
+  box.scrollTop = box.scrollHeight;
+  $("#go").disabled = true;
+
+  const stage = (text) => {
+    const el = holder.querySelector(".ai-body");
+    if (el) el.innerHTML = `<div class="stage-hint">${esc(text)}</div>`;
+  };
+  const fail = (msg) => {
+    holder.innerHTML = `<div class="ai-tag"><i>AI</i>AI参谋</div>
+      <div class="ai-body"><div class="warnbox">${esc(msg)}</div></div>`;
+  };
+
+  try {
+    const res = await fetch("/api/ask/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, thread_id: THREAD, experts: currentExperts() }),
+    });
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let finished = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const chunks = buf.split("\n\n");
+      buf = chunks.pop();
+      for (const chunk of chunks) {
+        const line = chunk.trim();
+        if (!line.startsWith("data: ")) continue;
+        let f;
+        try { f = JSON.parse(line.slice(6)); } catch { continue; }
+
+        if (f.type === "start") {
+          THREAD = f.thread_id;
+          stage(f.turns ? `已接入会话 · 第 ${f.turns + 1} 轮` : "新会话已建立，正在解析…");
+        } else if (f.type === "plan") {
+          const who = f.planner === "llm" ? "模型" : "规则";
+          const names = (f.names || []).join("、");
+          stage(`${who}解析完成 · ${intentLabel(f.intent)}${names ? " · " + names : " · 未命中已注册指标"}`);
+        } else if (f.type === "experts") {
+          // 专家是串行调模型的，三位加起来好几秒。不报进度的话，界面会从
+          // 「解析完成」一直静默到出结果，看着像卡死。
+          const tail = f.phase === "start" ? "正在看材料" : (f.ok ? "已给出意见" : "未给出意见");
+          stage(`专家会诊 · ${f.name} ${tail}（${f.index}/${f.total}）`);
+        } else if (f.type === "done") {
+          finished = true;
+          THREAD = f.thread_id;
+          holder.innerHTML = aiBubble(f.result);
+          bindFold(holder);
+        } else if (f.type === "error") {
+          finished = true;
+          fail(`调用失败：${f.error}`);
+        }
+      }
+    }
+    if (!finished) fail("连接中断，没有收到结果。");
+  } catch (e) {
+    fail(`调用失败：${e.message}`);
+  }
+
+  box.scrollTop = box.scrollHeight;
+  $("#go").disabled = false;
+  refreshThreadOptions();
+}
+
+/* ---------- 会话与模型状态 ---------- */
+let THREAD = null;   // 当前会话 id；null = 还没建（首次提问时后端建）
+let MODELS = { providers: [], resolved: [], active: null, ready: false };
+
+const INTENT_CN = { value: "取值", trend: "走势", breakdown: "分解", compare: "对比", definition: "口径" };
+function intentLabel(i) { return INTENT_CN[i] || i || "—"; }
+
+const EMPTY_HTML = `<div class="thread-empty" id="threadEmpty">还没有对话。上面挑一个问题，或直接输入。<br>数值全部来自指标接口，可点开卡片核对口径。</div>`;
+
+function bubbleFromHistory(m) {
+  const meta = m.meta || {};
+  return aiBubble({
+    headline: m.content,
+    sources: meta.sources || [],
+    notes: meta.notes || [],
+    facts: meta.facts || [],
+    // 专家解读也要回放：现在专家是「对话中」的常驻角色，回看时那段凭空消失会很怪
+    expert_views: meta.expert_views || [],
+    planner: meta.planner,
+    planner_info: { available: !!meta.model, model: meta.model },
+    trace: [],
+  });
+}
+
+function renderThread(thread) {
+  const box = $("#thread");
+  const msgs = (thread && thread.messages) || [];
+  if (!msgs.length) {
+    box.innerHTML = EMPTY_HTML;
+    return;
+  }
+  box.innerHTML = msgs.map((m) => m.role === "user"
+    ? `<div class="bub-user">${esc(m.content)}</div>`
+    : `<div class="bub-ai">${bubbleFromHistory(m)}</div>`
+  ).join("");
+  box.querySelectorAll(".bub-ai").forEach(bindFold);
+  box.scrollTop = box.scrollHeight;
+}
+
+async function refreshThreadOptions() {
+  try {
+    const d = await (await fetch("/api/threads")).json();
+    const sel = $("#threadSel");
+    sel.innerHTML = `<option value="">新会话</option>` + (d.items || [])
+      .map((t) => `<option value="${t.id}">${esc(t.title || "未命名")} · ${t.message_count}</option>`).join("");
+    sel.value = THREAD || "";
+    if (!THREAD) sel.value = "";
+  } catch (e) { /* 列表拉不到不影响问数 */ }
+}
+
+async function openThread(id) {
+  THREAD = id || null;
+  if (!id) {
+    renderThread(null);
+    $("#threadSel").value = "";
+    return;
+  }
+  const res = await fetch(`/api/threads/${id}`);
+  if (!res.ok) { THREAD = null; renderThread(null); return; }
+  const d = await res.json();
+  renderThread(d.thread);
+  $("#threadSel").value = id;
+}
+
+async function loadModels() {
+  MODELS = await (await fetch("/api/models")).json();
+  const pill = $("#modelPill");
+  if (!MODELS.ready) {
+    pill.textContent = "未配置模型";
+    pill.classList.add("off");
+    pill.title = "点这里配置模型。不配置也能用，问数会退回规则解析";
+  } else {
+    const ref = MODELS.active || "";
+    pill.textContent = ref.split("/").slice(1).join("/") || ref;
+    pill.classList.remove("off");
+    pill.title = `当前模型 ${ref}，点击管理`;
+  }
+  return MODELS;
+}
+
+function openModelModal() { openSettings("model"); }
+function closeModelModal() { $("#modelModal").classList.remove("on"); }
+
+let SET_TAB = "model";
+
+function openSettings(tab) {
+  SET_TAB = tab || "model";
+  renderSettings();
+  $("#modelModal").classList.add("on");
+  if (SET_TAB === "model") {
+    // 面板先出来再用最新数据刷一遍：拉模型列表要走网络，等它会让弹窗慢半拍
+    loadModels().then(() => { if (SET_TAB === "model") renderSettings(); }).catch(() => {});
+  }
+}
+
+function renderSettings() {
+  document.querySelectorAll(".set-tab").forEach((b) => b.classList.toggle("on", b.dataset.stab === SET_TAB));
+  if (SET_TAB === "model") return renderModelPanel();
+  if (SET_TAB === "general") return renderGeneralPanel();
+  renderAboutPanel();
+}
+
+function renderGeneralPanel() {
+  const cur = PID.get();
+  const threads = Math.max(0, $("#threadSel").options.length - 1);
+  $("#mmBody").innerHTML = `
+    <div class="set-row">
+      <div class="set-l"><b>默认身份</b><span>打开工作台时以谁的身份进入。这是演示切换，没有权限校验，切到谁就能看谁的关注。</span></div>
+      <select id="setDefaultPerson">
+        ${(PP.people || []).map((p) => `<option value="${esc(p.id)}" ${p.id === cur ? "selected" : ""}>${esc(p.name)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="set-row">
+      <div class="set-l"><b>主题与外观</b><span>当前：${esc(THEME.label())} · ${esc((ACCENTS.find((x) => x.id === THEME.accent()) || ACCENTS[0]).name)}</span></div>
+      <button class="mini" id="setOpenTheme">去调整</button>
+    </div>
+    <div class="set-row">
+      <div class="set-l"><b>会话记录</b><span>存在服务端 data/chats.json，换浏览器也还在。</span></div>
+      <span class="set-v">${threads} 个</span>
+    </div>
+    <div class="set-row">
+      <div class="set-l"><b>数据位置</b><span>会话、会议台账、督办状态、模型配置都在这台机器的 data/ 目录，页面本身不缓存业务数据。</span></div>
+      <span class="set-v">data/</span>
+    </div>
+    <div class="set-row">
+      <div class="set-l"><b>模型密钥</b><span>只写本机 data/models.json，不进仓库、不随页面下发。</span></div>
+      <span class="set-v">${MODELS.ready ? "已配置" : "未配置"}</span>
+    </div>
+    <div class="set-kbd">
+      <kbd>Ctrl</kbd><kbd>,</kbd><span>设置</span>
+      <kbd style="margin-left:8px">Esc</kbd><span>关闭浮层</span>
+      <kbd style="margin-left:8px">Enter</kbd><span>发送问题</span>
+    </div>`;
+}
+
+function renderAboutPanel() {
+  const kpis = (OV && OV.kpis) || [];
+  const people = (PP.people || []).length;
+  const exps = (EXP.list || []).length;
+  const threads = Math.max(0, $("#threadSel").options.length - 1);
+  $("#mmBody").innerHTML = `
+    <div class="about-grid">
+      <div class="about-cell"><b>v0.2</b><span>版本 · 纯标准库，无第三方依赖</span></div>
+      <div class="about-cell"><b>${kpis.length}</b><span>罗盘指标</span></div>
+      <div class="about-cell"><b>${exps}</b><span>可召唤参谋</span></div>
+      <div class="about-cell"><b>${threads}</b><span>会话记录</span></div>
+    </div>
+    <div class="about-note">
+      数值全部来自指标接口，回答里的每个数字都能点开核对口径；专家只做定性解读，出现数字整段丢弃。
+      议事事项必须对上原文引文才允许落库，督办流转走状态机守卫，被拒绝的操作不落任何数据。
+    </div>
+    <div class="set-row" style="border-bottom:0;margin-top:6px">
+      <div class="set-l"><b>当前身份</b><span>切换身份用于演示不同视角，不是登录态。</span></div>
+      <span class="set-v">${esc(((PP.people || []).find((x) => x.id === PID.get()) || {}).name || "市长")}</span>
+    </div>`;
+}
+
+/* ---------- 外观 ---------- */
+function openThemeModal() {
+  renderThemeModal();
+  $("#themeModal").classList.add("on");
+}
+
+function themePreview(dark) {
+  return dark
+    ? `<div class="tm-prev" style="background:#0c131d;border-color:#28323f">
+         <i class="pv-nav" style="background:#0a1c30"></i>
+         <div class="pv-body"><b style="background:#2c3849"></b><b style="background:#222d3d"></b></div></div>`
+    : `<div class="tm-prev" style="background:#fff;border-color:#e5eaf2">
+         <i class="pv-nav" style="background:#0a2a63"></i>
+         <div class="pv-body"><b style="background:#dfe6f0"></b><b style="background:#eef2f8"></b></div></div>`;
+}
+
+function renderThemeModal() {
+  const t = THEME.get();
+  const a = THEME.accent();
+  $("#tmBody").innerHTML = `
+    <div class="tm-sec">
+      <h4>主题</h4>
+      <p>深色会同时换掉表格、弹窗和卡片的底色，不是把整页调暗一层。</p>
+      <div class="tm-themes">
+        ${THEMES.map((x) => {
+          const dark = x.id === "dark" || (x.id === "auto" && matchMedia("(prefers-color-scheme:dark)").matches);
+          return `<div class="tm-card ${x.id === t ? "on" : ""}" data-theme-set="${x.id}">
+            ${themePreview(dark)}
+            <div class="tm-name">${esc(x.name)}${x.id === "auto" ? `<em>${dark ? "当前深色" : "当前浅色"}</em>` : ""}</div>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>
+    <div class="tm-sec">
+      <h4>强调色</h4>
+      <p>影响按钮、选中态和顶栏底色。红涨绿跌的行情色不跟着变。</p>
+      <div class="tm-accent">
+        ${ACCENTS.map((x) => `<div class="ac-dot ${x.id === a ? "on" : ""}" data-accent-set="${x.id}" title="${esc(x.name)}" style="background:${x.c}"><span></span></div>`).join("")}
+      </div>
+    </div>
+    <div class="tm-note">
+      外观只存在这台机器上（localStorage），换台电脑还是默认的浅色。要回到默认，用账户菜单里的「重置本机偏好」。
+    </div>`;
+}
+
+function renderModelPanel() {
+  const list = MODELS.providers || [];
+  const active = MODELS.active || "";
+
+  const cards = list.map((p) => {
+    const chips = (p.models || []).map((m) => {
+      const ref = `${p.name}/${m.id}`;
+      const on = ref === active ? "on" : "";
+      const off = m.enabled && m.chat ? "" : "（不参与对话）";
+      return `<button class="mchip ${on}" data-pick="${esc(ref)}">${esc(m.id)}${off ? `<span style="opacity:.6">${off}</span>` : ""}</button>`;
+    }).join("");
+
+    return `<div class="prov ${p.enabled ? "" : "off"}">
+      <div class="prov-hd">
+        <b>${esc(p.name)}</b>
+        <span class="mbadge">${esc(p.kind || "openai")}</span>
+        ${p.has_key ? "" : `<span class="mbadge warn">缺密钥</span>`}
+        ${p.enabled ? "" : `<span class="mbadge warn">已停用</span>`}
+      </div>
+      <div class="prov-url">${esc(p.base_url)} · 密钥 ${esc(p.api_key_masked || "无")}</div>
+      <div class="mrow">${chips || `<span class="hint" style="margin:0">还没有模型，点下面「拉取模型」</span>`}</div>
+      <div class="prow-acts">
+        <button class="mini" data-test="${esc(p.id)}">测试连通性</button>
+        <button class="mini" data-fetch="${esc(p.id)}">拉取模型</button>
+        <button class="mini" data-del="${esc(p.id)}">删除</button>
+      </div>
+      <div data-out="${esc(p.id)}"></div>
+    </div>`;
+  }).join("");
+
+  $("#mmBody").innerHTML = `
+    ${cards || `<div class="hint" style="margin:0 0 4px">还没有配置任何模型服务。</div>`}
+    <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
+      <b style="font-size:12.5px">添加模型服务</b>
+      <div class="form-grid">
+        <label>名称（英文，将作为 provider 前缀）<input id="f_name" placeholder="deepseek"></label>
+        <label>Base URL<input id="f_url" placeholder="https://api.deepseek.com/v1"></label>
+        <label class="full">API Key（只存本机，不会提交到任何第三方）<input id="f_key" type="password" placeholder="sk-..."></label>
+        <label class="full">模型 ID（逗号分隔）<input id="f_models" placeholder="deepseek-chat, deepseek-flash"></label>
+      </div>
+      <div class="prow-acts">
+        <button class="mini" id="f_save">保存</button>
+        <span class="hint" style="margin:6px 0 0">保存后点模型名即可设为默认模型</span>
+      </div>
+    </div>`;
+
+  bindModelPanel();
+}
+
+function bindModelPanel() {
+  const box = $("#mmBody");
+
+  box.querySelectorAll("[data-pick]").forEach((btn) => {
+    btn.onclick = async () => {
+      const ref = btn.dataset.pick;
+      const r = await fetch("/api/active-model", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ref }),
+      });
+      const d = await r.json();
+      if (!d.ok) return toast(d.error || "切换失败");
+      await loadModels();
+      renderModelPanel();
+      toast(`默认模型已切换为 ${ref}`);
+    };
+  });
+
+  box.querySelectorAll("[data-test]").forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.dataset.test;
+      const prov = (MODELS.providers || []).find((p) => p.id === id);
+      const model = ((prov && prov.models) || []).find((m) => m.chat && m.enabled);
+      const out = box.querySelector(`[data-out="${id}"]`);
+      if (!model) return toast("这个 provider 还没有可用模型");
+      out.innerHTML = `<div class="test-out">正在发 ping 请求…</div>`;
+      btn.disabled = true;
+      try {
+        const d = await (await fetch("/api/models/test", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, model: model.id }),
+        })).json();
+        out.innerHTML = d.ok
+          ? `<div class="test-out ok">连通 · ${esc(model.id)} · ${d.latency_ms}ms</div>`
+          : `<div class="test-out bad">失败：${esc(d.error)}</div>`;
+      } finally {
+        btn.disabled = false;
+      }
+    };
+  });
+
+  box.querySelectorAll("[data-fetch]").forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.dataset.fetch;
+      const out = box.querySelector(`[data-out="${id}"]`);
+      out.innerHTML = `<div class="test-out">正在拉取远端模型列表…</div>`;
+      const d = await (await fetch("/api/models/fetch", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      })).json();
+      if (!d.ok) { out.innerHTML = `<div class="test-out bad">失败：${esc(d.error)}</div>`; return; }
+      const items = d.items || [];
+      if (!items.length) { out.innerHTML = `<div class="test-out bad">远端没有返回模型</div>`; return; }
+      const prov = (MODELS.providers || []).find((p) => p.id === id);
+      const merged = [...(prov.models || [])];
+      items.forEach((it) => { if (!merged.some((m) => m.id === it.id)) merged.push({ id: it.id, name: it.name, enabled: true, chat: true }); });
+      await fetch("/api/models", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, name: prov.name, base_url: prov.base_url, models: merged }),
+      });
+      await loadModels();
+      renderModelPanel();
+      toast(`已合并 ${items.length} 个远端模型，点模型名可设为默认`);
+    };
+  });
+
+  box.querySelectorAll("[data-del]").forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.dataset.del;
+      const prov = (MODELS.providers || []).find((p) => p.id === id);
+      if (!confirm(`删除 provider「${prov ? prov.name : id}」？\n指向它的会话模型会被置空。`)) return;
+      const d = await (await fetch(`/api/models/${id}`, { method: "DELETE" })).json();
+      await loadModels();
+      renderModelPanel();
+      toast(d.ok ? `已删除，重置了 ${d.threads_reset || 0} 个会话的模型绑定` : (d.error || "删除失败"));
+    };
+  });
+
+  const save = box.querySelector("#f_save");
+  if (save) {
+    save.onclick = async () => {
+      const name = (box.querySelector("#f_name").value || "").trim();
+      const base = (box.querySelector("#f_url").value || "").trim();
+      const key = (box.querySelector("#f_key").value || "").trim();
+      const models = (box.querySelector("#f_models").value || "").split(",").map((s) => s.trim()).filter(Boolean);
+      if (!name || !base || !key || !models.length) return toast("名称、Base URL、Key、至少一个模型都要填");
+      const d = await (await fetch("/api/models", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, base_url: base, api_key: key, models: models.map((id) => ({ id })) }),
+      })).json();
+      if (!d.ok) return toast(d.error || "保存失败");
+      await loadModels();
+      renderModelPanel();
+      toast(`已保存 ${name}，点模型名设为默认`);
+    };
+  }
+}
+
+function bindFold(scope) {
+  (scope.querySelectorAll ? scope.querySelectorAll("[data-fold]") : []).forEach((el) => {
+    el.onclick = () => {
+      const t = el.nextElementSibling;
+      const open = t.classList.toggle("open");
+      el.textContent = open ? "收起调用链路" : "展开调用链路";
+    };
+  });
+}
+
+/* ---------- 溯源抽屉 ---------- */
+function openDrawer(html, title, kind) {
+  $("#drTitle").textContent = title;
+  $("#drKind").textContent = kind || "";
+  $("#drBody").innerHTML = html;
+  $("#drawer").classList.add("on");
+  $("#mask").classList.add("on");
+}
+function closeDrawer() {
+  $("#drawer").classList.remove("on");
+  $("#mask").classList.remove("on");
+}
+
+async function showMetric(code) {
+  const res = await fetch(`/api/metric/${encodeURIComponent(code)}`);
+  if (!res.ok) return toast("没有这个指标");
+  const d = await res.json();
+
+  const series = d.series || [];
+  const isPct = d.unit === "%";
+  const valor = isPct
+    ? `${d.value}%`
+    : esc(String(d.value).replace(/\B(?=(\d{3})+(?!\d))/g, ","));
+  const unitHtml = isPct ? "" : `<span class="u">${esc(d.unit)}</span>`;
+  const html = `
+    <div class="dr-valor">
+      <span class="v mono">${valor}</span>
+      ${unitHtml}<span class="u">· ${esc(d.period_text || d.period_label)}</span>
+    </div>
+    <div class="dr-yoy ${esc(d.yoy_tone)}">${esc(d.yoy_text)}</div>
+    ${d.target_note ? `<div style="font-size:12px;color:var(--muted);margin:-10px 0 0">${esc(d.target_note)}</div>` : ""}
+
+    <div class="dr-chart">${spark(series.map((p) => p.value), "brand")}
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--faint);padding:2px 6px 4px">
+        <span>${esc(series[0]?.label || "")}</span><span>${esc(series[series.length - 1]?.label || "")}</span>
+      </div>
+    </div>
+
+    <div class="dr-sec">
+      <h4>口径定义</h4>
+      <p>${esc(d.definition)}</p>
+    </div>
+
+    <div class="dr-sec">
+      <h4>数据来源</h4>
+      <dl class="kv">
+        <dt>责任部门</dt><dd>${esc(d.source.department)}</dd>
+        <dt>报表</dt><dd>${esc(d.source.report)}</dd>
+        <dt>统计期次</dt><dd>${esc(d.source.period)}</dd>
+        <dt>披露时间</dt><dd>${esc(d.source.disclosed_on || "—")}</dd>
+        <dt>接口</dt><dd style="font-family:ui-monospace,monospace;font-size:11px">${esc(d.source.api)}</dd>
+      </dl>
+    </div>
+
+    <div class="dr-sec">
+      <h4>使用注意</h4>
+      <ul>${(d.caveats || []).map((c) => `<li>${esc(c)}</li>`).join("")}</ul>
+    </div>
+
+    <div class="dr-sec">
+      <h4>可用提问方式</h4>
+      <p style="font-size:11.5px;color:var(--muted)">${(d.aliases || []).map((a) => `「${esc(a)}」`).join(" ")}</p>
+    </div>`;
+  openDrawer(html, d.name, `指标 ${d.code}`);
+}
+
+/* ---------- 个人工作台 ---------- */
+// 关注卡片复用罗盘的 .kpi 渲染，所以同样能点开抽屉看口径；
+// 动态列表只做归集，文案与判定都来自后端，前端不二次加工。
+//
+// 「每个人」这层是**演示身份**：没有登录，身份 id 存 localStorage，靠请求头带给后端。
+// 后端只认 core/people.py 里那三个 id，未知 id 一律回落市长。
+const PID = {
+  get: () => localStorage.getItem("ocgov.person") || "mayor",
+  set: (v) => localStorage.setItem("ocgov.person", v),
+};
+let PP = { people: [], max: 8 };
+let ACCT_ACTIONS = {};
+let WS = null;
+
+async function loadPeople() {
+  try {
+    const d = await (await fetch("/api/people")).json();
+    PP.people = d.people || [];
+    PP.max = d.max_watch || 8;
+  } catch {
+    PP.people = [];
+  }
+  renderIdMenu();
+}
+
+/* ---------- 主题与外观 ----------
+   只存三个键在 localStorage：主题、强调色、身份。服务端的关注/跟进/布局不在这里，
+   所以"重置本机偏好"不会动到业务数据。 */
+const THEMES = [
+  { id: "light", name: "浅色" },
+  { id: "dark", name: "深色" },
+  { id: "auto", name: "跟随系统" },
+];
+const ACCENTS = [
+  { id: "blue", name: "政务蓝", c: "#0d54c8" },
+  { id: "teal", name: "沉稳青", c: "#0b7a75" },
+  { id: "red", name: "中国红", c: "#b02229" },
+];
+
+const THEME = {
+  get: () => localStorage.getItem("ocgov.theme") || "light",
+  accent: () => localStorage.getItem("ocgov.accent") || "blue",
+  // auto 要落到实际的深或浅：后面所有判断都只看这个结果
+  effective() {
+    const t = THEME.get();
+    if (t === "auto") return matchMedia("(prefers-color-scheme:dark)").matches ? "dark" : "light";
+    return t === "dark" ? "dark" : "light";
+  },
+  label() {
+    const t = THEMES.find((x) => x.id === THEME.get()) || THEMES[0];
+    if (t.id === "auto") return "跟随系统 · " + (THEME.effective() === "dark" ? "深" : "浅");
+    return t.name;
+  },
+  apply() {
+    const root = document.documentElement;
+    // 浅色是 :root 的默认值，删属性而不是写 "light"，少一处要维护的覆盖
+    if (THEME.effective() === "dark") root.dataset.theme = "dark";
+    else delete root.dataset.theme;
+    const a = THEME.accent();
+    if (a === "blue") delete root.dataset.accent;
+    else root.dataset.accent = a;
+  },
+  set(t) { localStorage.setItem("ocgov.theme", t); THEME.apply(); },
+  setAccent(a) { localStorage.setItem("ocgov.accent", a); THEME.apply(); },
+};
+
+// 跟随系统时，系统换主题要跟着变，否则只有刷新才生效
+try {
+  matchMedia("(prefers-color-scheme:dark)").addEventListener("change", () => {
+    if (THEME.get() === "auto") THEME.apply();
+  });
+} catch (e) { /* 老浏览器没有 addEventListener，忽略 */ }
+
+/* ---------- 账户菜单 ----------
+   顶部是当前身份（就地切换），下面分组条目。
+   设计图里的「套餐 / 积分 / 邀约 / 成长计划」没有搬过来：这个系统里没有计费、
+   没有积分、没有邀请关系，照抄过来就是四个点了没反应的假入口。
+   条目只放真做了的功能，每条点了都有东西。 */
+const ACCT_ICON = {
+  gear: '<path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.1 14.6a1.5 1.5 0 00.3 1.7l.1.1a1.8 1.8 0 11-2.6 2.6l-.1-.1a1.5 1.5 0 00-1.7-.3 1.5 1.5 0 00-.9 1.4v.2a1.8 1.8 0 11-3.6 0v-.1a1.5 1.5 0 00-1-1.4 1.5 1.5 0 00-1.7.3l-.1.1a1.8 1.8 0 11-2.6-2.6l.1-.1a1.5 1.5 0 00.3-1.7 1.5 1.5 0 00-1.4-.9H3a1.8 1.8 0 110-3.6h.1a1.5 1.5 0 001.4-1 1.5 1.5 0 00-.3-1.7l-.1-.1a1.8 1.8 0 112.6-2.6l.1.1a1.5 1.5 0 001.7.3H9a1.5 1.5 0 00.9-1.4V3a1.8 1.8 0 113.6 0v.1a1.5 1.5 0 00.9 1.4 1.5 1.5 0 001.7-.3l.1-.1a1.8 1.8 0 112.6 2.6l-.1.1a1.5 1.5 0 00-.3 1.7V9a1.5 1.5 0 001.4.9h.2a1.8 1.8 0 110 3.6h-.1a1.5 1.5 0 00-1.4.9z"/>',
+  palette: '<circle cx="12" cy="12" r="9"/><circle cx="9.2" cy="9.6" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.8" cy="9.6" r="1.1" fill="currentColor" stroke="none"/><circle cx="9.6" cy="14.8" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="14.5" r="1.1" fill="currentColor" stroke="none"/>',
+  db: '<ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v13c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3v-13"/><path d="M4.5 12c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3"/>',
+  chat: '<path d="M21 11.5a8 8 0 01-8 8H7.5L3 22V12.5a8 8 0 018-8h2a8 8 0 018 7z"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  power: '<path d="M12 3.5v8.5"/><path d="M6.8 7a7.5 7.5 0 1010.4 0"/>',
+  user: '<circle cx="12" cy="8" r="3.4"/><path d="M5.5 20a6.5 6.5 0 0113 0"/>',
+};
+
+function acctRow(it) {
+  if (it.sep) return `<div class="acct-sep"></div>`;
+  const h = typeof it.hint === "function" ? it.hint() : it.hint;
+  return `<div class="acct-row ${it.cls || ""}" data-acct="${esc(it.id)}">
+      <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">${ACCT_ICON[it.icon] || ""}</svg>
+      <span class="nm">${esc(it.name)}</span>
+      ${h ? `<span class="hint">${esc(h)}</span>` : ""}
+      <svg class="chev" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
+    </div>`;
+}
+
+function renderIdMenu() {
+  const cur = PID.get();
+  const p = (PP.people || []).find((x) => x.id === cur) || { avatar: "市", name: "市长", scope: "全市" };
+  // 会话数从下拉里数：会话列表本来就存在 DOM 里，没必要再拉一次接口
+  const threads = Math.max(0, $("#threadSel").options.length - 1);
+  ACCT_ACTIONS = {
+    settings: () => openSettings("model"),
+    theme: () => openThemeModal(),
+    data: () => openSettings("general"),
+    about: () => openSettings("about"),
+    reset: () => resetLocalPrefs(),
+  };
+  const items = [
+    { id: "settings", icon: "gear", name: "设置", hint: "Ctrl+," },
+    { id: "theme", icon: "palette", name: "外观", hint: () => THEME.label() },
+    { sep: 1 },
+    { id: "data", icon: "db", name: "数据与存储", hint: `${threads} 个会话` },
+    { id: "about", icon: "info", name: "关于", hint: "v0.2" },
+    { sep: 1 },
+    { id: "reset", icon: "power", name: "重置本机偏好", cls: "danger" },
+  ];
+  $("#idMenu").innerHTML = `
+    <div class="acct-top" id="acctTop">${acctIdCard(p)}</div>
+    <div class="acct-list">${items.map(acctRow).join("")}</div>`;
+}
+
+function acctIdCard(p) {
+  return `<div class="acct-id">
+      <div class="acct-av">${esc(p.avatar || "市")}</div>
+      <div class="acct-who"><b>${esc(p.name)}</b><span>${esc(p.scope || "")} · 演示身份</span></div>
+      <button class="acct-swap" id="acctSwap">切换</button>
+    </div>`;
+}
+
+// 就地展开三人列表，不弹第二个浮层：叠着两层浮层在窄屏上很容易点错
+function showIdPicker() {
+  const cur = PID.get();
+  $("#acctTop").innerHTML = `<div class="acct-list">
+    ${(PP.people || []).map((p) => `
+      <div class="acct-row ${p.id === cur ? "on" : ""}" data-pid="${esc(p.id)}">
+        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">${ACCT_ICON.user}</svg>
+        <span class="nm">${esc(p.name)}<span style="display:block;font-size:10px;color:var(--faint);margin-top:1px">${esc(p.scope)}</span></span>
+        ${p.id === cur ? `<span class="hint">当前</span>` : ""}
+      </div>`).join("")}
+  </div>`;
+}
+
+async function resetLocalPrefs() {
+  if (!confirm("只清这台机器上的身份、主题、外观偏好。\n服务端的关注列表、跟进清单、督办台账都不动。继续？")) return;
+  ["ocgov.person", "ocgov.theme", "ocgov.accent"].forEach((k) => localStorage.removeItem(k));
+  THEME.apply();
+  $("#idMenu").hidden = true;
+  toast("本机偏好已重置，正在重新加载");
+  setTimeout(() => location.reload(), 500);
+}
+
+
+function applyPerson(p) {
+  if (!p) return;
+  $("#avatarChar").textContent = p.avatar || "市";
+  $("#avatarName").textContent = p.name || "市长";
+  $("#deskWho").textContent = `${p.name} · ${p.scope}`;
+  applyLayout(p.layout);
+}
+
+// 板块顺序与显隐：照后端给的 layout 重排。位置不写死在 HTML 里，
+// 否则"自定义"就只是换个问法问人，页面实际不动。
+function applyLayout(layout) {
+  const desk = $("#viewDesk");
+  const ids = Array.isArray(layout) && layout.length ? layout : ["watch", "feed", "follow"];
+  // 先全藏，下面按顺序放回来的自然就显示 —— 顺序 = appendChild 的先后
+  desk.querySelectorAll(".desk-sec[data-block]").forEach((el) => { el.hidden = true; });
+  ids.forEach((id) => {
+    const el = desk.querySelector(`.desk-sec[data-block="${id}"]`);
+    if (!el) return;
+    el.hidden = false;
+    desk.appendChild(el);
+  });
+  // 藏起来的块也挪到最后：留在原地会让 DOM 顺序和看到的顺序不一致，
+  // 以后重新打开某块时它就突然插到前面去
+  [...desk.querySelectorAll(".desk-sec[data-block]")].filter((el) => el.hidden).forEach((el) => desk.appendChild(el));
+}
+
+async function switchPerson(pid) {
+  if (pid === PID.get()) {
+    $("#idMenu").hidden = true;
+    return;
+  }
+  PID.set(pid);
+  $("#idMenu").hidden = true;
+  await loadWorkspace();
+  renderIdMenu();
+  const p = WS && WS.person;
+  toast(p ? `已切换到「${p.name}」：${p.scope}，关注 ${p.count} 项` : "已切换身份");
+}
+
+async function loadWorkspace() {
+  try {
+    const res = await fetch("/api/workspace", { headers: { "X-Person-Id": PID.get() } });
+    const d = await res.json();
+    if (!d.ok) throw new Error(d.error || "接口异常");
+    WS = d;
+    applyPerson(d.person);
+    const max = (d.person && d.person.max_watch) || PP.max || 8;
+    $("#watchCount").textContent = `${d.watch_count} / ${max} 指标`;
+    renderWatch(d);
+    renderFeed(d);
+    renderFollow(d);
+  } catch (e) {
+    $("#feedList").innerHTML = `<div class="feed-item"><span class="fd muted"></span>
+      <span class="ft">工作台数据加载失败：${esc(e.message)}</span></div>`;
+  }
+}
+
+// 关注动态：一条提醒 = 正文 + 来源分类。分类按「为什么冒出来」分（关注指标 /
+// 临近时限 / 督办动态 / 待披露），不按颜色分 —— 光看红黄分不清是数落后还是时限紧。
+function renderFeed(d) {
+  const feed = (d && d.feed) || [];
+  const unread = (d && d.unread) || 0;
+  const badge = $("#feedUnread");
+  badge.hidden = !unread;
+  badge.textContent = `${unread} 条未读`;
+  $("#feedReadAll").hidden = !unread;
+  $("#feedList").innerHTML =
+    feed
+      .map(
+        (f, i) => `
+      <div class="feed-item ${f.unread ? "unread" : ""}" data-feed="${i}"
+           title="来源：${esc(f.source)}${f.code ? " · 点击看口径" : f.ov_id ? " · 点击看督办详情" : ""}">
+        <span class="fd ${esc(f.tone)}"></span>
+        <span class="ft">${esc(f.text)}</span>
+        <span class="ftag ${esc(f.tone)}">${esc(f.label || f.tag)}</span>
+      </div>`
+      )
+      .join("") ||
+    `<div class="feed-item"><span class="fd muted"></span><span class="ft">今日没有需要提醒的事</span></div>`;
+  // 有未读时只显示未读数，两个数字并排（今日 6 条 / 6 条未读）纯属重复
+  $("#feedCount").textContent = !unread && feed.length ? `今日 ${feed.length} 条` : "";
+}
+
+// 重点注意事项：台账里「我分管的、还没办结的」。进度只认责任单位报上来的
+// 百分比（事件流里的 percent），没报就写「未报进展」，不拿状态折算成数字。
+function renderFollow(d) {
+  const f = (d && d.follow) || { items: [], count: 0, total: 0, normal: 0 };
+  const items = f.items || [];
+  $("#followCount").textContent = items.length ? `${items.length} 项需注意` : "";
+  $("#followBasis").textContent = f.basis || "";
+  if (!items.length) {
+    // 「没有注意事项」和「没有在办事项」是两件事，不能合成一句 —— 后者说明分管范围
+    // 真的空，前者说明有活但不紧张，会错意就会以为没事干。
+    const calm = Number(f.normal) || 0;
+    $("#followList").innerHTML = calm
+      ? `<div class="frow" style="cursor:default">
+      <span class="fdot ok"></span>
+      <div class="fl"><b>没有需要注意的事项</b><span>分管范围内另有 ${calm} 项正常推进，都在时限内</span></div></div>`
+      : `<div class="frow" style="cursor:default">
+      <span class="fdot muted"></span>
+      <div class="fl"><b>分管范围内没有未办结事项</b><span>会议交办、手工新建的事项会自动出现在这里</span></div></div>`;
+    return;
+  }
+  $("#followList").innerHTML = items
+    .map((i) => {
+      const left = i.days_left < 0 ? `逾期 ${-i.days_left} 天` : i.days_left === 0 ? "今日到期" : `剩 ${i.days_left} 天`;
+      const pct = i.progress > 0 ? `${i.progress}%` : "未报进展";
+      const tone = esc(i.tone || "muted");
+      const w = Math.max(0, Math.min(100, Number(i.progress) || 0));
+      // 逾期/临期这类风险，"剩几天"本身就说清楚了；但「签收超时」「停滞」是**流程上**
+      // 卡住，剩余天数照样宽裕——只写"剩 18 天"会让人以为没事。所以这类单独挂标签。
+      const flowRisk = i.risk === "签收超时" || i.risk === "停滞";
+      const riskChip = flowRisk
+        ? `<span class="frisk ${tone}" title="${esc((i.risk_reasons || []).join("；"))}">${esc(i.risk)}</span>`
+        : "";
+      // 手动挑进来的要标出来：不标，用户会以为这是系统按分管范围派给他的活
+      const srcTag = i.source === "manual" || i.source === "both" ? `<span class="fsrc">我挑的</span>` : "";
+      return `<div class="frow" data-follow="${esc(i.id)}"
+             title="${esc((i.risk_reasons || []).join("；") || "按时限推进中")} · 点击查看督办详情">
+        <span class="fdot ${tone}"></span>
+        <div class="fl"><b>${esc(i.title)}</b><span>${esc(i.assignee)} · ${esc(i.status)} · ${esc(i.deadline)} 前${riskChip}${srcTag}</span></div>
+        <div class="fbar"><i class="${tone}" style="width:${w}%"></i></div>
+        <span class="fnum ${tone}">${esc(pct)} · ${esc(left)}</span>
+      </div>`;
+    })
+    .join("");
+}
+
+// 已读只回写「看过了」这个事实，不动任何数值；失败也不该拦住用户去看内容
+async function markSeen(keys) {
+  try {
+    const res = await fetch("/api/workspace/feed-seen", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      body: JSON.stringify({ keys: keys || [] }),
+    });
+    const d = await res.json();
+    if (!res.ok || !d.ok) return false;
+    if (WS) {
+      WS.feed = d.feed;
+      WS.unread = d.unread;
+      renderFeed(WS);
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// 关注卡片比罗盘多一件事：hover 出「取消关注」。
+// 不再挂那张虚线的「添加关注」卡：6 张卡是 3×2 正好铺满，多挂一张就独占第三行，
+// 右边两格空白一片；而且标题行右侧已经有「管理关注」，同一件事没必要两个入口。
+function renderWatch(d) {
+  const cards = d.watch || [];
+  const empty = `<div class="watch-empty">还没有关注任何指标。点右上角「管理关注」，从 ${(d.catalog || []).length} 个已注册指标里挑几项 —— 不选也能用，只是这一栏会空着。</div>`;
+  $("#watchGrid").innerHTML = cards.length
+    ? cards.map((k) => kpiCard(k, { cls: "watch", extra: `<span class="rm" data-unwatch="${esc(k.code)}" title="取消关注">✕</span>` })).join("")
+    : empty;
+}
+
+async function saveWatch(codes, msg) {
+  try {
+    const res = await fetch("/api/workspace/watch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      body: JSON.stringify({ codes }),
+    });
+    const d = await res.json();
+    if (!res.ok || !d.ok) throw new Error(d.error || "保存失败");
+    await loadWorkspace();
+    if ($("#watchModal").classList.contains("on")) renderWatchPicker();
+    if (msg) toast(msg);
+    return true;
+  } catch (e) {
+    toast(e.message);
+    return false;
+  }
+}
+
+function removeWatch(code) {
+  const codes = (WS && WS.watch ? WS.watch : []).map((c) => c.code).filter((c) => c !== code);
+  return saveWatch(codes, "已取消关注");
+}
+
+function openWatchPicker() {
+  if (!WS) return toast("工作台还没加载完");
+  $("#watchModal").classList.add("on");
+  renderWatchPicker();
+}
+
+function renderWatchPicker() {
+  const cur = ((WS && WS.watch) || []).map((c) => c.code);
+  const max = (WS && WS.person && WS.person.max_watch) || 8;
+  const cat = (WS && WS.catalog) || [];
+  $("#wmBody").innerHTML = `
+    <div class="wm-tip">已关注 <b>${cur.length}</b> / ${max}，点一行即可加入或移除，工作台立刻刷新。数值是当前期，和罗盘同源。</div>
+    <div class="wm-list">${cat
+      .map(
+        (m) => `
+      <div class="wm-row" data-wcode="${esc(m.code)}">
+        <div class="nm"><b>${esc(m.name)}</b><span>${esc(m.code)}</span></div>
+        <div class="val">${esc(m.display)}<small>${esc(m.unit)}</small></div>
+        <span class="st ${m.watched ? "on" : "off"}">${m.watched ? "已关注" : "添加"}</span>
+      </div>`
+      )
+      .join("")}</div>
+    <div class="wm-foot"><span id="wmReset" title="删掉这个人的自定义关注，回到该身份的默认表">恢复默认关注</span></div>`;
+}
+
+async function toggleWatch(code) {
+  const cur = ((WS && WS.watch) || []).map((c) => c.code);
+  const has = cur.includes(code);
+  const max = (WS && WS.person && WS.person.max_watch) || 8;
+  if (!has && cur.length >= max) return toast(`最多关注 ${max} 个，先取消一个再添加`);
+  return saveWatch(has ? cur.filter((c) => c !== code) : [...cur, code], has ? "已取消关注" : "已加入关注");
+}
+
+/* ---------- 管理跟进：从台账里挑几件自己盯 ----------
+   分管单位派生的不用挑（本来就在），这里加的是"不归我分管、但我要看"的事。
+   勾选即时保存，没有"确定"按钮：这一栏本来就是随手调的，多一步确认反而别扭。 */
+let FM = { items: [], sel: [] };
+const FM_RANK = { 逾期: 0, 今日到期: 1, 临期: 2, 签收超时: 3, 停滞: 4 };
+
+async function openFollowPicker() {
+  const d = await (await fetch("/api/oversight")).json();
+  if (!d.ok) return toast("督办台账读取失败");
+  // 已办结的不进候选：跟一件已经办完的事没有意义
+  FM.items = (d.items || []).filter((i) => i.status !== "已办结");
+  FM.sel = [...((WS && WS.person && WS.person.follow) || [])];
+  $("#followModal").classList.add("on");
+  renderFollowPicker();
+}
+
+function renderFollowPicker() {
+  const max = (WS && WS.person && WS.person.max_follow) || 20;
+  const unitSet = new Set((WS && WS.person && WS.person.units) || []);
+  const rows = FM.items
+    .slice()
+    .sort((a, b) => (FM_RANK[a.risk] ?? 9) - (FM_RANK[b.risk] ?? 9) || a.days_left - b.days_left);
+  const body = rows.length
+    ? rows
+        .map((i) => {
+          const mine = FM.sel.includes(i.id);
+          // 「分管派生」= 不勾也在这个列表里的那些，标出来免得用户重复勾
+          const auto = !unitSet.size || unitSet.has(i.assignee) || (i.co_assignees || []).some((u) => unitSet.has(u));
+          const left = i.days_left < 0 ? `逾期 ${-i.days_left} 天` : i.days_left === 0 ? "今日到期" : `剩 ${i.days_left} 天`;
+          // 只在有含义时出标签：一列全是"—"等于没有信息
+          const tag = mine
+            ? `<span class="st mine">我挑的</span>`
+            : auto
+              ? `<span class="st auto">分管派生</span>`
+              : "";
+          return `<div class="fm-row" data-fid="${esc(i.id)}">
+        <span class="ck ${mine ? "on" : ""}">${mine ? "✓" : ""}</span>
+        <div class="nm"><b>${esc(i.title)}</b><span>${esc(i.id)} · ${esc(i.assignee)} · ${esc(i.status)} · ${esc(left)}</span></div>
+        ${tag}
+      </div>`;
+        })
+        .join("")
+    : `<div class="hint" style="margin:6px 2px">台账里没有未办结事项。</div>`;
+  $("#fmBody").innerHTML = `<div class="wm-tip">已勾 <b>${FM.sel.length}</b> / ${max}。标「分管派生」的是本来就在列表里的，勾不勾都不影响显示。</div>
+    <div class="wm-list">${body}</div>`;
+}
+
+async function toggleFollow(id) {
+  const has = FM.sel.includes(id);
+  const max = (WS && WS.person && WS.person.max_follow) || 20;
+  if (!has && FM.sel.length >= max) return toast(`最多手动跟进 ${max} 项，先取消一项`);
+  FM.sel = has ? FM.sel.filter((x) => x !== id) : [...FM.sel, id];
+  renderFollowPicker(); // 先动界面：点一下要立刻有反应，不等网络
+  const ok = await saveFollow(FM.sel, has ? "已移出我的跟进" : "已加入我的跟进");
+  if (!ok) {
+    // 存失败要把界面改回来，否则显示"已加"但后端没存，下次进来就消失了
+    FM.sel = has ? [...FM.sel, id] : FM.sel.filter((x) => x !== id);
+    renderFollowPicker();
+  }
+}
+
+async function saveFollow(ids, msg) {
+  try {
+    const res = await fetch("/api/workspace/follow", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      body: JSON.stringify({ ids }),
+    });
+    const d = await res.json();
+    if (!res.ok || !d.ok) throw new Error(d.error || "保存失败");
+    await loadWorkspace();
+    if (msg) toast(msg);
+    return true;
+  } catch (e) {
+    toast(e.message);
+    return false;
+  }
+}
+
+/* ---------- 自定义工作台：板块顺序与显隐 ----------
+   只排"已经写好的块"，不是组件市场。想加新块得先有取数逻辑，光加个名字只会渲染出一片空白。 */
+let LM = { all: [], list: [], on: new Set() };
+
+function openLayoutPicker() {
+  const p = (WS && WS.person) || {};
+  // 板块登记表的兜底：接口没给就照页面上已经渲染出来的块反查。
+  // 为什么要有这一层：字段缺失（旧后端进程、接口报错、改名）时 LM.all 会是空数组，
+  // 弹窗就变成只有标题的白壳 —— 用户看到"空的"，却不知道是拿不到数据还是真没有块。
+  // DOM 本身就是真相：三块始终存在于页面里，只是被 hidden 掉了。
+  const fromDom = [...document.querySelectorAll("#viewDesk .desk-sec[data-block]")].map((el) => ({
+    id: el.dataset.block,
+    name: ((el.querySelector("h3") || {}).textContent || el.dataset.block).trim(),
+  }));
+  LM.all = p.blocks && p.blocks.length ? p.blocks : fromDom;
+  const cur = (p.layout && p.layout.length ? p.layout : LM.all.map((b) => b.id)).filter((id) =>
+    LM.all.some((b) => b.id === id)
+  );
+  // 列表 = 显示的（按用户顺序） + 藏起来的（按登记顺序），一次看清全貌
+  LM.list = [...cur, ...LM.all.map((b) => b.id).filter((id) => !cur.includes(id))];
+  LM.on = new Set(cur);
+  $("#layoutModal").classList.add("on");
+  renderLayoutPicker();
+}
+
+function renderLayoutPicker() {
+  if (!LM.list.length) {
+    // 走到这里说明连页面上的块都没找到 —— 不能再渲染成白壳，要说清发生了什么
+    $("#lmBody").innerHTML = `<div class="lm-tip">没读到板块信息。这通常是页面加载不完整，刷新一次即可；如果刷新后还是这样，说明工作台没渲染出来。</div>
+      <div class="lm-row" style="cursor:default"><span class="nm">暂时没有可调整的板块</span></div>`;
+    return;
+  }
+  $("#lmBody").innerHTML = `
+    <div class="lm-tip">至少要留一块。勾掉 = 这块不显示；↑↓ 调先后。改完立刻生效，下次以这个身份进来还是这样。</div>
+    ${LM.list
+      .map((id, i) => {
+        const b = LM.all.find((x) => x.id === id) || { id, name: id };
+        const on = LM.on.has(id);
+        return `<div class="lm-row ${on ? "" : "off"}" data-lid="${esc(id)}">
+        <span class="ck ${on ? "on" : ""}">${on ? "✓" : ""}</span>
+        <span class="nm">${esc(b.name)}</span>
+        <span class="mv">
+          <button data-mv="up" ${i === 0 ? "disabled" : ""} title="上移">↑</button>
+          <button data-mv="down" ${i === LM.list.length - 1 ? "disabled" : ""} title="下移">↓</button>
+        </span>
+      </div>`;
+      })
+      .join("")}`;
+}
+
+async function toggleBlock(id) {
+  const willOn = !LM.on.has(id);
+  // 前端先挡一道，后端也会拒（空布局等于把自己锁在门外）
+  if (!willOn && LM.on.size <= 1) return toast("至少要留一个板块");
+  if (willOn) LM.on.add(id);
+  else LM.on.delete(id);
+  renderLayoutPicker();
+  await saveLayout();
+}
+
+async function moveBlock(id, dir) {
+  const i = LM.list.indexOf(id);
+  const j = dir === "up" ? i - 1 : i + 1;
+  if (i < 0 || j < 0 || j >= LM.list.length) return;
+  [LM.list[i], LM.list[j]] = [LM.list[j], LM.list[i]];
+  renderLayoutPicker();
+  await saveLayout();
+}
+
+async function saveLayout() {
+  const blocks = LM.list.filter((id) => LM.on.has(id));
+  try {
+    const res = await fetch("/api/workspace/layout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      body: JSON.stringify({ blocks }),
+    });
+    const d = await res.json();
+    if (!res.ok || !d.ok) throw new Error(d.error || "保存失败");
+    await loadWorkspace();
+    return true;
+  } catch (e) {
+    toast(e.message);
+    return false;
+  }
+}
+
+/* ---------- 会议助手 ----------
+   解析和落库是两个显式动作，中间一定要经过人：模型抽出来的东西先摆出来给人看，
+   勾选之后才进督办台账。不要为了"顺手"把这两步合成一步。 */
+let MT = { list: [], stats: {}, units: [], model_ready: false, current: null, sel: new Set() };
+
+/* ---------------- AI 日程 ----------------
+   数据全部来自 /api/schedule（服务端按身份算好）。前端只做两件事：
+   1. 把事件按日期摆成时间线；
+   2. 先显示规则版理由，模型简报到了再替换 —— 弹窗打开不能等模型 3~6 秒。
+
+   `seq` 防串：连点刷新时，先发的旧请求回来不能覆盖新结果（下拉切身份同理）。 */
+const CAL = { data: null, brief: null, seq: 0, pending: false };
+
+function openCalModal() {
+  $("#calModal").classList.add("on");
+  if (!CAL.data) $("#calBody").innerHTML = `<div class="cal-empty">正在读取日程…</div>`;
+  refreshCal();
+}
+function closeCalModal() { $("#calModal").classList.remove("on"); }
+
+async function refreshCal() {
+  const seq = ++CAL.seq;
+  CAL.brief = null;
+  CAL.pending = true;
+  try {
+    const res = await fetch("/api/schedule?days=14", { headers: { "X-Person-Id": PID.get() } });
+    const d = await res.json();
+    if (!d.ok) throw new Error(d.error || "读取失败");
+    if (seq !== CAL.seq) return;
+    CAL.data = d;
+    renderAgenda();
+  } catch (e) {
+    if (seq !== CAL.seq) return;
+    CAL.pending = false;
+    $("#calBody").innerHTML = `<div class="cal-empty">日程读取失败：${esc(e.message)}</div>`;
+    return;
+  }
+  loadCalBrief(seq);
+}
+
+async function loadCalBrief(seq) {
+  try {
+    const res = await fetch("/api/schedule/brief", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      body: JSON.stringify({ days: 14 }),
+    });
+    const d = await res.json();
+    if (seq !== CAL.seq) return;
+    CAL.brief = d && d.ok ? d : null;
+  } catch (e) {
+    if (seq !== CAL.seq) return;
+    CAL.brief = null;
+  }
+  if (seq !== CAL.seq) return;
+  CAL.pending = false;
+  applyBrief();
+}
+
+/* 规则版简报：只复述排序结果。模型不可用时显示的就是这一句，
+   页面上标「按台账排序」，不假装成 AI 写的。 */
+function calRuleBrief(d) {
+  const groups = d.groups || [];
+  const today = groups.find((g) => g.is_today);
+  if (!today || !today.items.length) {
+    const nxt = groups[0];
+    return nxt ? `今天没有排期。下一件是 ${nxt.month_day} 的「${nxt.items[0].title}」。` : "未来这段时间没有排期。";
+  }
+  const head = today.items[0];
+  return `今天 ${today.items.length} 件事。先办「${head.title}」——${head.why}。`;
+}
+
+function calBriefHtml(b, d, pending) {
+  const model = b && b.source === "model";
+  const src = pending ? "AI 正在写…" : model ? "AI 生成" : "按台账排序";
+  const text = b && b.brief ? b.brief : calRuleBrief(d);
+  const note = b && b.note ? `<div class="note">${esc(b.note)}</div>` : "";
+  return `<div class="cal-brief" id="calBrief">
+    <div class="cal-brief-hd"><b>今日重点</b><span>${src}</span><span class="who">${esc(d.basis || "")}</span></div>
+    <p>${esc(text)}</p>${note}
+  </div>`;
+}
+
+function calRow(it) {
+  const ref = it.ref && it.ref.type ? `${it.ref.type}:${it.ref.id}` : "";
+  const why = (CAL.brief && (CAL.brief.why || {})[it.id]) || it.why;
+  const aiWhy = !!(CAL.brief && CAL.brief.source === "model" && (CAL.brief.why || {})[it.id]);
+  return `<div class="cal-row">
+    <div class="cal-t"><b>${it.time ? esc(it.time) : "全天"}</b></div>
+    <div class="cal-card ${esc(it.tone)}${ref ? " link" : ""}" ${ref ? `data-calref="${esc(ref)}"` : ""}>
+      <div class="cal-top"><b>${esc(it.title)}</b><span class="cal-tag ${esc(it.tone)}">${esc(it.kind_label)}</span></div>
+      ${it.sub ? `<div class="cal-sub">${esc(it.sub)}</div>` : ""}
+      <div class="cal-why ${aiWhy ? "ai" : "rule"}" data-calwhy="${esc(it.id)}">${esc(why)}</div>
+    </div>
+  </div>`;
+}
+
+function renderAgenda() {
+  const d = CAL.data;
+  const s = d.summary || {};
+  const groups = d.groups || [];
+  const parts = [calBriefHtml(CAL.brief || { source: "rule", brief: calRuleBrief(d), why: {} }, d, CAL.pending)];
+  parts.push(`<div class="cal-sum">
+    <span>未来 <b>${d.window.days}</b> 天</span>
+    <span>共 <b>${s.total}</b> 件</span>
+    ${s.overdue ? `<span><b>${s.overdue}</b> 件逾期</span>` : ""}
+    ${s.meetings ? `<span><b>${s.meetings}</b> 场会议</span>` : ""}
+    <span style="margin-left:auto"><button class="cal-refresh" id="calRefresh">刷新</button></span>
+  </div>`);
+
+  if (!groups.length) {
+    parts.push(`<div class="cal-empty">未来 ${d.window.days} 天没有排期。<br>台账里没有落在窗口内的时限，也没有已定时间的会议。</div>`);
+  } else {
+    if (!groups.some((g) => g.is_today)) {
+      parts.push(`<div class="cal-quiet">今天没有排期。最近一件在 ${esc(groups[0].month_day)}。</div>`);
+    }
+    for (const g of groups) {
+      const head = g.weekday === g.label ? g.month_day : `${g.month_day} ${g.weekday}`;
+      parts.push(`<div class="cal-day ${g.is_today ? "today" : ""}">
+        <div class="cal-day-hd"><b>${esc(g.label)}</b><span class="d">${esc(head)}</span><span class="n">${g.items.length} 件</span></div>
+        ${g.items.map(calRow).join("")}
+      </div>`);
+    }
+  }
+
+  parts.push(`<div class="cal-foot"><b>口径</b> · ${esc(d.rule)}<br>
+    ${esc(d.basis)}；生成于 ${esc(d.generated_at)}。切换身份后按各自分管范围重算，右上角可刷新。</div>`);
+  $("#calBody").innerHTML = parts.join("");
+  $("#calRefresh").onclick = () => refreshCal();
+}
+
+function applyBrief() {
+  const d = CAL.data;
+  if (!d) return;
+  const holder = $("#calBrief");
+  if (holder) holder.outerHTML = calBriefHtml(CAL.brief || { source: "rule", brief: calRuleBrief(d), why: {} }, d, false);
+  const why = (CAL.brief && CAL.brief.why) || {};
+  const model = !!CAL.brief && CAL.brief.source === "model";
+  document.querySelectorAll("#calBody [data-calwhy]").forEach((el) => {
+    const t = why[el.dataset.calwhy];
+    if (!t) return;
+    el.textContent = t;
+    el.classList.toggle("ai", model);
+    el.classList.toggle("rule", !model);
+  });
+}
+
+function openMeetModal(mid) {
+  $("#meetModal").classList.add("on");
+  $("#mtDetail").innerHTML = `<div class="mt-empty">正在加载…</div>`;
+  refreshMeetList().then(() => {
+    // 从日程点进来的会带上具体会议 id；其余情况打开「最近一次」，省一步点击。
+    if (!MT.list.length) return newMeetingForm();
+    const want = [mid, MT.current].find((x) => x && MT.list.some((m) => m.id === x)) || MT.list[0].id;
+    selectMeeting(want);
+  });
+}
+function closeMeetModal() { $("#meetModal").classList.remove("on"); }
+
+async function refreshMeetList() {
+  try {
+    const d = await (await fetch("/api/meetings")).json();
+    MT.list = d.items || [];
+    MT.stats = d.stats || {};
+    MT.units = d.units || [];
+    MT.model_ready = !!d.model_ready;
+  } catch (e) {
+    $("#mtList").innerHTML = `<div class="mt-empty" style="padding:14px 6px">加载失败：${esc(e.message)}</div>`;
+    return;
+  }
+  $("#mtList").innerHTML = MT.list.length
+    ? MT.list.map((m) => `
+      <div class="mt-item ${m.id === MT.current ? "on" : ""}" data-mt="${esc(m.id)}">
+        <b>${esc(m.title)}</b>
+        <span>${esc(m.held_at || "—")}</span>
+        <span>${m.item_count} 条事项 · ${m.committed_count} 条已落督办${m.needs_review_count ? ` · <b style="color:var(--warn)">${m.needs_review_count} 待核实</b>` : ""}</span>
+      </div>`).join("")
+    : `<div class="mt-empty" style="padding:18px 6px">还没有会议记录</div>`;
+}
+
+async function selectMeeting(id) {
+  MT.current = id;
+  MT.sel = new Set();
+  await refreshMeetList();
+  $("#mtDetail").innerHTML = `<div class="mt-empty">读取中…</div>`;
+  try {
+    const d = await (await fetch("/api/meetings/" + encodeURIComponent(id))).json();
+    if (!d.ok) throw new Error(d.error || "读取失败");
+    if (d.units) MT.units = d.units;
+    renderMeetDetail(d.meeting);
+  } catch (e) {
+    $("#mtDetail").innerHTML = `<div class="mt-empty">读取失败：${esc(e.message)}</div>`;
+  }
+}
+
+function renderMeetDetail(m) {
+  MT.detail = m;
+  const items = m.items || [];
+  const committed = items.filter((i) => i.oversight_id).length;
+  const pending = items.filter((i) => !i.oversight_id);
+
+  const rows = items.map((it) => {
+    const v = it.verify || {};
+    const done = !!it.oversight_id;
+    const cls = done ? "done" : v.status === "ok" ? "" : "bad";
+    const tag = done
+      ? `<span class="mt-tag done ov-link" data-openov="${esc(it.oversight_id)}" title="已落库，点击打开对应督办事项">${esc(it.oversight_id)}</span>`
+      : v.status === "ok"
+        ? `<span class="mt-tag ok">可落库</span>`
+        : `<span class="mt-tag bad">待核实</span>`;
+    const box = done
+      ? `<span style="width:13px"></span>`
+      : `<input type="checkbox" data-sel="${esc(it.id)}" ${MT.sel.has(it.id) ? "checked" : ""} ${v.status === "ok" ? "" : "disabled"} title="${v.status === "ok" ? "勾选后落督办" : "未通过校验，先修正"}">`;
+    const opts = ["", ...MT.units];
+    if (it.assignee && !opts.includes(it.assignee)) opts.push(it.assignee);
+    const unitSel = `<select data-f="assignee" data-i="${esc(it.id)}" ${done ? "disabled" : ""}>${opts.map((u) => `<option value="${esc(u)}" ${u === (it.assignee || "") ? "selected" : ""}>${esc(u || "（请选择）")}</option>`).join("")}</select>`;
+
+    const issues = (v.issues || []).map((i) => `<span class="mt-iss" title="${esc(i.detail)}">${esc(i.code)}</span>`).join("");
+    const human = v.confirmed_by_human || [];
+    const humanTag = human.length
+      ? `<span class="mt-tag done" title="这些字段被人工改过，'原文里没有'这类软校验已豁免">人工设定 ${esc(human.join("/"))}</span>`
+      : "";
+
+    return `<div class="mt-row ${cls}">
+      <div class="mt-row-top">
+        ${box}
+        <input class="mt-title" data-f="title" data-i="${esc(it.id)}" value="${esc(it.title)}" ${done ? "disabled" : ""}>
+        ${tag}${humanTag}
+      </div>
+      <div class="mt-grid">
+        <div class="mt-f"><label>责任单位</label>${unitSel}</div>
+        <div class="mt-f"><label>办结时限</label>
+          <input data-f="deadline" data-i="${esc(it.id)}" value="${esc(it.deadline || "")}" placeholder="YYYY-MM-DD" ${done ? "disabled" : ""}></div>
+        <div class="mt-f"><label>办结标准</label>
+          <input data-f="standard" data-i="${esc(it.id)}" value="${esc(it.standard || "")}" ${done ? "disabled" : ""}></div>
+      </div>
+      <div class="mt-quote">原文：${esc(it.quote || "（无引文）")}</div>
+      ${issues ? `<div class="mt-issues">${issues}</div>` : ""}
+    </div>`;
+  }).join("");
+
+  $("#mtDetail").innerHTML = `
+    <div class="mt-head">
+      <h4>${esc(m.title)}</h4>
+      <span class="mt-tag ${m.status === "draft" ? "" : "done"}">${esc(m.status)}</span>
+    </div>
+    <p class="mt-meta">${esc(m.held_at || "—")}${m.host ? ` · 主持 ${esc(m.host)}` : ""}${(m.attendees || []).length ? ` · 参会 ${esc(m.attendees.join("、"))}` : ""}</p>
+    <div class="mt-acts">
+      <button class="mini" id="mtParse" ${committed ? "disabled" : ""}>${items.length ? "重新解析" : "解析议定事项"}</button>
+      <button class="mini" id="mtDel">删除会议</button>
+      <span class="hint" style="margin:6px 0 0">${MT.model_ready ? "模型就绪" : "未配置模型，无法解析"} · 事项 ${items.length} 条，已落督办 ${committed} 条</span>
+    </div>
+    ${(m.warnings || []).map((w) => `<div class="mt-warn info">${esc(w)}</div>`).join("")}
+    ${items.length ? rows : `<div class="mt-empty">还没有解析。点「解析议定事项」让模型从原文里抽——原文没写的不会被补。</div>`}
+    ${items.length ? `<div class="mt-acts" style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
+      <button class="mini" id="mtCommit" ${MT.sel.size ? "" : "disabled"}>落督办（已选 ${MT.sel.size} 条）</button>
+      <button class="mini" id="mtSelOk">选中全部可落库</button>
+      <span class="hint" style="margin:6px 0 0">只有「可落库」的条目能被勾选；未通过校验的要先改字段</span>
+    </div>` : ""}`;
+
+  bindMeetDetail();
+}
+
+function bindMeetDetail() {
+  const box = $("#mtDetail");
+
+  box.querySelectorAll("[data-sel]").forEach((cb) => {
+    cb.onchange = () => {
+      if (cb.checked) MT.sel.add(cb.dataset.sel); else MT.sel.delete(cb.dataset.sel);
+      const btn = $("#mtCommit");
+      if (btn) { btn.disabled = MT.sel.size === 0; btn.textContent = `落督办（已选 ${MT.sel.size} 条）`; }
+    };
+  });
+
+  // 字段改完立刻回服务端重新校验：校验必须在服务端做，前端只负责呈现结果
+  box.querySelectorAll("[data-f]").forEach((el) => {
+    el.onchange = async () => {
+      const iid = el.dataset.i;
+      try {
+        const r = await fetch(`/api/meetings/${encodeURIComponent(MT.current)}/items/${encodeURIComponent(iid)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [el.dataset.f]: el.value }),
+        });
+        const d = await r.json();
+        if (!d.ok) { toast("保存失败：" + (d.error || "未知错误")); return; }
+        const m = await (await fetch("/api/meetings/" + encodeURIComponent(MT.current))).json();
+        if (m.ok) renderMeetDetail(m.meeting);
+        const first = (d.item.verify.issues || [])[0];
+        toast(d.item.verify.status === "ok" ? "已通过校验，可勾选落库" : "仍有问题：" + (first ? first.detail : "待核实"));
+      } catch (e) {
+        toast("保存失败：" + e.message);
+      }
+    };
+  });
+
+  const parseBtn = $("#mtParse");
+  if (parseBtn) parseBtn.onclick = async () => {
+    parseBtn.disabled = true;
+    parseBtn.textContent = "解析中…";
+    try {
+      const r = await fetch(`/api/meetings/${encodeURIComponent(MT.current)}/parse`, { method: "POST" });
+      const d = await r.json();
+      if (!d.ok) { toast("解析失败：" + (d.detail || d.error || "未知错误")); return; }
+      MT.sel = new Set();
+      renderMeetDetail(d.meeting);
+      const okN = (d.meeting.items || []).filter((i) => i.verify?.status === "ok").length;
+      toast(`抽出 ${(d.meeting.items || []).length} 条，其中 ${okN} 条通过校验`);
+    } catch (e) {
+      toast("解析失败：" + e.message);
+    } finally {
+      parseBtn.disabled = false;
+      parseBtn.textContent = "重新解析";
+    }
+  };
+
+  const delBtn = $("#mtDel");
+  if (delBtn) delBtn.onclick = async () => {
+    if (!confirm("删除这份会议记录？（已落督办的事项不会被删）")) return;
+    await fetch("/api/meetings/" + encodeURIComponent(MT.current), { method: "DELETE" });
+    MT.current = null;
+    await refreshMeetList();
+    newMeetingForm();
+    toast("已删除会议记录");
+  };
+
+  const selOk = $("#mtSelOk");
+  if (selOk) selOk.onclick = () => {
+    const okIds = ((MT.detail || {}).items || [])
+      .filter((i) => !i.oversight_id && (i.verify || {}).status === "ok")
+      .map((i) => i.id);
+    MT.sel = new Set(okIds);
+    renderMeetDetail(MT.detail);
+    if (!okIds.length) toast("没有可落库的条目，先修正标红的");
+  };
+
+  const commitBtn = $("#mtCommit");
+  if (commitBtn) commitBtn.onclick = async () => {
+    if (!MT.sel.size) return;
+    commitBtn.disabled = true;
+    commitBtn.textContent = "写入中…";
+    try {
+      const r = await fetch(`/api/meetings/${encodeURIComponent(MT.current)}/commit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_ids: [...MT.sel] }),
+      });
+      const d = await r.json();
+      if (!d.ok) {
+        const detail = (d.problems || []).map((p) => `${p.id}: ${p.error}`).join("；");
+        toast("未写入：" + (d.error || "") + (detail ? " · " + detail : ""));
+        commitBtn.disabled = false;
+        commitBtn.textContent = `落督办（已选 ${MT.sel.size} 条）`;
+        return;
+      }
+      const ids = (d.created || []).map((c) => c.oversight_id).join("、");
+      toast(ids ? `已写入督办台账：${ids}` : "选中的事项都已落过督办");
+      MT.sel = new Set();
+      await selectMeeting(MT.current);
+      refreshDash();
+    } catch (e) {
+      toast("写入失败：" + e.message);
+      commitBtn.disabled = false;
+    }
+  };
+}
+
+function newMeetingForm() {
+  MT.current = null;
+  MT.sel = new Set();
+  refreshMeetList();
+  $("#mtDetail").innerHTML = `
+    <div class="mt-head"><h4>新建会议记录</h4></div>
+    <p class="mt-meta">粘贴会议记录原文。抽取只认原文——原文没写的不会被补，原文说得含糊的（比如「年底前」）会被标成待核实让你补。</p>
+    <div class="mt-form" style="margin-top:12px">
+      <label>会议标题<input id="mtf_title" placeholder="市政府第13次常务会议"></label>
+      <label>会议时间<input id="mtf_held" placeholder="2026-11-02 09:00"></label>
+      <label>主持<input id="mtf_host" placeholder="市长"></label>
+      <label>参会单位（逗号分隔）<input id="mtf_att" placeholder="市住建局, 市城管局"></label>
+      <label class="full">会议记录原文<textarea id="mtf_text" placeholder="粘贴纪要、速记稿或会议录音转写文本…"></textarea></label>
+    </div>
+    <div class="mt-acts"><button class="mini" id="mtf_save">保存</button>
+      <button class="mini" id="mtf_demo">填入示例</button>
+      <span class="hint" style="margin:6px 0 0">保存后再点「解析议定事项」；解析和落库是两步，中间你自己看一遍</span></div>
+    <div class="mt-warn info">会议助手不接录音转写。要处理录音，先用别的工具转成文字再粘进来——本服务不假装能听音视频。</div>`;
+
+  $("#mtf_demo").onclick = () => {
+    $("#mtf_title").value = "市政府第13次常务会议";
+    $("#mtf_held").value = "2026-11-02 09:00";
+    $("#mtf_host").value = "市长";
+    $("#mtf_att").value = "市住建局, 市城管局, 市交通运输局";
+    $("#mtf_text").value = [
+      "一、关于高铁东站周边路网配套工程。会议听取了市住建局的汇报。会议议定：由市住建局牵头，市交通运输局配合，11月20日前完成管线迁改和路面恢复，验收标准为管线全部入地并通过竣工验收。",
+      "二、关于冬季供暖保障。会议议定：由市城管局负责，11月10日前完成全市供热管网排查，形成隐患清单并逐项整改，确保按期开栓供暖。",
+      "三、关于12345热线反映的停车难问题。会议要求市城管局会同云山区政府，年底前完成主城区停车泊位施划，具体数量另行研究。",
+      "四、会议强调，各项工作要压实责任，确保落实到位。",
+    ].join("\n\n");
+  };
+
+  $("#mtf_save").onclick = async () => {
+    const title = $("#mtf_title").value.trim();
+    const text = $("#mtf_text").value.trim();
+    if (!title) return toast("会议标题不能为空");
+    if (!text) return toast("会议记录正文不能为空");
+    const btn = $("#mtf_save");
+    btn.disabled = true;
+    btn.textContent = "保存中…";
+    try {
+      const r = await fetch("/api/meetings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          text,
+          held_at: $("#mtf_held").value.trim(),
+          host: $("#mtf_host").value.trim(),
+          attendees: $("#mtf_att").value.split(/[,，、]/).map((s) => s.trim()).filter(Boolean),
+        }),
+      });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || "保存失败");
+      toast("已保存，可以解析了");
+      await selectMeeting(d.meeting.id);
+    } catch (e) {
+      toast("保存失败：" + e.message);
+      btn.disabled = false;
+      btn.textContent = "保存";
+    }
+  };
+}
+
+/* ---------- 督办台账 ---------- */
+/* 数据流是单向的：接口给什么就画什么，前端不自己算风险等级、不算天数。
+   按钮显不显示看 allowed_actions，判断能不能干还是后端说了算 —— 前端只负责
+   把拒绝原因原样弹出来，避免两套规则各说各话。 */
+const OVX = { items: [], stats: {}, scan: null, filter: "全部", sel: null };
+const OV_FILTERS = ["全部", "逾期", "今日到期", "临期", "签收超时", "停滞", "已办结"];
+const OV_TONE = { 逾期: "danger", 今日到期: "warn", 临期: "warn", 签收超时: "info", 停滞: "info", 正常: "muted" };
+
+async function openOversight(id, fromMeeting) {
+  $("#ovModal").classList.add("on");
+  const back = $("#ovBack");
+  if (back) back.hidden = !fromMeeting;
+  $("#ovMain").innerHTML = `<div class="hint" style="margin:0">正在读取台账…</div>`;
+  await refreshOversight();
+
+  /* 从会议助手跳进来时，目标事项可能不在当前筛选里（比如筛的是「逾期」，
+     这条刚创建还没到期）。先切到能看见它的分类，否则右侧打开了、左侧却没有这条，
+     看着像跳错了。 */
+  const target = id ? OVX.items.find((i) => i.id === id) : null;
+  if (target && !ovRows().some((i) => i.id === target.id)) {
+    OVX.filter = target.status === "已办结" ? "已办结" : "全部";
+    renderOvChips();
+    renderOvList();
+  }
+  /* 编号在台账里不存在（旧链接、被清理过的事项）：别把右侧停在「正在读取」上，
+     直接退回全部事项，同时说清楚没找到哪一条。 */
+  if (id && !target) {
+    toast(`台账里没有 ${id}`);
+    id = null;
+  }
+
+  const want = id || (ovRows()[0] || {}).id || (OVX.items[0] || {}).id;
+  if (want) return showOvItem(want);
+  $("#ovMain").innerHTML = `<div class="hint" style="margin:0">台账里还没有事项。</div>`;
+}
+
+async function refreshOversight() {
+  const d = await (await fetch("/api/oversight")).json();
+  if (!d.ok) return toast("督办台账读取失败");
+  OVX.items = d.items || [];
+  OVX.stats = d.stats || {};
+  OVX.scan = d.scan || {};
+  renderOvChips();
+  renderOvList();
+}
+
+function renderOvChips() {
+  const buckets = (OVX.scan && OVX.scan.buckets) || {};
+  const counts = { 全部: OVX.items.filter((i) => i.status !== "已办结").length };
+  OV_FILTERS.slice(1, -1).forEach((k) => (counts[k] = (buckets[k] || []).length));
+  counts["已办结"] = OVX.items.filter((i) => i.status === "已办结").length;
+  $("#ovFilters").innerHTML = OV_FILTERS.map((k) => `
+    <button class="ov-chip ${OVX.filter === k ? "on" : ""}" data-ovfilter="${esc(k)}">${esc(k)}<b>${counts[k] || 0}</b></button>`).join("");
+}
+
+function ovRows() {
+  if (OVX.filter === "已办结") return OVX.items.filter((i) => i.status === "已办结");
+  if (OVX.filter === "全部") return OVX.items.filter((i) => i.status !== "已办结");
+  const ids = new Set(((OVX.scan && OVX.scan.buckets && OVX.scan.buckets[OVX.filter]) || []).map((x) => x.id));
+  return OVX.items.filter((i) => ids.has(i.id));
+}
+
+function renderOvList() {
+  const rows = ovRows();
+  $("#ovList").innerHTML = rows.length ? rows.map((i) => {
+    const left = i.days_left < 0 ? `逾期 ${-i.days_left} 天` : i.days_left === 0 ? "今日到期" : `剩 ${i.days_left} 天`;
+    return `
+    <div class="ov-card ${OVX.sel === i.id ? "on" : ""}" data-ovitem="${esc(i.id)}">
+      <div class="ov-card-top">
+        <span class="ov-dot ${esc(OV_TONE[i.risk] || "muted")}"></span>
+        <span style="font-size:10.5px;color:var(--faint)">${esc(i.id)}</span>
+        <span style="font-size:10.5px;color:var(--faint);margin-left:auto">${esc(i.status)}</span>
+      </div>
+      <b>${esc(i.title)}</b>
+      <span class="ov-sub">${esc(i.assignee)} · ${esc(left)}${i.remind_count ? ` · 已催 ${i.remind_count} 次` : ""}</span>
+    </div>`;
+  }).join("") : `<div class="hint" style="margin:6px 2px">这个分类下没有事项。</div>`;
+}
+
+async function showOvItem(id) {
+  const d = await (await fetch(`/api/oversight/${encodeURIComponent(id)}`)).json();
+  if (!d.ok) return toast("没有这件事项");
+  OVX.sel = id;
+  renderOvList();
+  renderOvDetail(d.item);
+}
+
+function renderOvDetail(it) {
+  const days = it.days_left;
+  const head = it.status === "已办结"
+    ? ["ok", "已办结"]
+    : days < 0 ? ["danger", `逾期 ${-days} 天`] : days === 0 ? ["warn", "今日到期"] : ["", `剩 ${days} 天`];
+  // 头标签已经写了「逾期 N 天 / 今日到期 / 剩 N 天」，risk_reasons 里同义的那条就不再重复画。
+  // 比对文案会漏（"逾期 5 天" vs "已逾期 5 天"），所以按时限方向判断。
+  const riskTags = (it.risk_reasons || [])
+    .filter((r) => !(days < 0 && r.includes("逾期")))
+    .filter((r) => !(days === 0 && r.includes("到期")))
+    .filter((r) => !(days > 0 && r.startsWith("距时限")))
+    .map((r) => `<span class="ov-tag ${esc(OV_TONE[it.risk] || "")}">${esc(r)}</span>`).join("");
+
+  const acts = (it.allowed_actions || []).map((a) => {
+    const cls = ["签收", "提交办结", "确认办结"].includes(a) ? "primary" : a === "退回" ? "red" : "";
+    return `<button class="mini ${cls}" data-ovact="${esc(a)}">${esc(a)}</button>`;
+  }).join("");
+
+  const events = (it.events || []).slice().reverse().map((e) => {
+    const meta = [
+      e.actor,
+      e.from_status && e.to_status ? `${e.from_status} → ${e.to_status}` : "",
+      e.percent != null ? `${e.percent}%` : "",
+      (e.evidence || []).length ? `佐证 ${e.evidence.length} 份` : "",
+    ].filter(Boolean).join(" · ");
+    return `
+    <div class="ov-ev">
+      <span class="t">${esc(e.ts)}</span>
+      <span class="k"><b>${esc(e.type)}</b>${esc(e.text || "")}
+        <span class="ev-meta">${esc(meta)}</span>
+      </span>
+    </div>`;
+  }).join("");
+
+  const form = acts ? `
+    <div class="ov-form">
+      <textarea id="ovText" placeholder="办理说明 / 退回理由（提交办结要写清如何达到办结标准）"></textarea>
+      <div class="ov-form-row">
+        <input id="ovPct" type="number" min="0" max="100" placeholder="进度 %（反馈进展时填）">
+        <input id="ovEv" placeholder="佐证材料，逗号分隔">
+      </div>
+      <div class="ov-btns">${acts}</div>
+      <div class="hint" style="margin:6px 0 0">提交办结要求：至少一条进展 + 办结说明 + 佐证材料，缺一样会被台账拒绝并说明原因。</div>
+    </div>` : `<div class="mt-warn info">这件事项已办结，没有可执行的操作。</div>`;
+
+  $("#ovMain").innerHTML = `
+    <div class="ov-h"><h4>${esc(it.title)}</h4></div>
+    <div class="ov-tags">
+      <span class="ov-tag ${esc(head[0])}">${esc(head[1])}</span>
+      <span class="ov-tag">${esc(it.status)}</span>
+      <span class="ov-tag ${it.priority === "重点" ? "warn" : ""}">${esc(it.priority)}</span>
+      ${riskTags}
+    </div>
+    <dl class="ov-kv">
+      <dt>编号</dt><dd>${esc(it.id)}</dd>
+      <dt>责任单位</dt><dd>${esc(it.assignee)}${(it.co_assignees || []).length ? `（协办：${esc(it.co_assignees.join("、"))}）` : ""}</dd>
+      <dt>来源</dt><dd>${esc(it.source)}${it.source_ref ? ` · ${esc(it.source_ref)}` : ""}</dd>
+      <dt>交办 / 时限</dt><dd>${esc(it.issued_at)} → ${esc(it.deadline)}</dd>
+      <dt>办结标准</dt><dd>${esc(it.standard)}</dd>
+      <dt>当前进度</dt><dd>${it.progress}%${it.idle_days ? ` · 已 ${it.idle_days} 天无新进展` : ""}${it.remind_count ? ` · 已催办 ${it.remind_count} 次` : ""}</dd>
+    </dl>
+    ${form}
+    <div class="ov-events">${events || `<div class="hint" style="margin:0">没有事件记录。</div>`}</div>`;
+}
+
+async function ovAct(action) {
+  if (!OVX.sel) return toast("先选一条事项");
+  const text = ($("#ovText")?.value || "").trim();
+  const evRaw = ($("#ovEv")?.value || "").trim();
+  const pctRaw = ($("#ovPct")?.value || "").trim();
+  const d = await (await fetch(`/api/oversight/${encodeURIComponent(OVX.sel)}/action`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action, text, actor: "市政府办",
+      percent: pctRaw === "" ? null : Number(pctRaw),
+      evidence: evRaw,
+    }),
+  })).json();
+  if (!d.ok) return toast(d.error || "操作被拒绝");
+  toast(d.changed ? `${action}：${d.from_status} → ${d.to_status}` : `${action}：已记录，状态未变`);
+  await refreshOversight();
+  if (d.item) renderOvDetail(d.item);
+  refreshDash();
+}
+
+async function ovUrgeBatch() {
+  const rows = ovRows();
+  const ids = rows.filter((i) => (i.allowed_actions || []).includes("催办")).map((i) => i.id);
+  if (!ids.length) return toast("当前筛选下没有可催办的事项");
+  if (!confirm(`对当前筛选下的 ${ids.length} 条事项发起催办？`)) return;
+  const d = await (await fetch("/api/oversight/urge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids, actor: "市政府办" }),
+  })).json();
+  if (!d.ok) return toast(d.error || "催办失败");
+  toast(`已催办 ${d.count} 条${d.failed.length ? `，${d.failed.length} 条跳过` : ""}`);
+  await refreshOversight();
+  if (OVX.sel) await showOvItem(OVX.sel);
+  refreshDash();
+}
+
+/* ---------- 启动 ---------- */
+/* 会议落库后要立刻反映到罗盘/预警条上，否则用户会怀疑"到底写进去没有"。
+   只刷数据，不动会话和模型面板。 */
+async function refreshDash() {
+  const res = await fetch("/api/overview");
+  OV = await res.json();
+  $("#periodText").textContent = OV.period;
+  renderKpis(OV.kpis);
+  renderBoards(OV.boards, OV.focus);
+  renderAlerts(OV.alerts, OV.oversight);
+  await loadWorkspace();
+}
+
+async function boot() {
+  THEME.apply();  // 首屏脚本已经设过，这里兜一次：localStorage 被清过也能对上
+  const res = await fetch("/api/overview");
+  OV = await res.json();
+
+  $("#cityTitle").textContent = OV.title;
+  document.title = OV.title;
+  $("#periodText").textContent = OV.period;
+  renderKpis(OV.kpis);
+  renderBoards(OV.boards, OV.focus);
+  renderAlerts(OV.alerts, OV.oversight);
+  await loadPeople();
+  await loadExperts();
+  await loadWorkspace();
+
+  // 模型配置 + 最近一次会话（没有会话就停在空态，不自动建空记录）
+  await loadModels();
+  await refreshThreadOptions();
+  const first = $("#threadSel").options[1];
+  if (first) await openThread(first.value);
+
+  // 直接带 #models 打开设置面板，方便收藏一个「配模型」的直达链接
+  if (location.hash === "#models") openSettings("model");
+  if (location.hash === "#theme") openThemeModal();
+  // #desk 直达个人工作台，省得每次手点
+  if (location.hash === "#desk") switchView("desk");
+  // #meeting 直达会议助手
+  if (location.hash === "#meeting") openMeetModal();
+  // #oversight 直达督办台账
+  if (location.hash === "#oversight") openOversight();
+
+  // #ask=问题 可以直接发问 —— 把一个问题作为链接发给同事，打开就有答案
+  const preset = location.hash.match(/^#ask=(.+)$/);
+  if (preset) ask(decodeURIComponent(preset[1]));
+}
+
+/* ---------- 板块切换 ---------- */
+// 两个板块共用一套骨架，切的是视图不是路由。
+function switchView(which) {
+  const isDesk = which === "desk";
+  $("#viewCompass").hidden = isDesk;
+  $("#viewDesk").hidden = !isDesk;
+  document.querySelectorAll(".cp-tabs a").forEach((a) => {
+    a.classList.toggle("on", a.dataset.nav === which);
+  });
+}
+
+/* ---------- 事件 ---------- */
+document.addEventListener("click", (e) => {
+  // 点别处先收起身份菜单（菜单项自己也在 document 上，收起不影响下面的读取）
+  if (!e.target.closest("#idMenu") && !e.target.closest("#avatar")) $("#idMenu").hidden = true;
+
+  // 取消关注要排在 [data-metric] 之前：✕ 在卡片内部，否则会被"打开指标抽屉"接走
+  const unw = e.target.closest("[data-unwatch]");
+  if (unw) return removeWatch(unw.dataset.unwatch);
+
+  if (e.target.closest("#watchManage")) return openWatchPicker();
+  // codes=null 是「取消覆盖」，不是「关注 0 个」：写一份默认值进去会盖住以后对
+  // 默认表的调整，改默认的人会发现改了却不生效
+  if (e.target.closest("#wmReset")) return saveWatch(null, "已恢复默认关注");
+  if (e.target.closest("#feedReadAll")) return markSeen([]);
+
+  // 管理跟进 / 自定义板块里的行是动态生成的，只能走委托
+  const fmid = e.target.closest("[data-fid]");
+  if (fmid) return toggleFollow(fmid.dataset.fid);
+  const lrow = e.target.closest("[data-lid]");
+  if (lrow) {
+    const mv = e.target.closest("[data-mv]");
+    return mv ? moveBlock(lrow.dataset.lid, mv.dataset.mv) : toggleBlock(lrow.dataset.lid);
+  }
+
+  // 关注动态：点一条 = 标记已读 + 跳到它的出处（指标抽屉 / 督办详情）
+  const fitem = e.target.closest("[data-feed]");
+  if (fitem) {
+    const f = (WS && WS.feed ? WS.feed : [])[Number(fitem.dataset.feed)];
+    if (!f) return;
+    if (f.unread) markSeen([f.key]);
+    if (f.code) return showMetric(f.code);
+    if (f.ov_id) return openOversight(f.ov_id);
+    return toast(f.text);
+  }
+
+  // 我分管的未结事项：点进督办详情，能在那儿签收/反馈/办结
+  const frow = e.target.closest("[data-follow]");
+  if (frow) return openOversight(frow.dataset.follow);
+
+  const wrow = e.target.closest("[data-wcode]");
+  if (wrow) return toggleWatch(wrow.dataset.wcode);
+
+  const acct = e.target.closest("[data-acct]");
+  if (acct) {
+    $("#idMenu").hidden = true;
+    const fn = ACCT_ACTIONS[acct.dataset.acct];
+    if (fn) fn();
+    return;
+  }
+  if (e.target.closest("#acctSwap")) return showIdPicker();
+
+  const stab = e.target.closest("[data-stab]");
+  if (stab) { SET_TAB = stab.dataset.stab; return renderSettings(); }
+
+  const tset = e.target.closest("[data-theme-set]");
+  if (tset) { THEME.set(tset.dataset.themeSet); renderThemeModal(); return; }
+
+  const aset = e.target.closest("[data-accent-set]");
+  if (aset) { THEME.setAccent(aset.dataset.accentSet); renderThemeModal(); return; }
+
+  const pid = e.target.closest("[data-pid]");
+  if (pid) return switchPerson(pid.dataset.pid);
+
+  // 专家下拉的点击由 #expertSelect 自己处理（见文件末尾的绑定），这里不再接 data-eid：
+  // 菜单项和整行开合是两种语义，混在全局委托里容易和别的 data-* 规则抢。 
+
+  const metric = e.target.closest("[data-metric]");
+  if (metric) return showMetric(metric.dataset.metric);
+
+  const f = e.target.closest("[data-focus]");
+  if (f) return toast("民情焦点：真实系统里点开是 12345 工单列表");
+
+  // 督办台账的三种点击：切分类 / 选事项 / 执行流转。必须放在 [data-item] 之前，
+  // 否则台账里的卡片会被预警条那条老规则接走。
+  const ovf = e.target.closest("[data-ovfilter]");
+  if (ovf) { OVX.filter = ovf.dataset.ovfilter; renderOvChips(); renderOvList(); return; }
+
+  const ovact = e.target.closest("[data-ovact]");
+  if (ovact) return ovAct(ovact.dataset.ovact);
+
+  const ovcard = e.target.closest("[data-ovitem]");
+  if (ovcard) return showOvItem(ovcard.dataset.ovitem);
+
+  // 日程条目：点开就跳到它真正的出处（台账 / 会议），日程本身不做第二次状态。
+  // 在日程里「签收」「办结」等于又造一套状态机，两边一定会打架。
+  const calref = e.target.closest("[data-calref]");
+  if (calref) {
+    const [type, refId] = calref.dataset.calref.split(":");
+    closeCalModal();
+    if (type === "oversight") return openOversight(refId);
+    if (type === "meeting") return openMeetModal(refId);
+    return;
+  }
+
+  const item = e.target.closest("[data-item]");
+  if (item) return openOversight(item.dataset.item);
+
+  // 会议助手里已落库的台账编号：点开就是那条事项，不用回罗盘碰预警条
+  const ovl = e.target.closest("[data-openov]");
+  if (ovl) {
+    // 不在会议弹窗上再叠一层督办弹窗（两层遮罩叠起来又暗又糊），
+    // 改成换页：关会议、开台账，台账顶上留一个「← 会议助手」回去。
+    closeMeetModal();
+    return openOversight(ovl.dataset.openov, true);
+  }
+
+  if (e.target.id === "goCoord") return openOversight();
+
+  if (e.target.closest("[data-ask]")) {
+    const q = e.target.closest("[data-ask]").dataset.ask;
+    $("#q").value = q;
+    return ask(q);
+  }
+
+  const nav = e.target.closest("[data-nav]");
+  if (nav) {
+    switchView(nav.dataset.nav);
+    return;
+  }
+
+  const tool = e.target.closest("[data-tool]");
+  if (tool) {
+    if (tool.dataset.tool === "meeting") return openMeetModal();
+    if (tool.dataset.tool === "oversight") return openOversight();
+    if (tool.dataset.tool === "cal") return openCalModal();
+    return toast(`「${tool.textContent.trim()}」未接入，需要单独的连接器`);
+  }
+
+  // 头像点开身份菜单：上面那段开头已经收过一次，这里再展开（等价于切换）
+  if (e.target.closest("#avatar")) {
+    renderIdMenu();
+    $("#idMenu").hidden = false;
+    return;
+  }
+  if (e.target.closest("#bellBtn")) return openOversight();
+  if (e.target.closest("#focusMore")) return toast("民情焦点：共 3 条，均来自 12345 热线聚类");
+});
+
+$("#newChat").onclick = () => {
+  THREAD = null;
+  renderThread(null);
+  $("#threadSel").value = "";
+  $("#q").focus();
+  toast("已开新会话，下一句提问会自动创建");
+};
+$("#threadSel").onchange = (e) => openThread(e.target.value);
+$("#modelPill").onclick = () => openSettings("model");
+
+/* ---------- 专家下拉：点整行开合，点菜单项定人 ----------
+   单独绑而不是走全局委托：菜单项和「开合」是两种语义，混进 data-* 规则里
+   容易和别的分支抢事件。 */
+$("#expertSelect").onclick = (e) => {
+  const item = e.target.closest(".es-item");
+  if (item) return selectExpert(item.dataset.eid);
+  const box = $("#expertSelect");
+  const open = !box.classList.contains("open");
+  box.classList.toggle("open", open);
+  box.setAttribute("aria-expanded", String(open));
+  $("#esMenu").hidden = !open;
+};
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#expertSelect")) closeExpertMenu();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeExpertMenu();
+});
+$("#mmClose").onclick = closeModelModal;
+$("#mtClose").onclick = closeMeetModal;
+$("#calClose").onclick = closeCalModal;
+$("#calModal").onclick = (e) => { if (e.target.id === "calModal") closeCalModal(); };
+$("#wmClose").onclick = () => $("#watchModal").classList.remove("on");
+$("#deskCustom").onclick = openLayoutPicker;
+$("#followManage").onclick = openFollowPicker;
+$("#fmClose").onclick = () => $("#followModal").classList.remove("on");
+$("#followModal").onclick = (e) => { if (e.target.id === "followModal") $("#followModal").classList.remove("on"); };
+$("#lmClose").onclick = () => $("#layoutModal").classList.remove("on");
+$("#layoutModal").onclick = (e) => { if (e.target.id === "layoutModal") $("#layoutModal").classList.remove("on"); };
+$("#watchModal").onclick = (e) => { if (e.target.id === "watchModal") $("#watchModal").classList.remove("on"); };
+$("#ovClose").onclick = () => $("#ovModal").classList.remove("on");
+$("#ovBack").onclick = () => { $("#ovModal").classList.remove("on"); openMeetModal(); };
+$("#ovUrge").onclick = ovUrgeBatch;
+$("#ovModal").onclick = (e) => { if (e.target.id === "ovModal") $("#ovModal").classList.remove("on"); };
+$("#mtNew").onclick = newMeetingForm;
+$("#modelModal").onclick = (e) => { if (e.target.id === "modelModal") closeModelModal(); };
+$("#tmClose").onclick = () => $("#themeModal").classList.remove("on");
+$("#themeModal").onclick = (e) => { if (e.target.id === "themeModal") $("#themeModal").classList.remove("on"); };
+
+$("#go").onclick = () => { const v = $("#q").value; $("#q").value = ""; ask(v); };
+$("#q").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#go").click(); });
+$("#drClose").onclick = closeDrawer;
+$("#mask").onclick = closeDrawer;
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeDrawer();
+  // Ctrl+, 打开设置：菜单里标了这个组合，就必须真的能用
+  if ((e.ctrlKey || e.metaKey) && (e.key === "," || e.code === "Comma")) {
+    e.preventDefault();
+    openSettings("model");
+  }
+  // 外观里说的 Ctrl+Shift+L 切换深浅（浏览器的 Ctrl+L 是地址栏，不能占）
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "L" || e.key === "l")) {
+    e.preventDefault();
+    THEME.set(THEME.effective() === "dark" ? "light" : "dark");
+    if ($("#themeModal").classList.contains("on")) renderThemeModal();
+  }
+});
+
+boot();
+</script>
+</body>
+</html>
