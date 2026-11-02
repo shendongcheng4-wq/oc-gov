@@ -532,6 +532,21 @@ def test_experts() -> None:
     check("全组叫参谋团", 'name.textContent = "参谋团"' in html and 'item("__all", "团", "参谋团"' in html, "")
     check("再点一次可取消", "EXP.cur = !eid || EXP.cur === eid ? null : eid" in html, "")
 
+    # 斜杠唤起（输入框里打 / 选参谋）。这几条都是「写错了页面照跑、但用起来是坏的」
+    # 的地方，只能靠静态约定卡住：
+    #   - 认「含 /」而不认「行首 /」→ 问句里写「投资/工业」就弹菜单，问题打不完
+    #   - 只认半角 → 中文输入法上屏的 ／（U+FF0F）触发不了
+    #   - 抢组词中的 Enter → 打中文必误选人
+    #   - 选中另走一条设置逻辑 → 下拉和斜杠能选出两种状态
+    check("斜杠唤起层存在", 'id="slashMenu"' in html and 'class="slash-menu"' in html, "")
+    check("斜杠只在行首认", 'if (v[0] !== "/" && v[0] !== "／") return null;' in html, "")
+    check("全角斜杠也认", 'v[0] !== "／"' in html, "")
+    check("组词中不抢 Enter", "e.isComposing || e.keyCode === 229" in html, "")
+    pick = html.split("function pickSlash(id)")[1][:220]
+    check("斜杠选中与下拉同一出口", "selectExpert(id);" in pick, pick[:80])
+    check("菜单项与下拉名单同源", "/api/experts" in html and "EXP.list.map((e) => ({" in html, "")
+    check("没匹配不许当问题发出去", 'return toast("没有这个参谋' in html, "")
+
 
 def test_meeting() -> None:
     print("[9] 会议助手：引文校验 / 人工认领 / 落督办")
@@ -1121,6 +1136,20 @@ def test_meetplan() -> None:
     mt_ledger.delete(mid)
     if mid2:
         mt_ledger.delete(mid2)
+
+
+def test_attach_entry() -> None:
+    """附件入口：这一版只到「选文件 → 列成芯片」，所以要能证明它**没有假接**。
+
+    最坏的情况是按钮加上了、文件却悄悄溜进了取数链路（那等于模型推断变数据源）。
+    前端没有浏览器测试，但「带附件时发送被拦住」「没有任何 FormData」是纯文本可查的。
+    """
+    print("\n[17.5] 附件入口")
+    html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("输入区有附件按钮与文件选择", 'id="attachBtn"' in html and 'id="attachInput"' in html, "")
+    check("附件只收纯文本白名单", "const TEXT_EXT" in html and '".pdf": "PDF 要解析库"' in html, "")
+    check("带附件时发送被拦住", "附件还没接进问数" in html, "")
+    check("前端没有偷偷上传", "FormData" not in html, "")
 
 
 def test_frontend_theme() -> None:
@@ -1943,6 +1972,7 @@ def main() -> int:
     test_notify()
     test_saved()
     test_meetplan()
+    test_attach_entry()
     test_frontend_theme()
     test_http()
     print()

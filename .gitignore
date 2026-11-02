@@ -9,3 +9,6 @@ config/notify.json
 # Python
 __pycache__/
 *.py[cod]
+
+# 生成物：内嵌 data/ 快照的单文件工作台，数据一变整文件重写，不入库
+docs/workbench.html

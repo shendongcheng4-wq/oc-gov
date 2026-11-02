@@ -350,6 +350,38 @@ body{
 .es-item em{font-style:normal;font-size:10px;color:var(--faint);margin-left:auto;flex:0 0 auto}
 .es-item.sep{margin-top:5px;padding-top:9px;border-top:1px solid var(--line-2)}
 
+/* ---------- 斜杠唤起（输入框里打 / 弹这一层） ----------
+   贴着输入框上沿弹出，宽度跟整行一致：336px 的面板里，做成跟在光标后面的
+   小气泡会把输入框挡掉一半。 */
+.slash-menu{
+  position:absolute;left:0;right:0;bottom:calc(100% + 6px);z-index:32;
+  background:var(--surface);border:1px solid var(--line);border-radius:9px;
+  box-shadow:0 10px 28px rgba(23,43,77,.16);padding:5px;max-height:236px;overflow-y:auto
+}
+.slash-menu[hidden]{display:none}
+.slash-hd{
+  display:flex;align-items:baseline;gap:6px;padding:3px 8px 6px;
+  font-size:10px;color:var(--faint);white-space:nowrap
+}
+.slash-hd b{font-size:10.5px;color:var(--muted);font-weight:700;flex:0 0 auto}
+.slash-item{
+  display:flex;align-items:center;gap:7px;padding:7px 8px;border-radius:6px;
+  cursor:pointer;font-size:12px;color:var(--ink-2)
+}
+.slash-item.on{background:var(--brand-soft);color:var(--brand);font-weight:700}
+.slash-item i{
+  width:17px;height:17px;border-radius:50%;background:var(--brand-soft);color:var(--brand);
+  font-style:normal;font-size:9px;display:grid;place-items:center;font-weight:700;flex:0 0 auto
+}
+.slash-item.on i{background:var(--brand);color:#fff}
+.slash-item em{font-style:normal;font-size:10px;color:var(--faint);margin-left:auto;flex:0 0 auto}
+/* 没匹配到：说清下一步，不留一个空盒子让人以为卡住了 */
+.slash-empty{padding:10px 8px;font-size:11.5px;color:var(--faint);line-height:1.6}
+.slash-foot{
+  border-top:1px solid var(--line-2);margin-top:4px;padding:5px 8px 3px;
+  font-size:9.5px;color:var(--faint);white-space:nowrap
+}
+
 /* 底部操作行：会话 / 新对话 / 模型状态，靠右排。免责声明单独占一行，
    不跟这堆控件抢宽度 —— 336px 的面板里挤一行会把它压成竖排单字。 */
 .sub-ops{display:flex;align-items:center;justify-content:flex-end;gap:5px;margin-top:7px}
@@ -477,7 +509,7 @@ body{
 .trace .t code{background:var(--line-2);padding:1px 4px;border-radius:3px;font-size:10px;color:var(--ink-3)}
 
 .ask-foot{padding:9px 14px 11px;border-top:1px solid var(--line-2)}
-.inputbar{display:flex;gap:7px}
+.inputbar{display:flex;gap:7px;position:relative}
 .inputbar input{
   flex:1;height:34px;border:1px solid var(--line);border-radius:8px;padding:0 11px;
   font:inherit;font-size:12.5px;color:var(--ink);background:var(--surface-2);outline:none
@@ -489,6 +521,26 @@ body{
 }
 .inputbar button:hover{background:var(--brand-2)}
 .inputbar button:disabled{background:var(--disabled);cursor:default}
+/* 附件入口：做成 34×34 的图标按钮，不抢发送的主操作位。
+   这一版只做到「选文件 → 列成芯片 → 可移除」，**文件没进问数链路**（后端只吃问题
+   文本、HTTP 层只解 JSON），所以按钮旁边不给「上传中/已解析」这类会骗人的状态。 */
+.inputbar .attach{
+  width:34px;height:34px;flex:0 0 auto;display:grid;place-items:center;
+  background:var(--surface-2);border:1px solid var(--line);border-radius:8px;
+  color:var(--muted);cursor:pointer;transition:.15s
+}
+.inputbar .attach:hover{color:var(--brand);border-color:var(--line-3);background:var(--hover)}
+.inputbar .attach svg{width:15px;height:15px;stroke:currentColor;fill:none;
+  stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.inputbar .attach.on{color:var(--brand);border-color:var(--brand);background:var(--brand-soft)}
+.attach-list{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:7px}
+.att-chip{display:inline-flex;align-items:center;gap:6px;max-width:240px;
+  background:var(--surface-2);border:1px solid var(--line);border-radius:20px;
+  padding:3px 8px 3px 9px;font-size:11px;color:var(--ink-2)}
+.att-chip .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.att-chip .sz{font-size:10px;color:var(--faint);flex:0 0 auto}
+.att-chip .x{font-size:11px;line-height:1;color:var(--faint);cursor:pointer}
+.att-chip .x:hover{color:var(--danger)}
 .disclaim{font-size:10.5px;color:var(--faint);text-align:center;margin-top:7px;line-height:1.5}
 
 /* 右：罗盘 */
@@ -1329,9 +1381,19 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
       <div class="thread-empty" id="threadEmpty">还没有对话。上面挑一个问题，或直接输入。<br>数值全部来自指标接口，可点开卡片核对口径。</div>
     </div>
     <div class="ask-foot">
+      <!-- 附件芯片：选中之后才出现，没选就整行不占位 -->
+      <div class="attach-list" id="attachList" hidden></div>
       <div class="inputbar">
+        <button class="attach" id="attachBtn" title="添加附件（这一版只支持纯文本，解析还没接）" aria-label="添加附件">
+          <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.5-8.5a3.5 3.5 0 0 1 4.9 4.9l-8.5 8.5a2 2 0 0 1-2.8-2.8l7.7-7.7"/></svg>
+        </button>
         <input id="q" placeholder="请输入您的问题…" autocomplete="off">
         <button id="go">发送</button>
+        <input type="file" id="attachInput" multiple hidden>
+        <!-- 斜杠唤起层：输入框以 / 开头时才出现。选项就是参谋名单本身，
+             选中等价于点上面那个下拉 —— 两条入口共用同一个出口，不可能选出
+             不一样的状态。 -->
+        <div class="slash-menu" id="slashMenu" hidden></div>
       </div>
       <div class="sub-ops">
         <select id="threadSel" title="切换会话（第一项=开新会话）"></select>
@@ -1992,6 +2054,120 @@ function closeExpertMenu() {
   box.classList.remove("open");
   box.setAttribute("aria-expanded", "false");
   $("#esMenu").hidden = true;
+}
+
+/* ---------- 斜杠唤起：在输入框里打 / 直接点将 ----------
+   「技能」在这个工作台里就是参谋 —— 三位专家 + 参谋团，没有第二套名单。
+   菜单项和 #expertSelect 里的项**同源**（都来自 /api/experts），选中也走同一个
+   selectExpert，所以两条入口不可能选出不一样的状态。
+
+   三个必须写对的细节：
+   1. **只在行首认。「投资/工业」「环比/同比」是问句里的正常写法，只要「含 /」
+      就弹菜单，问题根本打不完。判定是 value 以 / 开头，不是 indexOf。
+   2. **全角 ／ 也认。中文输入法下按 / 键，上屏的常常是全角（U+FF0F），
+      只认半角等于让一半用户打不出来。
+   3. **组词时不抢 Enter。中文输入法选词也是 Enter，抢了就等于一打中文就误选人。
+*/
+const SLASH = { open: false, items: [], idx: 0 };
+
+/* 返回斜杠后面的搜索词；不是斜杠开头返回 null（调用方据此关菜单）。 */
+function slashQuery() {
+  const v = $("#q").value;
+  if (!v) return null;
+  if (v[0] !== "/" && v[0] !== "／") return null;
+  return v.slice(1).trim().toLowerCase();
+}
+
+function slashItems() {
+  const q = slashQuery();
+  const all = EXP.list.map((e) => ({
+    id: e.id, avatar: e.avatar, name: e.name, hint: e.focus,
+  }));
+  // 参谋团跟下拉保持同一条闸：叫不全的时候不列，免得点下去静默漏人
+  if (EXP.list.length > 1 && EXP.list.length <= EXP.max) {
+    all.push({ id: "__all", avatar: "团", name: "参谋团", hint: `${EXP.list.length} 位一起看，角度更多` });
+  }
+  if (!q) return all;
+  // id 也参与匹配：打 /eco 就能命中，不必背中文全名
+  return all.filter((it) => it.name.includes(q) || it.id.includes(q) || it.avatar === q);
+}
+
+function renderSlash() {
+  const menu = $("#slashMenu");
+  if (!menu) return;
+  SLASH.items = slashItems();
+  if (SLASH.idx > SLASH.items.length - 1) SLASH.idx = Math.max(0, SLASH.items.length - 1);
+
+  if (!SLASH.items.length) {
+    menu.innerHTML = `<div class="slash-empty">没有叫「${esc(slashQuery() || "")}」的参谋。<br>` +
+      `换一个，或按 Esc 清掉斜杠后正常提问。</div>`;
+    return;
+  }
+  menu.innerHTML =
+    `<div class="slash-hd"><b>AI参谋</b><span>选中后由它来解读这条对话</span></div>` +
+    SLASH.items.map((it, i) =>
+      `<div class="slash-item ${i === SLASH.idx ? "on" : ""}" data-sid="${esc(it.id)}" title="${esc(it.hint)}">` +
+      `<i>${esc(it.avatar)}</i><span>${esc(it.name)}</span>` +
+      `${EXP.cur === it.id ? "<em>对话中</em>" : ""}</div>`).join("") +
+    `<div class="slash-foot">上下键选择 · Enter 确认 · Esc 关闭</div>`;
+}
+
+function openSlash() {
+  // 名单还没回来就不弹：弹一个空盒子比不弹更像故障
+  if (!EXP.list.length) return;
+  SLASH.open = true;
+  SLASH.idx = 0;
+  $("#slashMenu").hidden = false;
+  renderSlash();
+}
+
+function closeSlash() {
+  SLASH.open = false;
+  const menu = $("#slashMenu");
+  if (menu) menu.hidden = true;
+}
+
+/* 选中 = 和下拉点同一项。再选一次已在对话中的那位 = 取消（语义在 selectExpert 里）。 */
+function pickSlash(id) {
+  selectExpert(id);
+  $("#q").value = "";
+  closeSlash();
+  $("#q").focus();
+}
+
+function syncSlash() {
+  const q = slashQuery();
+  if (q === null) return closeSlash();
+  if (SLASH.open) return renderSlash();
+  openSlash();
+}
+
+/* 返回 true = 这次按键已被菜单消费，调用方不要再当发送处理。 */
+function slashKeydown(e) {
+  if (!SLASH.open) return false;
+  if (e.key === "Escape") {
+    // 连斜杠一起清掉：留着 /经 再按 Enter 会把它当问题发出去
+    $("#q").value = "";
+    closeSlash();
+    return true;
+  }
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if (!SLASH.items.length) return true;
+    const step = e.key === "ArrowDown" ? 1 : -1;
+    SLASH.idx = (SLASH.idx + step + SLASH.items.length) % SLASH.items.length;
+    renderSlash();
+    const on = $("#slashMenu .slash-item.on");
+    if (on) on.scrollIntoView({ block: "nearest" });
+    return true;
+  }
+  // 中文输入法组词中的 Enter 是上屏，不是确认（keyCode 229 是 IME 的老约定）
+  if (e.isComposing || e.keyCode === 229) return true;
+  if (e.key === "Enter" || e.key === "Tab") {
+    if (!SLASH.items.length) return false;  // 没匹配就别拦，让 Enter 走正常流程
+    pickSlash(SLASH.items[SLASH.idx].id);
+    return true;
+  }
+  return false;
 }
 
 async function ask(question) {
@@ -4531,6 +4707,13 @@ document.addEventListener("click", (e) => {
   const svItem = e.target.closest("[data-svthread]");
   if (svItem) return jumpToSaved(svItem.dataset.svthread, svItem.dataset.svmid);
 
+  // 附件芯片上的 ✕：按索引删，芯片是即时重绘的，索引总跟着当前列表
+  const attRm = e.target.closest("[data-attrm]");
+  if (attRm) {
+    ATT.files.splice(Number(attRm.dataset.attrm), 1);
+    return renderAttach();
+  }
+
   // 取消关注要排在 [data-metric] 之前：✕ 在卡片内部，否则会被"打开指标抽屉"接走
   const unw = e.target.closest("[data-unwatch]");
   if (unw) return removeWatch(unw.dataset.unwatch);
@@ -4702,6 +4885,8 @@ $("#expertSelect").onclick = (e) => {
 };
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#expertSelect")) closeExpertMenu();
+  // 点别处收掉斜杠层，但**不清输入框**：清掉等于替用户删字
+  if (!e.target.closest(".inputbar")) closeSlash();
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeExpertMenu();
@@ -4727,8 +4912,90 @@ $("#modelModal").onclick = (e) => { if (e.target.id === "modelModal") closeModel
 $("#tmClose").onclick = () => $("#themeModal").classList.remove("on");
 $("#themeModal").onclick = (e) => { if (e.target.id === "themeModal") $("#themeModal").classList.remove("on"); };
 
-$("#go").onclick = () => { const v = $("#q").value; $("#q").value = ""; ask(v); };
-$("#q").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#go").click(); });
+/* ---------- 附件入口 ----------
+   这一版只做到「选文件 → 列成芯片 → 可移除」，**文件没有进问数链路**：后端
+   `/api/ask` 只吃问题文本，自己写的 HTTP 层也只解 JSON，没有 multipart。
+   所以带附件时发送会被明确拦住并说清原因 —— 不静默丢掉附件，也不假装文件参与了
+   取数（那会让「数值来自指标接口」这条底线失效）。
+   格式先限纯文本：PDF/Word/Excel 要解析库，图片要 OCR，都不是加个按钮能解决的。 */
+const ATT = { files: [], MAX: 5 };
+const TEXT_EXT = [".txt", ".md", ".csv", ".tsv", ".json", ".log", ".yaml", ".yml", ".xml"];
+const EXT_WHY = {
+  ".pdf": "PDF 要解析库", ".doc": "Word 要解析库", ".docx": "Word 要解析库",
+  ".xls": "Excel 要解析库", ".xlsx": "Excel 要解析库",
+  ".ppt": "PPT 要解析库", ".pptx": "PPT 要解析库",
+  ".png": "图片要 OCR", ".jpg": "图片要 OCR", ".jpeg": "图片要 OCR",
+};
+function sizeText(n) {
+  return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+function renderAttach() {
+  const box = $("#attachList");
+  box.hidden = !ATT.files.length;
+  $("#attachBtn").classList.toggle("on", ATT.files.length > 0);
+  box.innerHTML = ATT.files.map((f, i) => `
+    <span class="att-chip">
+      <span class="nm" title="${esc(f.name)}">${esc(f.name)}</span>
+      <span class="sz">${sizeText(f.size)}</span>
+      <span class="x" data-attrm="${i}" role="button" title="移除">✕</span>
+    </span>`).join("");
+}
+function addAttach(list) {
+  let refused = "";
+  for (const f of list) {
+    if (ATT.files.length >= ATT.MAX) { refused = `最多 ${ATT.MAX} 个附件`; break; }
+    const lower = (f.name || "").toLowerCase();
+    const ext = lower.slice(lower.lastIndexOf("."));
+    // 同一个文件重复选不重复列：芯片上分不出两条一模一样的名字
+    if (ATT.files.some((x) => x.name === f.name && x.size === f.size)) continue;
+    if (!TEXT_EXT.includes(ext) && !(f.type || "").startsWith("text/")) {
+      refused = EXT_WHY[ext] || "只支持纯文本类文件（txt / md / csv / json）";
+      continue;
+    }
+    ATT.files.push({ name: f.name, size: f.size });
+  }
+  renderAttach();
+  if (refused) toast(`没加进去：${refused}`);
+}
+$("#attachBtn").onclick = () => $("#attachInput").click();
+$("#attachInput").onchange = (e) => {
+  addAttach(e.target.files);
+  // 清空才认第二次选同一个文件（否则浏览器认为值没变，不发 change）
+  e.target.value = "";
+};
+
+$("#go").onclick = () => {
+  // 斜杠菜单开着时，「发送」当成确认选人。此时输入框里只有 / 和半个名字，
+  // 当问题发出去既解析不出意图，还会让 /经济 进会话标题。
+  if (slashQuery() !== null) {
+    if (SLASH.items.length) return pickSlash(SLASH.items[SLASH.idx].id);
+    return toast("没有这个参谋：换一个，或按 Esc 清掉斜杠");
+  }
+  if (ATT.files.length) {
+    toast("附件还没接进问数：先点芯片上的 ✕ 移除再发送。文件内容是文字的话，直接贴进输入框也认。");
+    return;
+  }
+  const v = $("#q").value;
+  $("#q").value = "";
+  ask(v);
+};
+$("#q").addEventListener("keydown", (e) => {
+  if (slashKeydown(e)) return e.preventDefault();  // 方向键/Enter 已经被菜单吃掉
+  if (e.key === "Enter") $("#go").click();
+});
+// 打 / 弹菜单、接着打字过滤。组词期间压着不重绘：中文候选还没上屏，
+// 这时候按 value 过滤必然匹配不到，列表会在眼前闪一下「没有这个参谋」。
+let SLASH_IME = false;
+$("#q").addEventListener("compositionstart", () => { SLASH_IME = true; });
+$("#q").addEventListener("compositionend", () => { SLASH_IME = false; syncSlash(); });
+$("#q").addEventListener("input", () => { if (!SLASH_IME) syncSlash(); });
+$("#slashMenu").onmousedown = (e) => {
+  // mousedown 而不是 click：click 之前输入框会先失焦，某些浏览器顺序不稳
+  const item = e.target.closest(".slash-item");
+  if (!item) return;
+  e.preventDefault();
+  pickSlash(item.dataset.sid);
+};
 $("#drClose").onclick = closeDrawer;
 $("#mask").onclick = closeDrawer;
 document.addEventListener("keydown", (e) => {
@@ -4748,11 +5015,5 @@ document.addEventListener("keydown", (e) => {
 
 boot();
 </script>
-
-
-
-
-
-
 </body>
 </html>
