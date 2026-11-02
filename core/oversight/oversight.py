@@ -465,6 +465,9 @@ def _brief(item: Item, risk: Risk) -> dict[str, Any]:
         "last_progress_at": item.last_activity.strftime("%Y-%m-%d %H:%M"),
         "last_event_at": item.events[-1].ts if item.events else None,
         "allowed_actions": allowed_actions(item),
+        # 来源两件套：材料里要写「这件是谁交办的」，会前材料还要按会议编号反查
+        "source": item.source,
+        "source_ref": item.source_ref,
     }
 
 
@@ -529,9 +532,18 @@ def scan(days: int = SOON_DAYS) -> dict[str, Any]:
 
 
 # ── 成报 ──────────────────────────────────────────────────────────────────
-def stats() -> dict[str, Any]:
-    """统计口径全部在代码里，不由模型生成。"""
-    items = list(_ITEMS.values())
+def stats(scope: set[str] | None = None) -> dict[str, Any]:
+    """统计口径全部在代码里，不由模型生成。
+
+    `scope` 是责任单位集合：传 None 就是全市台账（默认，行为不变），
+    传分管单位就是那个人视野内的账。分管领导和市长看到的「逾期 2 项」
+    本来就该不一样 —— 材料里如果两边都写全市数，局长的汇报会变成他不负责的事。
+    """
+    # 协办单位也算数：材料里写「本单位 1 项」，明细却列出 2 项，是最容易被当场问住的那种错
+    items = [
+        i for i in _ITEMS.values()
+        if scope is None or i.assignee in scope or (scope & set(i.co_assignees))
+    ]
     open_items = [i for i in items if i.status != CLOSED]
     closed = [i for i in items if i.status == CLOSED]
 

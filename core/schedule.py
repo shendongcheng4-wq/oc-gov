@@ -85,11 +85,15 @@ def _dt(s: str) -> datetime | None:
 # --------------------------------------------------------------------------
 # 身份过滤：与 workbench.follow_items 同一口径
 # --------------------------------------------------------------------------
-def _scope(person: dict[str, Any]) -> tuple[set[str], set[str]]:
+def scope_of(person: dict[str, Any]) -> tuple[set[str], set[str]]:
+    """某人的可见范围：分管单位 + 本人手动跟进的事项 id。
+
+    公开给材料装配层用：日程和工作台已经是同一口径，材料不能成为第三套。
+    """
     return set(u for u in (person.get("units") or []) if u), set(i for i in (person.get("follow") or []) if i)
 
 
-def _visible(item: dict[str, Any], units: set[str], manual: set[str]) -> bool:
+def item_visible(item: dict[str, Any], units: set[str], manual: set[str]) -> bool:
     if item["id"] in manual:
         return True
     if not units:  # 全市身份：不筛
@@ -97,7 +101,7 @@ def _visible(item: dict[str, Any], units: set[str], manual: set[str]) -> bool:
     return item["assignee"] in units or bool(units & set(item["co_assignees"]))
 
 
-def _meeting_visible(m: dict[str, Any], person: dict[str, Any]) -> bool:
+def meeting_visible(m: dict[str, Any], person: dict[str, Any]) -> bool:
     """这场会要不要出现在这个人的日程上。
 
     `host` 是职务（"常务副市长"）不是单位，所以除了参会单位，还要拿本人的 post 比一次：
@@ -205,10 +209,10 @@ def _events(person: dict[str, Any], days: int) -> tuple[list[dict[str, Any]], li
     now = _now()
     today = now.date()
     horizon = today + timedelta(days=max(0, days - 1))
-    units, manual = _scope(person)
+    units, manual = scope_of(person)
     out: list[dict[str, Any]] = []
 
-    items = [it for it in ov.list_items() if it["status"] != ov.CLOSED and _visible(it, units, manual)]
+    items = [it for it in ov.list_items() if it["status"] != ov.CLOSED and item_visible(it, units, manual)]
     acted: set[str] = set()
     for it in items:
         act = _today_action(it, today)
@@ -246,7 +250,7 @@ def _events(person: dict[str, Any], days: int) -> tuple[list[dict[str, Any]], li
     # 会议：已经结束的不排（14:30 的会 16:40 还挂在「今天」上，只会让人怀疑日程没刷新）
     for m in list_meetings():
         start = _dt(m.get("held_at") or "")
-        if start is None or not _meeting_visible(m, person):
+        if start is None or not meeting_visible(m, person):
             continue
         if start + timedelta(hours=2) < now:
             continue
@@ -346,7 +350,7 @@ def build(person_id: str | None = "mayor", days: int = WINDOW_DEFAULT) -> dict[s
     now = _now()
     today = now.date()
     todays = [e for e in events if e["date"] == today.isoformat()]
-    units, _ = _scope(person)
+    units, _ = scope_of(person)
     return {
         "city": "溧阳市",
         "person": {k: person[k] for k in ("id", "name", "post", "scope", "units", "demo")},
@@ -382,6 +386,7 @@ _SYS = """你是市长办公室的日程参谋。输入是一份已经算好的�
 硬规则（违反任何一条，你的输出会被整段丢弃）：
 - 只能使用清单里出现过的事项、单位、日期、状态、进度。
 - 只能使用清单里出现过的数字，不许自己算天数、算比例、算合计。
+- 状态词（待签收 / 待审核 / 已逾期 / 补报进展 / 办结时限）照抄，不要改写成近义词。
 - 不许新增清单里没有的事项或建议去问别人。
 - 不用「建议」「可以考虑」「或许」这类词，直接下判断。
 - 只输出 JSON：{"brief": "...", "why": {"<事件id>": "..."}}"""
@@ -466,9 +471,15 @@ def brief(person_id: str | None = "mayor", days: int = WINDOW_DEFAULT, *, use_mo
     ids = {e["id"] for e in picked}
 
     dropped: list[str] = []
-    if not text or _nums(text) - allowed:
-        # 数字闸：宁可显示规则文案，也不显示一个「3 天前该办完」这种模型自己算出来的话
-        base["note"] = "模型输出含清单外的数字，已丢弃" if text else "模型未给出简报，已退回规则排序"
+    # 长度也卡一道：模型偶尔会把简报写成一段话，超过 80 字就不是「一句重点」了
+    if not text or len(text) > 80 or _nums(text) - allowed:
+        if not text:
+            base["note"] = "模型未给出简报，已退回规则排序"
+        elif len(text) > 80:
+            base["note"] = "模型简报超过一句的长度，已丢弃"
+        else:
+            # 数字闸：宁可显示规则文案，也不显示「3 天前该办完」这种模型自己算出来的话
+            base["note"] = "模型输出含清单外的数字，已丢弃"
         if text:
             dropped.append("brief")
         return base
@@ -476,7 +487,7 @@ def brief(person_id: str | None = "mayor", days: int = WINDOW_DEFAULT, *, use_mo
     why: dict[str, str] = {}
     for k, v in why_in.items():
         v = str(v or "").strip()
-        if k not in ids or not v or _nums(v) - allowed:
+        if k not in ids or not v or len(v) > 40 or _nums(v) - allowed:
             if k in ids and v:
                 dropped.append(k)
             continue

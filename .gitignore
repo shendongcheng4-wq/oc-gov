@@ -3,6 +3,8 @@ data/
 
 # 本地密钥
 config/local.env
+# 推送通道配置里有 webhook key 和邮箱授权码，只提交 notify.example.json
+config/notify.json
 
 # Python
 __pycache__/

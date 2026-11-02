@@ -44,6 +44,10 @@ def _disclosed_on(period: str) -> date:
     return date(y2, m2, DISCLOSURE_DAY)
 
 
+# 材料装配层要算「下一期什么时候披露」，公开出去而不是各写一份日历
+disclosed_on = _disclosed_on
+
+
 def available_periods(today: date | None = None) -> list[str]:
     today = today or date.today()
     return [p for p in PERIODS if _disclosed_on(p) <= today]
@@ -475,6 +479,31 @@ def source_of(code: str, period: str) -> dict[str, Any]:
         "retrieved_at": datetime.now().replace(microsecond=0).isoformat(),
         "mock": True,
     }
+
+
+def target_note(result: dict[str, Any]) -> str | None:
+    """「离年度目标还差多少」的口径，只在这里算一次。
+
+    工作台卡片和消息提醒都要说这句话，两边各写一份早晚会不一致 ——
+    数字一样、措辞不同也是不一致。所以放在数据层，谁要谁调。
+    """
+    target = result.get("target")
+    if target is None:
+        return None
+    value = result["value"]
+    diff = round(value - target, 2)
+    unit = result["unit"]
+    if unit == "%":
+        if diff > 0:
+            return f"高于年度目标 {diff:g} pct"
+        if diff < 0:
+            return f"低于年度目标 {abs(diff):g} pct"
+        return "与年度目标持平"
+    if diff > 0:
+        return f"超出年度目标 {diff:g}{unit}"
+    if diff < 0:
+        return f"距离年度目标还差 {abs(diff):g}{unit}"
+    return "已完成年度目标"
 
 
 def list_metrics() -> list[dict[str, Any]]:

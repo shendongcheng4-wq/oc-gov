@@ -86,8 +86,17 @@ def brief(m: dict) -> dict[str, Any]:
 
 def list_meetings() -> list[dict[str, Any]]:
     doc = _doc()
-    # 新会议在前：开会的人关心的是"最近这次会"，不是"第一次会"
-    return [brief(m) for m in sorted(doc["meetings"], key=lambda x: x.get("created_at") or "", reverse=True)]
+    # 新会议在前：开会的人关心的是"最近这次会"，不是"第一次会"。
+    # created_at 只精确到分钟，同一分钟连建两场会时排序键会相等，而 sorted 是稳定排序
+    # —— 相等就保持原顺序，结果「最近一场」反而选到旧的那场。补个 id 作次级键兜住。
+    return [
+        brief(m)
+        for m in sorted(
+            doc["meetings"],
+            key=lambda x: (x.get("created_at") or "", x.get("id") or ""),
+            reverse=True,
+        )
+    ]
 
 
 def get(mid: str) -> dict[str, Any] | None:

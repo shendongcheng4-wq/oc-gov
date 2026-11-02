@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT / "core" / "oversight"))
 import mockdata as md  # noqa: E402
 import oversight as ov  # noqa: E402
 import people  # noqa: E402
+import saved as saved_mod  # noqa: E402
 
 CITY = "溧阳市"
 
@@ -61,23 +62,8 @@ def _fmt_yoy(result: dict[str, Any]) -> tuple[str, str, str]:
 
 
 def _target_note(result: dict[str, Any]) -> str | None:
-    target = result.get("target")
-    if target is None:
-        return None
-    value = result["value"]
-    diff = round(value - target, 2)
-    unit = result["unit"]
-    if unit == "%":
-        if diff > 0:
-            return f"高于年度目标 {diff:g} pct"
-        if diff < 0:
-            return f"低于年度目标 {abs(diff):g} pct"
-        return "与年度目标持平"
-    if diff > 0:
-        return f"超出年度目标 {diff:g}{unit}"
-    if diff < 0:
-        return f"距离年度目标还差 {abs(diff):g}{unit}"
-    return "已完成年度目标"
+    """口径实现在 `mockdata.target_note()` —— 消息提醒也要说同一句话，不能各写一份。"""
+    return md.target_note(result)
 
 
 def kpis(codes: list[str] | None = None) -> list[dict[str, Any]]:
@@ -588,6 +574,9 @@ def workspace(person_id: str = "mayor") -> dict[str, Any]:
         "period_label": f"{year}年{month}月",
         "watch": cards,
         "watch_count": len(cards),
+        # 收藏的问答：和指标关注并列显示在同一板块，但两套数据、两套上限。
+        # 这里只做投影，取数/写入全在 core/saved.py。
+        "saved": saved_mod.to_meta(person_id),
         "catalog": metric_catalog(codes),
         "feed": feed,
         "unread": sum(1 for f in feed if f["unread"]),

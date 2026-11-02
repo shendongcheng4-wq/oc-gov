@@ -72,7 +72,11 @@ import llmclient  # noqa: E402
 import modelcfg  # noqa: E402
 import oversight as ov  # noqa: E402
 import people  # noqa: E402
+import saved as saved_mod  # noqa: E402
 import schedule as schedule_mod  # noqa: E402
+import notify as notify_mod  # noqa: E402
+import briefdoc as brief_mod  # noqa: E402
+import knowledge as knowledge_mod  # noqa: E402
 import experts as expert_mod  # noqa: E402
 
 
@@ -271,6 +275,38 @@ class Handler(BaseHTTPRequestHandler):
                     days = schedule_mod.WINDOW_DEFAULT
                 return self._json({"ok": True, **schedule_mod.build(self._person(), days)})
 
+            # ---- 消息提醒 ----
+            # 每次现算，不落盘：提醒是台账状态的投影，存一份就会有「面板说逾期、
+            # 台账说已办结」这种对不上的画面。已读状态另存，只影响显示。
+            if path == "/api/notify":
+                return self._json(notify_mod.build(self._person()))
+
+            # ---- 材料助手 ----
+            # 材料是只读装配：数字带出处、事项带台账编号，服务端算好后前端只负责排版。
+            # options 单独一个端点，是因为弹窗要先秒开配置项，不能让模型拖住。
+            if path == "/api/briefdoc/options":
+                return self._json(brief_mod.options(self._person()))
+
+            # ---- 知识库 ----
+            # 只读检索：返回的是原文条目，不是模型生成的答案。
+            if path == "/api/knowledge":
+                qs = parse_qs(urlparse(self.path).query)
+                q = str((qs.get("q") or [""])[0])
+                try:
+                    limit = max(1, min(20, int((qs.get("limit") or ["6"])[0])))
+                except ValueError:
+                    limit = 6
+                hits = knowledge_mod.search(q, people.meta(self._person()), limit)
+                return self._json(
+                    {
+                        "ok": True,
+                        "query": q,
+                        "total": len(hits),
+                        "index_size": len(knowledge_mod.index(people.meta(self._person()))),
+                        "hits": knowledge_mod.to_meta(hits),
+                    }
+                )
+
             if path.startswith("/api/metric/"):
                 code = path.rsplit("/", 1)[-1].upper()
                 detail = wb.metric_detail(code)
@@ -393,6 +429,19 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(result, 400)
                 return self._json({"ok": True, **result, "person_meta": people.meta(result["person"])})
 
+            # ---- 个人工作台：收藏 / 取消收藏一条回答 ----
+            # 只收 (thread_id, message_id)，正文由 core/saved.py 回 chats 取 ——
+            # 信前端传来的正文，收藏夹就能塞进任何一句话，那就不是"依据"了。
+            if path == "/api/saved":
+                action = str(body.get("action") or "add").strip()
+                if action == "remove":
+                    result = saved_mod.remove(self._person(body), body.get("message_id"))
+                else:
+                    result = saved_mod.add(self._person(body), body.get("thread_id"), body.get("message_id"))
+                if not result.get("ok"):
+                    return self._json(result, 400)
+                return self._json({"ok": True, **result})
+
             # ---- 个人工作台：板块顺序与显隐 ----
             if path == "/api/workspace/layout":
                 result = people.set_layout(self._person(body), body.get("blocks"))
@@ -413,6 +462,28 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(result, 400)
                 ws = wb.workspace(pid)
                 return self._json({"ok": True, **result, "unread": ws["unread"], "feed": ws["feed"]})
+
+            # ---- 消息提醒：标已读 ----
+            # 和工作台的 feed-seen 分开存：那边是「关注动态」，这边是「待办提醒」，
+            # 混在一个列表里，标了这边那边也变已读，人会对不上自己到底看过什么。
+            if path == "/api/notify/read":
+                pid = self._person(body)
+                result = notify_mod.mark_read(pid, body.get("ids"), all_=body.get("all") is True)
+                if not result.get("ok"):
+                    return self._json(result, 400)
+                view = notify_mod.build(pid)
+                return self._json({"ok": True, **result, "unread": view["unread"], "total": view["total"]})
+
+            # ---- 消息提醒：现在执行一次巡检 ----
+            # 走全部闸门（静默时段、重复批次、日限额）。这里不提供 force：
+            # 页面没有登录态，一个能强制群发的按钮等于把责任单位的群交给任何人。
+            if path == "/api/notify/dispatch":
+                return self._json(notify_mod.dispatch())
+
+            # ---- 消息提醒：通道连通性测试 ----
+            # 发一条固定文案，不掺业务内容。配好通道后先点这个，别拿真提醒试错。
+            if path == "/api/notify/test":
+                return self._json(notify_mod.test_channel(str(body.get("channel") or "webhook")))
 
             # ---- 督办台账 ----
             if path == "/api/oversight":
@@ -441,6 +512,22 @@ class Handler(BaseHTTPRequestHandler):
                     days = schedule_mod.WINDOW_DEFAULT
                 return self._json(
                     schedule_mod.brief(self._person(body), days, use_model=body.get("use_model") is not False)
+                )
+
+            # ---- 材料助手：装配 ----
+            # 骨架、章节、期次、指标都由请求指定，但每处数字仍由服务端重新查一遍，
+            # 前端传进来的只有「选什么」，传不进「写什么」。
+            if path == "/api/briefdoc":
+                return self._json(
+                    brief_mod.compose(
+                        self._person(body),
+                        kind=str(body.get("kind") or "report"),
+                        period=(str(body["period"]) if body.get("period") else None),
+                        sections=body.get("sections"),
+                        codes=body.get("codes"),
+                        meeting_id=(str(body["meeting_id"]) if body.get("meeting_id") else None),
+                        use_model=body.get("use_model") is not False,
+                    )
                 )
 
             parts = _parts(path, "/api/oversight/")
@@ -488,7 +575,11 @@ class Handler(BaseHTTPRequestHandler):
 
             tid = _tail(path, "/api/threads/")
             if tid:
-                return self._delete_ok(chat.delete(tid))
+                removed = chat.delete(tid)
+                # 会话没了，指向它的收藏也得清 —— 否则收藏夹里留点点开是空白的条目
+                if removed:
+                    saved_mod.purge_thread(tid)
+                return self._delete_ok(removed)
 
             parts = _parts(path, "/api/meetings/")
             if len(parts) == 1:
@@ -701,6 +792,7 @@ class Handler(BaseHTTPRequestHandler):
                 "sources": result.get("sources") or [],
                 "notes": result.get("notes") or [],
                 "facts": result.get("facts") or [],
+                "knowledge": knowledge_mod.to_meta(result.get("knowledge")),
                 "expert_views": views,
             },
         )
@@ -716,6 +808,7 @@ class Handler(BaseHTTPRequestHandler):
             history=history,
             model_ref=thread.get("model_ref"),
             expert_ids=_expert_ids(body),
+            person_id=self._person(body),
         )
         result["planner_info"] = llm.llm_info()
         msg = self._persist_answer(thread["id"], result)
@@ -768,6 +861,7 @@ class Handler(BaseHTTPRequestHandler):
                 model_ref=thread.get("model_ref"),
                 on_step=lambda name, data: push({"type": name, **data}),
                 expert_ids=_expert_ids(body),
+                person_id=self._person(body),
             )
             result["planner_info"] = llm.llm_info()
             msg = self._persist_answer(thread["id"], result)
@@ -793,6 +887,15 @@ def main() -> None:
     print(f"数据期次 {wb.md.latest_available()}；待披露 {wb.md.pending_periods() or '无'}", flush=True)
     print(
         f"模型 {info['ref'] or '未配置'}（{'可用' if info['available'] else '不可用，问数将退回规则解析'}）",
+        flush=True,
+    )
+    # 提醒巡检：服务在跑才有人替你看表。没配外发通道时它什么都不做（也不会报错），
+    # 配了之后每 5 分钟看一眼该发的发了没有。OCGOV_NOTIFY_TICK=0 可关。
+    chan = notify_mod.channels_status()
+    worker = notify_mod.start_worker()
+    print(
+        f"提醒巡检 {'已启动（每 5 分钟）' if worker else '已关闭（OCGOV_NOTIFY_TICK=0）'}；"
+        f"外发通道：{chan['mode']}",
         flush=True,
     )
     try:

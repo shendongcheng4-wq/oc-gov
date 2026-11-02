@@ -23,8 +23,10 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import experts as experts_mod  # noqa: E402
+import knowledge as knowledge_mod
 import llm
 import mockdata as md
+import people as people_mod
 
 # --------------------------------------------------------------------------
 # 指标匹配
@@ -212,6 +214,18 @@ def _plan_question(
         return None, f"llm_failed: {exc}"
 
 
+# 事项类话术。出现这些词，说明用户要的是「这件事办到哪了」，不是「这个数是多少」。
+# 两者在指标字典里可能命中同一个指标（生态环境局既管事项也管指标），但答案完全不同。
+_MATTER_WORDS = (
+    "办到哪", "办理", "进展", "落实", "推进", "交办", "督办", "谁在办",
+    "定了什么", "怎么定", "办结", "逾期", "签收", "台账", "开会", "会议",
+)
+
+
+def _wants_matter(question: str) -> bool:
+    return any(w in str(question or "") for w in _MATTER_WORDS)
+
+
 def _codes_from_result(result: dict[str, Any]) -> list[str]:
     """从 sources 的接口路径反推本轮用了哪些指标。
 
@@ -235,8 +249,9 @@ def ask(
     model_ref: str | None = None,
     on_step: Any = None,
     expert_ids: list[str] | None = None,
+    person_id: str | None = None,
 ) -> dict[str, Any]:
-    result = _ask_impl(question, today, history, model_ref, on_step)
+    result = _ask_impl(question, today, history, model_ref, on_step, person_id)
     for i, step in enumerate(result.get("trace") or [], 1):
         step["step"] = i
 
@@ -258,6 +273,7 @@ def _ask_impl(
     history: list[dict[str, Any]] | None = None,
     model_ref: str | None = None,
     on_step: Any = None,
+    person_id: str | None = None,
 ) -> dict[str, Any]:
     today = today or date.today()
     trace: list[dict[str, Any]] = []
@@ -355,13 +371,65 @@ def _ask_impl(
             },
         )
 
+    # 拒答之前先查知识库。理由很实际：问「这个指标口径怎么定」「上次那个会定了什么」
+    # 「生态环境局有几件事」的问题，在指标字典里天然匹配不到——它们问的不是数值，
+    # 而是系统里已有的记录。直接拒答等于把最容易回答的一类问题挡在门外。
+    #
+    # 放在这里而不是更前面，是为了不抢问数的路：只要命中了指标，就该走取数和出处那一套，
+    # 知识库不该有机会把「9 月工业增速多少」解释成一段口径说明。
+    kb_miss = None
+    if not hits:
+        person = people_mod.meta(person_id)
+        kb = knowledge_mod.answer(question, person)
+        if not kb["refused"]:
+            kb["trace"] = trace + kb["trace"]
+            for i, step in enumerate(kb["trace"], 1):
+                step["step"] = i
+            return kb
+        kb_miss = kb
+
+    # 事项类问题要抢在问数前面。
+    #
+    # 「环保局那件事办到哪了」在指标字典里能匹配上——生态环境局确实管着空气质量。
+    # 于是模型把意图判成取值，答出一个漂亮的「86.5%」，而用户问的根本不是这个。
+    # 这是最坏的一种错：答非所问，但形式上完全正常，看的人不会起疑。
+    # 所以只要问句里是「进展 / 办理 / 定了什么」这类话术，且知识库里确实有督办或会议记录，
+    # 就以记录为准。
+    if hits and _wants_matter(question):
+        person = people_mod.meta(person_id)
+        kb = knowledge_mod.answer(question, person)
+        if not kb["refused"] and any(
+            h["kind"] in ("oversight", "decision", "meeting") for h in kb["knowledge"]
+        ):
+            trace.append(
+                {
+                    "step": len(trace) + 1,
+                    "tool": "knowledge.prefer",
+                    "call": "问句问的是事项进展，改走知识库",
+                    "status": "ok",
+                    "summary": f"指标本可匹配 {'、'.join(h['name'] for h in hits)}，但问的是办理情况，不答数值",
+                }
+            )
+            kb["trace"] = trace + kb["trace"]
+            for i, step in enumerate(kb["trace"], 1):
+                step["step"] = i
+            return kb
+
     # 拒答：不编
     if not hits:
+        c = (kb_miss or {}).get("index_counts") or {}
+        scope_txt = (
+            f"指标字典里没有对应的指标；知识库现有 {kb_miss.get('index_size')} 条记录"
+            f"（指标口径 {c.get('metric', 0)} 条、督办事项 {c.get('oversight', 0)} 条、"
+            f"会议 {c.get('meeting', 0) + c.get('decision', 0)} 条），也没有对得上的"
+            if kb_miss
+            else "指标字典里没有对应的指标"
+        )
         trace.append(
             {
                 "step": len(trace) + 1,
                 "tool": "refuse",
-                "call": "未匹配 → 返回已注册指标清单",
+                "call": "指标与知识库均未命中 → 返回已注册指标清单",
                 "status": "refused",
                 "summary": f"已注册 {len(md.METRICS)} 个指标，均未命中",
             }
@@ -370,9 +438,10 @@ def _ask_impl(
             "refused": True,
             "question": question,
             "planner": planner,
-            "headline": "这个问题对应的指标还没有注册，我不能给出数字。",
-            "detail": "问数只能回答已接入指标接口的问题。没注册的指标我不会凭印象估算，"
-                      "请先在指标中台注册，或换一个已接入的指标来问。",
+            "headline": "这个问题没有对应的指标，也没有相关记录。",
+            # 说清「两处都查过了」，否则用户会以为系统只会答指标题
+            "detail": f"{scope_txt}。两处都没有的问题我不会凭印象估算——"
+                      "请先在指标中台注册，或在台账、会议记录里补上原始记录。",
             "suggestions": [{"code": c, "name": m["name"], "department": m["department"]}
                             for c, m in md.METRICS.items()],
             "trace": trace,
@@ -595,3 +664,14 @@ def _ask_impl(
             }
         )
     return payload
+
+
+# --------------------------------------------------------------------------
+# 对外别名：材料装配等模块要复用同一套「数字怎么说」的实现
+# --------------------------------------------------------------------------
+# 材料的读者和问数的读者是同一批人。如果材料里写「9 月 6.4%」
+# 而问数回答写「1—9 月累计 6.4%」，两份东西放在一张桌上就没人能解释差在哪。
+# 所以这里把三个纯格式化函数公开出去，让上层直接调用而不是各写一份。
+fmt_value = _fmt
+delta_text = _delta_text
+period_text = _period_text

@@ -1,0 +1,21 @@
+{
+  "channels": {
+    "webhook": {
+      "enabled": false,
+      "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=填企业微信群机器人的key",
+      "format": "wecom"
+    },
+    "smtp": {
+      "enabled": false,
+      "host": "smtp.example.gov.cn",
+      "port": 465,
+      "ssl": true,
+      "user": "noreply@example.gov.cn",
+      "password": "填授权码，不是登录密码",
+      "to": ["zhuren@example.gov.cn"]
+    }
+  },
+  "quiet_hours": ["22:00", "07:00"],
+  "workdays_only": true,
+  "daily_limit": 20
+}

@@ -313,8 +313,9 @@ body{
 /* 标题前的实心点，和右侧「在线」一起构成状态感 */
 .ask-dot{width:7px;height:7px;border-radius:50%;background:var(--brand);display:inline-block;margin-right:6px;vertical-align:1px}
 
-/* 专家：当前对话绑定的那一位，单选。整组会诊收进菜单最后一项，
-   不再并排一堆胶囊 —— 一排胶囊看着像筛选项，实际是「谁在跟我说话」 */
+/* 专家：当前对话绑定的那一位，单选。参谋团（全组）收进菜单最后一项，
+   不再并排一堆胶囊 —— 一排胶囊看着像筛选项，实际是「谁在跟我说话」。
+   没选人时名字和状态都为空，整条只留「AI参谋 ▾」，不放占位文案。 */
 .expert-select{
   position:relative;display:flex;align-items:center;gap:6px;margin:0 14px 8px;
   background:var(--surface-4);border:1px solid var(--line-2);border-radius:8px;
@@ -326,6 +327,8 @@ body{
 .expert-select .es-name{font-size:12px;color:var(--ink);font-weight:700;flex:0 0 auto}
 .expert-select .es-state{font-size:10.5px;color:var(--faint);flex:1 1 auto;min-width:0;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 空着就别占位：名字/状态为空时整条只剩标签和箭头，也不留 gap 缝 */
+.expert-select .es-name:empty,.expert-select .es-state:empty{display:none}
 .expert-select .es-caret{width:13px;height:13px;color:var(--muted);flex:0 0 auto;transition:transform .15s}
 .expert-select.open .es-caret{transform:rotate(180deg)}
 .es-menu{
@@ -373,6 +376,32 @@ body{
 }
 .ai-body b{color:var(--ink)}
 .ai-body .num{color:var(--brand);font-weight:700}
+/* 知识库条目：一条记录一块，必须有出处。类名统一 kb- 前缀——
+   之前 .brand 撞过顶栏的 display:flex，卡片被横过来了，不再赌名字不重。 */
+.kb-wrap{margin-top:10px;display:flex;flex-direction:column;gap:7px}
+.kb-item{
+  border:1px solid var(--line);border-left:2px solid var(--line-3);border-radius:8px;
+  padding:8px 11px;background:var(--surface);transition:.14s
+}
+.kb-item.link{cursor:pointer}
+.kb-item.link:hover{border-color:var(--brand);border-left-color:var(--brand);background:var(--hover)}
+.kb-hd{display:flex;align-items:baseline;gap:7px;margin-bottom:5px;flex-wrap:wrap}
+.kb-kind{
+  font-size:9.5px;padding:0 6px;border-radius:20px;flex:0 0 auto;white-space:nowrap;
+  background:var(--brand-soft);color:var(--brand);vertical-align:1px
+}
+.kb-kind.oversight{background:var(--warn-bg);color:var(--warn-ink)}
+.kb-kind.meeting,.kb-kind.decision{background:var(--info-bg);color:var(--info)}
+.kb-hd b{font-size:12.5px;font-weight:600;line-height:1.5}
+.kb-tx{font-size:11.5px;color:var(--ink-2);line-height:1.75}
+.kb-quote{
+  margin-top:6px;padding:5px 9px;border-left:2px solid var(--brand);
+  background:var(--brand-soft);border-radius:0 5px 5px 0;
+  font-size:11px;line-height:1.72;color:var(--ink)
+}
+.kb-src{margin-top:6px;font-size:10px;color:var(--faint);line-height:1.6}
+.kb-src em{font-style:normal;color:var(--muted)}
+
 .ai-src{
   margin-top:9px;padding-top:8px;border-top:1px dashed var(--line-3);
   display:flex;flex-wrap:wrap;gap:4px
@@ -794,6 +823,36 @@ html.embedded .drawer{top:0;height:100%}
 .kpi.watch:hover .rm{opacity:1}
 .kpi .rm:hover{color:var(--danger);border-color:var(--danger-line);background:var(--danger-bg)}
 .watch-empty{grid-column:1/-1;font-size:12px;color:var(--faint);line-height:1.8;padding:6px 2px}
+/* 收藏的问答：挂在「我的关注」里指标卡下面。
+   刻意不做成卡片网格 —— 它不是指标（没有当期值、没有目标进度），混进 kpis 会让人
+   以为它也是一张点开能看口径的指标卡。这里只有「问过什么、答了什么、什么时候收的」。 */
+.saved-box{margin-top:12px;border-top:1px dashed var(--line-2);padding-top:10px}
+.saved-hd{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted);margin-bottom:6px}
+.saved-hd b{color:var(--ink);font-size:12px;font-weight:700}
+.sv-item{position:relative;padding:8px 30px 8px 10px;border-radius:8px;cursor:pointer;
+  background:var(--surface-2);border:1px solid var(--line-2);margin-bottom:6px}
+.sv-item:hover{background:var(--hover);border-color:var(--line-3)}
+.sv-q{font-size:12px;color:var(--ink);font-weight:600;line-height:1.55;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sv-a{font-size:11.5px;color:var(--muted);line-height:1.6;margin-top:2px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.sv-meta{display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap}
+.sv-code{font-size:10px;color:var(--brand);background:var(--brand-soft);border-radius:4px;padding:1px 5px}
+.sv-at{font-size:10px;color:var(--faint);margin-left:auto}
+.sv-rm{position:absolute;top:6px;right:6px;width:18px;height:18px;display:grid;place-items:center;
+  border-radius:50%;font-size:10px;color:var(--faint);opacity:0;transition:.15s}
+.sv-item:hover .sv-rm{opacity:1}
+.sv-rm:hover{color:var(--danger);background:var(--danger-bg)}
+/* 星号：常驻可见。藏到 hover 才出现等于没有入口 —— 谁会去 hover 一段答案。
+   点亮用 --warn，浅色深色都够读。 */
+.star-btn{margin-left:auto;background:none;border:none;padding:0 3px;font-size:13px;line-height:1;
+  color:var(--faint);cursor:pointer;opacity:.7;transition:.12s}
+.star-btn:hover{opacity:1;color:var(--warn);transform:scale(1.15)}
+.star-btn.on{opacity:1;color:var(--warn)}
+.star-btn[disabled]{opacity:.35;cursor:default;transform:none}
+/* 从收藏夹跳回来时闪一下，否则在长会话里看不出停在哪条 */
+.bub-ai.flash{animation:svFlash 1.6s ease}
+@keyframes svFlash{0%,100%{background:transparent}18%,60%{background:var(--brand-soft)}}
 /* 添加关注选择器 */
 .wm-tip{font-size:11.5px;color:var(--muted);margin:0 0 8px;line-height:1.7}
 .wm-list{display:flex;flex-direction:column;gap:2px;max-height:52vh;overflow:auto}
@@ -858,6 +917,118 @@ html.embedded .drawer{top:0;height:100%}
 .cal-box{width:min(780px,95vw);max-height:88vh}
 .cal-body{padding:0 0 14px;overflow:auto}
 
+/* ---------------- 材料助手 ----------------
+   纸张不跟随主题：它是一张纸，不是界面。深色主题下四周桌面是深色，纸仍然白底黑字——
+   否则屏幕上看到的和打印出来的会是两样东西，而材料最终是要打印/上报的。 */
+.doc-box{width:min(1200px,97vw);max-height:90vh}
+.doc-body{display:grid;grid-template-columns:252px minmax(0,1fr);flex:1;min-height:0}
+.doc-side{
+  border-right:1px solid var(--line);background:var(--surface-2);padding:12px 12px 20px;
+  overflow:auto;display:flex;flex-direction:column;gap:13px;
+}
+.dc-lab{font-size:10.5px;color:var(--muted);margin:0 0 5px;display:flex;justify-content:space-between;align-items:center}
+.dc-lab b{font-weight:600}
+.dc-lab span{color:var(--faint);font-size:10px}
+.dc-kinds{display:flex;flex-direction:column;gap:5px}
+.dc-kind{
+  text-align:left;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
+  border-radius:8px;padding:7px 9px;cursor:pointer;font-family:inherit;transition:.14s;
+}
+.dc-kind:hover{border-color:var(--brand)}
+.dc-kind.on{border-color:var(--brand);background:var(--brand-soft)}
+.dc-kind b{display:block;font-size:12px;color:var(--ink);font-weight:600}
+.dc-kind span{display:block;font-size:10.5px;color:var(--muted);margin-top:2px;line-height:1.5}
+.dc-kind.on b{color:var(--brand)}
+.dc-sel{
+  width:100%;font-size:11.5px;padding:5px 7px;border:1px solid var(--line);
+  border-radius:7px;background:var(--surface);color:var(--ink);font-family:inherit;
+}
+.dc-checks{display:flex;flex-direction:column;gap:5px}
+.dc-checks label{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-2);cursor:pointer}
+.dc-checks input{accent-color:var(--brand);margin:0}
+.dc-pills{display:flex;flex-wrap:wrap;gap:5px;max-height:168px;overflow:auto;padding-right:2px}
+.dc-pill{
+  font-size:10.5px;padding:2px 7px;border-radius:20px;border:1px solid var(--line);
+  background:var(--surface);color:var(--ink-2);cursor:pointer;font-family:inherit;
+}
+.dc-pill.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand);font-weight:600}
+.dc-go{width:100%;padding:7px;font-size:12.5px}
+.dc-tip{font-size:10.5px;color:var(--faint);line-height:1.7}
+.doc-main{display:flex;flex-direction:column;min-width:0;min-height:0}
+.doc-tools{
+  display:flex;align-items:center;gap:7px;padding:8px 14px;
+  border-bottom:1px solid var(--line);background:var(--surface);flex:0 0 auto;
+}
+.doc-tools .sp{flex:1}
+.doc-tools .dt-state{font-size:10.5px;color:var(--muted)}
+.doc-wrap{flex:1;overflow:auto;background:var(--surface-3);padding:18px}
+.doc-paper{
+  width:760px;max-width:100%;margin:0 auto;background:#fff;color:#14181f;
+  padding:46px 54px 56px;border-radius:2px;box-shadow:0 6px 26px rgba(10,25,50,.16);
+  font-family:"Songti SC","SimSun","Noto Serif SC",serif;font-size:13px;line-height:1.95;
+}
+.doc-paper.blank{display:flex;align-items:center;justify-content:center;min-height:420px;color:#98a2b3}
+.dp-title{
+  margin:0 0 6px;font-size:21px;text-align:center;letter-spacing:3px;font-weight:700;
+  font-family:"Heiti SC","Microsoft YaHei",sans-serif;
+}
+.dp-meta{
+  text-align:center;font-size:11.5px;color:#5b6676;padding-bottom:12px;
+  border-bottom:1px solid #e4e9f0;margin-bottom:16px;line-height:1.8;
+}
+.dp-mock{
+  background:#fff8e6;border:1px solid #f0d79a;color:#8a5b00;font-size:11px;
+  padding:5px 9px;border-radius:4px;margin:0 0 14px;font-family:"Microsoft YaHei",sans-serif;
+}
+.dp-warn{
+  background:#fdf1ef;border-left:3px solid #d9534f;color:#8f2d28;font-size:11.5px;
+  padding:6px 10px;margin:0 0 12px;
+}
+.dp-h2{
+  font-size:14.5px;margin:20px 0 7px;font-weight:700;
+  font-family:"Heiti SC","Microsoft YaHei",sans-serif;letter-spacing:.5px;
+}
+.dp-lead{margin:0 0 9px;text-indent:2em}
+.dp-p{margin:0 0 8px;text-indent:2em}
+.dp-note{font-size:10.5px;color:#7a8598;margin:6px 0 0;line-height:1.7}
+.doc-paper table{width:100%;border-collapse:collapse;margin:8px 0 4px;font-size:11.5px;line-height:1.65}
+.doc-paper th,.doc-paper td{border:1px solid #d6dbe4;padding:5px 7px;text-align:left;vertical-align:top;word-break:break-word}
+.doc-paper th{
+  background:#f2f5f9;font-weight:600;font-size:11px;
+  font-family:"Heiti SC","Microsoft YaHei",sans-serif;
+}
+.doc-paper tbody tr:nth-child(even) td{background:#fafbfd}
+.dp-stats{display:grid;grid-template-columns:1fr 1fr;gap:0 20px;margin:6px 0 4px}
+.dp-stats div{display:flex;justify-content:flex-start;gap:0;border-bottom:1px dotted #dfe4ec;padding:3px 0;font-size:12px}
+.dp-stats b{flex:0 0 auto}
+.dp-stats b::after{content:"："}
+.dp-stats b{font-weight:600;font-family:"Heiti SC","Microsoft YaHei",sans-serif}
+.dp-stats .danger{color:#b42318}
+.dp-stats .warn{color:#b54708}
+.dp-stats .muted{color:#667085}
+.dp-tag{font-size:10px;padding:0 5px;border-radius:20px;border:1px solid #d6dbe4;color:#5b6676;white-space:nowrap}
+.dp-tag.danger{border-color:#f0b8b3;background:#fdf0ee;color:#b42318}
+.dp-tag.warn{border-color:#f3d3a0;background:#fdf6e8;color:#b54708}
+.dp-kv{margin:4px 0 8px;padding-left:0;list-style:none}
+.dp-kv li{font-size:12px;line-height:1.9}
+.dp-kv b{font-family:"Heiti SC","Microsoft YaHei",sans-serif;font-weight:600}
+.dp-src{margin-top:18px;padding-top:10px;border-top:1px solid #e4e9f0;font-size:10.5px;color:#6b7688}
+.dp-src b{display:block;margin-bottom:4px;font-family:"Heiti SC","Microsoft YaHei",sans-serif;font-size:11px;color:#3d4757}
+.dp-src div{line-height:1.8}
+.dp-foot{margin-top:14px;font-size:10px;color:#98a2b3;text-align:right}
+/* 打印：只留纸张。其余元素用 visibility 隐藏，避免占位造成空白页 */
+@media print{
+  @page{margin:16mm 14mm}
+  body *{visibility:hidden}
+  #dcPaper,#dcPaper *{visibility:visible}
+  #docModal{position:static!important;background:none!important;display:block!important}
+  #docModal .modal-box{box-shadow:none!important;max-height:none!important;width:auto!important;overflow:visible!important}
+  .doc-wrap{overflow:visible!important;background:none!important;padding:0!important}
+  #dcPaper{position:absolute;left:0;top:0;width:182mm!important;max-width:none!important;box-shadow:none!important;padding:0!important}
+  .doc-paper th,.doc-paper tbody tr:nth-child(even) td{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .dp-mock{border-color:#e5e5e5;background:#fafafa;color:#555}
+}
+
 /* 今日重点：AI 只写这一句 + 每条一行理由，其余全部是台账里搬来的字段 */
 .cal-brief{
   margin:12px 18px 2px;padding:11px 13px;border-radius:10px;
@@ -891,25 +1062,27 @@ html.embedded .drawer{top:0;height:100%}
   border:1px solid var(--line);border-left:3px solid var(--line-3);border-radius:8px;
   padding:7px 10px 8px;background:var(--surface);
 }
-.cal-card.link{cursor:pointer;transition:.14s}
-.cal-card.link:hover{border-color:var(--brand);border-left-color:var(--brand);background:var(--hover)}
-.cal-card.brand{border-left-color:var(--brand)}
-.cal-card.info{border-left-color:var(--info)}
-.cal-card.warn{border-left-color:var(--warn)}
-.cal-card.danger{border-left-color:var(--danger)}
-.cal-card.muted{border-left-color:var(--faint)}
+/* tone 一律带 tk- 前缀：`brand` 是顶栏 logo 的全局类（display:flex），
+   直接写成 .cal-card.brand 会把卡片变成横向 flex —— 真踩过一次。 */
+.cal-card.cal-link{cursor:pointer;transition:.14s}
+.cal-card.cal-link:hover{border-color:var(--brand);border-left-color:var(--brand);background:var(--hover)}
+.cal-card.tk-brand{border-left-color:var(--brand)}
+.cal-card.tk-info{border-left-color:var(--info)}
+.cal-card.tk-warn{border-left-color:var(--warn)}
+.cal-card.tk-danger{border-left-color:var(--danger)}
+.cal-card.tk-muted{border-left-color:var(--faint)}
 .cal-top{display:flex;align-items:center;gap:7px}
 .cal-top b{font-size:12.5px;font-weight:600;flex:1;min-width:0;line-height:1.45}
-.cal-tag{font-size:9.5px;padding:0 6px;border-radius:20px;flex:0 0 auto;white-space:nowrap}
-.cal-tag.brand{background:var(--brand-soft);color:var(--brand)}
-.cal-tag.info{background:var(--info-bg);color:var(--info)}
-.cal-tag.warn{background:var(--warn-bg);color:var(--warn)}
-.cal-tag.danger{background:var(--danger-bg);color:var(--danger)}
-.cal-tag.muted{background:var(--surface-3);color:var(--muted)}
+.cal-tag{font-size:10px;padding:0 6px;border-radius:20px;flex:0 0 auto;white-space:nowrap}
+.cal-tag.tk-brand{background:var(--brand-soft);color:var(--brand)}
+.cal-tag.tk-info{background:var(--info-bg);color:var(--info)}
+.cal-tag.tk-warn{background:var(--warn-bg);color:var(--warn)}
+.cal-tag.tk-danger{background:var(--danger-bg);color:var(--danger)}
+.cal-tag.tk-muted{background:var(--surface-3);color:var(--muted)}
 .cal-sub{font-size:10.5px;color:var(--muted);margin-top:3px;line-height:1.65}
 /* 理由行：规则算的写「按台账」，模型写的写「AI」，前缀靠 ::before 区分 —— 不能让人
    把一句模型润色过的判断当成台账里的原始事实 */
-.cal-why{font-size:10.5px;color:var(--faint);margin-top:4px;line-height:1.65}
+.cal-why{font-size:10.5px;color:var(--muted);margin-top:4px;line-height:1.65}
 .cal-why.rule::before{content:"按台账 · ";color:var(--faint)}
 .cal-why.ai::before{content:"AI · ";color:var(--brand)}
 
@@ -1017,6 +1190,60 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
   --brand:#ef757c; --brand-2:#f5878e; --brand-soft:#2f191b;
   --nav-a:#150607; --nav-b:#240a0c; --nav-c:#3a0c10;
 }
+/* ---------------- 消息提醒 ----------------
+   一个面板只回答三件事：现在要处理什么、为什么现在说、送到没送到。
+   级别只用左侧一条色条，不铺满底色 —— 八条全红等于没有重点。 */
+.nt-box{width:min(720px,95vw);max-height:88vh;display:flex;flex-direction:column}
+.nt-body{flex:1;min-height:0;overflow:auto;padding-bottom:16px}
+.nt-top{display:flex;align-items:center;gap:18px;padding:11px 18px;background:var(--surface-2);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.nt-stat{display:flex;align-items:baseline;gap:5px;white-space:nowrap}
+.nt-stat b{font-size:18px;line-height:1;font-variant-numeric:tabular-nums}
+.nt-stat span{font-size:10.5px;color:var(--muted)}
+.nt-stat.hot b{color:var(--danger)}
+.nt-do{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+.nt-next{display:flex;align-items:center;gap:6px;margin:11px 18px 0;padding:7px 10px;border-radius:8px;background:var(--info-bg);color:var(--info);font-size:11px;line-height:1.6}
+.nt-next b{font-variant-numeric:tabular-nums}
+.nt-next[hidden]{display:none}
+.nt-item{display:grid;grid-template-columns:3px 1fr;gap:0;margin:9px 18px 0;border:1px solid var(--line);border-radius:9px;background:var(--surface);cursor:pointer;overflow:hidden;transition:border-color .12s,box-shadow .12s}
+.nt-item:hover{border-color:var(--brand);box-shadow:0 2px 10px rgba(13,84,200,.08)}
+.nt-item::before{content:"";background:var(--faint);border-radius:9px 0 0 9px}
+.nt-item.lv-urgent::before{background:var(--danger)}
+.nt-item.lv-high::before{background:var(--warn)}
+.nt-item.lv-normal::before{background:var(--info)}
+.nt-item.lv-low::before{background:var(--faint)}
+.nt-item.read{opacity:.6}
+.nt-main{padding:9px 12px;min-width:0}
+.nt-hd{display:flex;align-items:center;gap:6px;min-width:0}
+.nt-rule{flex:0 0 auto;font-size:9.5px;padding:1.5px 6px;border-radius:20px;background:var(--surface-3);color:var(--ink-3);white-space:nowrap}
+.nt-rule.lv-urgent{background:var(--danger-bg);color:var(--danger)}
+.nt-rule.lv-high{background:var(--warn-bg);color:var(--warn)}
+.nt-title{font-size:12.5px;font-weight:700;color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nt-text{font-size:11.5px;color:var(--ink-2);margin-top:4px;line-height:1.65}
+.nt-why{font-size:10.5px;color:var(--muted);margin-top:3px;line-height:1.6}
+.nt-foot{display:flex;align-items:center;gap:7px;margin-top:6px;font-size:10px;color:var(--faint);flex-wrap:wrap}
+.nt-dot{width:5px;height:5px;border-radius:50%;background:transparent;border:1px solid var(--faint);display:inline-block}
+.nt-dot.on{background:var(--brand);border-color:var(--brand)}
+.nt-sep{color:var(--line)}
+.nt-empty{padding:34px 18px;text-align:center;color:var(--muted);font-size:12px;line-height:1.9}
+.nt-fold{margin:14px 18px 0;border-top:1px solid var(--line);padding-top:9px}
+.nt-fold summary{cursor:pointer;font-size:11.5px;color:var(--ink-2);font-weight:600;list-style:none}
+.nt-fold summary::-webkit-details-marker{display:none}
+.nt-fold summary::before{content:"▸ ";color:var(--faint)}
+.nt-fold[open] summary::before{content:"▾ "}
+.nt-inner{padding:8px 0 0;font-size:11px;color:var(--ink-2);line-height:1.8}
+.nt-tbl{width:100%;border-collapse:collapse;font-size:10.5px;margin-top:3px}
+.nt-tbl th{text-align:left;font-weight:600;color:var(--muted);padding:3px 6px;border-bottom:1px solid var(--line)}
+.nt-tbl td{padding:4px 6px;border-bottom:1px solid var(--line-2);vertical-align:top;line-height:1.6}
+.nt-chan{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line-2)}
+.nt-chan .nm{font-weight:600;font-size:11px;flex:0 0 88px}
+.nt-chan .st{font-size:10.5px;color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nt-ok{color:var(--ok);font-size:10px}
+.nt-bad{color:var(--danger);font-size:10px}
+.nt-idle{color:var(--faint);font-size:10px}
+.nt-pre{margin:8px 0 0;padding:9px 10px;border-radius:8px;background:var(--surface-3);font-family:Consolas,Menlo,monospace;font-size:10.5px;line-height:1.6;color:var(--ink-2);white-space:pre-wrap;max-height:180px;overflow:auto}
+.nt-flash{animation:ntFlash 1.5s ease-out}
+@keyframes ntFlash{0%,30%{box-shadow:0 0 0 3px var(--brand-soft)}100%{box-shadow:0 0 0 0 transparent}}
+
 </style>
 <script>
   // 在解析 <body> 之前判定嵌入状态，避免顶栏闪一下
@@ -1032,7 +1259,7 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
     <span data-tool="oversight" title="统筹推进 · 督办台账（常驻入口）"><svg viewBox="0 0 24 24"><path d="M4 6h8M4 12h8M4 18h8"/><path d="M15 16l2.5 2.5L22 13"/></svg>统筹推进<i class="tool-badge" id="ovBadge" hidden></i></span>
     <span data-tool="cal"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg>AI日程</span>
     <span data-tool="doc"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>材料助手</span>
-    <span data-tool="bell"><svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 20h4"/></svg>消息提醒</span>
+    <span data-tool="bell" title="消息提醒 · 到期、逾期、会前、指标"><svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 20h4"/></svg>消息提醒<i class="tool-badge" id="ntBadge" hidden></i></span>
   </div>
   <div class="id-wrap">
     <div class="avatar" id="avatar"><i id="avatarChar">市</i><span id="avatarName">市长</span>
@@ -1050,11 +1277,12 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
       <h2><i class="ask-dot"></i><b>智能问政</b></h2>
       <span class="live"><i></i>在线</span>
     </div>
-    <!-- 专家是「当前对话的参谋」，单选。整组会诊放在菜单最后一项，
-         不是并排一堆胶囊 —— 一次只能有一个角色在对话中，选谁就谁答。 -->
+    <!-- 专家是「当前对话的参谋」，单选。全组叫参谋团，放在菜单最后一项，
+         不是并排一堆胶囊 —— 一次只能有一个角色在对话中，选谁就谁答。
+         没选人时这一行只剩「AI参谋 ▾」，不写「不召唤」这种占位词。 -->
     <div class="expert-select" id="expertSelect" tabindex="0" role="button" aria-haspopup="true" aria-expanded="false">
       <span class="es-label">AI参谋</span>
-      <b class="es-name" id="esName">不召唤</b>
+      <b class="es-name" id="esName"></b>
       <span class="es-state" id="esState"></span>
       <svg class="es-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
       <div class="es-menu" id="esMenu" hidden></div>
@@ -1117,6 +1345,11 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
           <button class="mini sec-act" id="watchManage" title="从已注册指标里增删关注">管理关注</button>
         </div>
         <div class="kpis cols-3" id="watchGrid"></div>
+        <!-- 收藏的问答。空的时候整块不显示（不留「还没有收藏」的占位） -->
+        <div class="saved-box" id="savedBox" hidden>
+          <div class="saved-hd"><b>收藏的问答</b><span id="savedCount"></span></div>
+          <div id="savedList"></div>
+        </div>
       </div>
       <div class="desk-sec desk-feed" data-block="feed">
         <div class="sec-head">
@@ -1184,6 +1417,42 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
   </div>
 </div>
 
+<div class="modal" id="ntModal">
+  <div class="modal-box nt-box">
+    <div class="modal-head">
+      <div>
+        <h3>消息提醒</h3>
+        <p>提醒不产生新事实：每条都能点回台账、会议记录或指标口径。同一件事每天只提醒一次，第二天没办会再出现。</p>
+      </div>
+      <span class="modal-x" id="ntClose">✕</span>
+    </div>
+    <div class="nt-body">
+      <div class="nt-top">
+        <div class="nt-stat hot"><b id="ntUrgent">0</b><span>需要立刻处理</span></div>
+        <div class="nt-stat"><b id="ntTotal">0</b><span>今日提醒</span></div>
+        <div class="nt-stat"><b id="ntUnread">0</b><span>未读</span></div>
+        <div class="nt-do">
+          <button class="mini" id="ntDesktop">开启桌面通知</button>
+          <button class="mini" id="ntReadAll">全部标已读</button>
+          <button class="mini" id="ntDispatch">执行一次巡检</button>
+        </div>
+      </div>
+      <div class="nt-next" id="ntNext" hidden></div>
+      <div id="ntList"></div>
+
+      <details class="nt-fold" id="ntFoldRule">
+        <summary>什么时候提醒什么（规则表）</summary>
+        <div class="nt-inner" id="ntRuleBody"></div>
+      </details>
+
+      <details class="nt-fold" id="ntFoldChan">
+        <summary>送达配置 · 当前状态</summary>
+        <div class="nt-inner" id="ntChanBody"></div>
+      </details>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="calModal">
   <div class="modal-box cal-box">
     <div class="modal-head">
@@ -1194,6 +1463,25 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
       <span class="modal-x" id="calClose">✕</span>
     </div>
     <div class="cal-body" id="calBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="docModal">
+  <div class="modal-box doc-box">
+    <div class="modal-head">
+      <div>
+        <h3>材料助手</h3>
+        <p>按骨架装配：指标带部门与披露日，事项带台账编号，会议带交办明细。模型只写「下一步」一节，且只能用材料里的数字。</p>
+      </div>
+      <span class="modal-x" id="dcClose">✕</span>
+    </div>
+    <div class="doc-body">
+      <aside class="doc-side" id="dcSide"></aside>
+      <section class="doc-main">
+        <div class="doc-tools" id="dcTools"></div>
+        <div class="doc-wrap" id="dcWrap"><article class="doc-paper" id="dcPaper"></article></div>
+      </section>
+    </div>
   </div>
 </div>
 
@@ -1409,7 +1697,46 @@ function plannerLabel(info) {
   if (info && info.available) return `AI参谋 · ${info.model || "大模型"}`;
   return "AI参谋 · 规则解析";
 }
-function aiBubble(r) {
+/* 知识库条目：每块都带出处，能点的跳回台账或会议记录。
+   这里不折叠、不截断——用户问「依据是什么」，就是要看原文。 */
+function kbBlock(items) {
+  if (!items || !items.length) return "";
+  const rows = items.map((h) => {
+    // 指标口径没有可跳的页面（口径就是这张卡本身），只有事项和会议带跳转
+    const jump = h.ref && (h.ref.type === "oversight" || h.ref.type === "meeting");
+    const ref = jump ? `${h.ref.type}:${h.ref.id}` : "";
+    const tx = String(h.text || "").trim();
+    const quote = String(h.quote || "").trim();
+    // 引句和正文不一样才单独显示，否则同一段话在卡里出现两遍
+    const quoteHtml = quote && quote !== tx ? `<div class="kb-quote">${esc(quote)}</div>` : "";
+    const s = h.source || {};
+    const src = [s.department, s.report, s.period, s.note].filter(Boolean).map((x) => esc(x)).join(" · ");
+    return `<div class="kb-item${ref ? " link" : ""}" ${ref ? `data-kbref="${esc(ref)}"` : ""}>
+      <div class="kb-hd"><span class="kb-kind ${esc(h.kind || "")}">${esc(h.kind_label || "记录")}</span><b>${esc(h.title || "")}</b></div>
+      ${tx ? `<div class="kb-tx">${esc(tx)}</div>` : ""}
+      ${quoteHtml}
+      <div class="kb-src">${src}</div>
+    </div>`;
+  }).join("");
+  return `<div class="kb-wrap">${rows}</div>`;
+}
+
+/* 收藏的问答：当前身份收藏了哪几条。ids 用消息 id，星号据此点亮。
+   数据来源是 /api/workspace 的 saved（登录态不在这一版，所以按演示身份各存各的）。 */
+const SAVED = { items: [], ids: new Set(), max: 24 };
+
+function aiBubble(r, ref) {
+  // 收藏星号。只认后端给的消息 id：拿不到 id 就不画 —— 点了收藏哪一条都说不清，
+  // 而收藏夹里躺一条"不知道是什么"的条目比没有这个功能更糟。
+  const mid = (ref && ref.messageId) || "";
+  const tid = (ref && ref.threadId) || "";
+  const on = mid && SAVED.ids.has(mid);
+  const star = mid
+    ? `<button class="star-btn ${on ? "on" : ""}" data-star="${esc(mid)}" data-tid="${esc(tid)}"
+         title="${on ? "已收藏，点击取消" : "收藏到「我的关注」"}" aria-pressed="${on ? "true" : "false"}"
+         aria-label="收藏这条回答">${on ? "★" : "☆"}</button>`
+    : "";
+
   const srcs = (r.sources || []).map((s) => [
     `<span class="src-pill" data-src="${esc(s.code || "")}">${esc(s.report || "指标接口")}</span>`,
     s.department ? `<span class="src-pill">${esc(s.department)}</span>` : "",
@@ -1435,10 +1762,11 @@ function aiBubble(r) {
     : "";
 
   return `
-    <div class="ai-tag"><i>AI</i>${esc(plannerLabel(r.planner_info))}</div>
+    <div class="ai-tag"><i>AI</i>${esc(plannerLabel(r.planner_info))}${star}</div>
     <div class="ai-body">
       <div>${r.headline_html || esc(r.headline)}</div>
       ${r.detail ? `<div style="margin-top:6px;color:var(--muted);font-size:12px">${esc(r.detail)}</div>` : ""}
+      ${kbBlock(r.knowledge)}
       ${notesBlock}
       ${evBlock}
       ${srcs ? `<div class="ai-src">${srcs}</div>` : ""}
@@ -1451,7 +1779,7 @@ function aiBubble(r) {
    而且那段被要求不含任何数字 —— 含数字整段丢弃（规则在 core/experts.py）。
    所以这里选了谁，只影响"多几段解读"，不影响数字从哪来。 */
 const EXP = { list: [], cur: null, max: 3, ready: false };
-// cur：null = 不召唤；"__all" = 整组；否则是某位专家的 id。
+// cur：null = 没选人（什么都不显示）；"__all" = 参谋团；否则是某位专家的 id。
 // 一次只可能有一位「对话中」—— 专家是对话角色，不是一排筛选项。
 
 async function loadExperts() {
@@ -1463,7 +1791,7 @@ async function loadExperts() {
   } catch {
     EXP.list = [];
   }
-  // 名单变了而当前这位不在了（后端删了角色），退回不召唤，别留个空名字
+  // 名单变了而当前这位不在了（后端删了角色），退回没人，别留个空名字
   if (EXP.cur && EXP.cur !== "__all" && !EXP.list.some((e) => e.id === EXP.cur)) EXP.cur = null;
   if (EXP.cur === "__all" && EXP.list.length < 2) EXP.cur = null;
   renderExpertSelect();
@@ -1484,31 +1812,37 @@ function renderExpertSelect() {
 
   const cur = EXP.list.find((e) => e.id === EXP.cur);
   if (EXP.cur === "__all") {
-    name.textContent = "专家组";
-    state.textContent = `（${Math.min(EXP.list.length, EXP.max)} 位会诊中）`;
+    name.textContent = "参谋团";
+    state.textContent = `（${Math.min(EXP.list.length, EXP.max)} 位）`;
   } else if (cur) {
     name.textContent = cur.name;
     state.textContent = "（对话中）";
   } else {
-    name.textContent = "不召唤";
-    state.textContent = EXP.list.length ? "（只答数值与口径）" : "（名单未加载）";
+    // 没选人就空着。写「不召唤」等于给「不需要」起了个名字，还得配一句解释
+    name.textContent = "";
+    state.textContent = EXP.list.length ? "" : "（名单未加载）";
   }
 
   const item = (eid, avatar, label, hint, on, cls = "") =>
     `<div class="es-item ${cls} ${on ? "on" : ""}" data-eid="${esc(eid)}" title="${esc(hint)}">` +
-    `<i>${esc(avatar)}</i>${esc(label)}${on ? "<em>对话中</em>" : ""}</div>`;
+    `<i>${esc(avatar)}</i>${esc(label)}${on ? "<em>已选</em>" : ""}</div>`;
 
+  // 没有「不召唤」这一项：空就是空。取消的办法是再点一次已选中的那位，
+  // 这条在 title 里写着 —— 与其多一个把「无」变成选项的菜单行，不如少一行。
+  const hintOf = (id2, text) => (EXP.cur === id2 ? "已选，再点一次取消" : text);
   menu.innerHTML =
-    item("", "—", "不召唤", "只给数值、口径和出处，不要解读", !EXP.cur) +
-    EXP.list.map((e) => item(e.id, e.avatar, e.name, e.focus, EXP.cur === e.id)).join("") +
-    // 整组只在真能一次叫上时才出现：否则点下去会静默漏人，用户以为叫了全组
+    EXP.list
+      .map((e) => item(e.id, e.avatar, e.name, hintOf(e.id, e.focus), EXP.cur === e.id))
+      .join("") +
+    // 参谋团只在真能一次叫上时才出现：否则点下去会静默漏人，用户以为叫了全组
     (EXP.list.length > 1 && EXP.list.length <= EXP.max
-      ? item("__all", "组", "整组会诊", `${EXP.list.length} 位一起看，角度更多`, EXP.cur === "__all", "sep")
+      ? item("__all", "团", "参谋团", hintOf("__all", `${EXP.list.length} 位一起看，角度更多`), EXP.cur === "__all", "sep")
       : "");
 }
 
 function selectExpert(eid) {
-  EXP.cur = eid || null;
+  // 再点一次已选中的 = 取消，回到空白
+  EXP.cur = !eid || EXP.cur === eid ? null : eid;
   closeExpertMenu();
   renderExpertSelect();
 }
@@ -1581,11 +1915,13 @@ async function ask(question) {
           // 专家是串行调模型的，三位加起来好几秒。不报进度的话，界面会从
           // 「解析完成」一直静默到出结果，看着像卡死。
           const tail = f.phase === "start" ? "正在看材料" : (f.ok ? "已给出意见" : "未给出意见");
-          stage(`专家会诊 · ${f.name} ${tail}（${f.index}/${f.total}）`);
+          stage(`专家解读 · ${f.name} ${tail}（${f.index}/${f.total}）`);
         } else if (f.type === "done") {
           finished = true;
           THREAD = f.thread_id;
-          holder.innerHTML = aiBubble(f.result);
+          holder.innerHTML = aiBubble(f.result, { threadId: f.thread_id, messageId: f.message_id });
+          // 星级按钮要能定位到这条消息（收藏夹跳回来也靠它），落库 id 由后端返回
+          holder.dataset.mid = f.message_id || "";
           bindFold(holder);
         } else if (f.type === "error") {
           finished = true;
@@ -1607,12 +1943,12 @@ async function ask(question) {
 let THREAD = null;   // 当前会话 id；null = 还没建（首次提问时后端建）
 let MODELS = { providers: [], resolved: [], active: null, ready: false };
 
-const INTENT_CN = { value: "取值", trend: "走势", breakdown: "分解", compare: "对比", definition: "口径" };
+const INTENT_CN = { value: "取值", trend: "走势", breakdown: "分解", compare: "对比", definition: "口径", knowledge: "依据" };
 function intentLabel(i) { return INTENT_CN[i] || i || "—"; }
 
 const EMPTY_HTML = `<div class="thread-empty" id="threadEmpty">还没有对话。上面挑一个问题，或直接输入。<br>数值全部来自指标接口，可点开卡片核对口径。</div>`;
 
-function bubbleFromHistory(m) {
+function bubbleFromHistory(m, threadId) {
   const meta = m.meta || {};
   return aiBubble({
     headline: m.content,
@@ -1621,10 +1957,12 @@ function bubbleFromHistory(m) {
     facts: meta.facts || [],
     // 专家解读也要回放：现在专家是「对话中」的常驻角色，回看时那段凭空消失会很怪
     expert_views: meta.expert_views || [],
+    // 知识库条目同理：切回历史对话时「依据」不能消失，否则答案就成了没出处的断言
+    knowledge: meta.knowledge || [],
     planner: meta.planner,
     planner_info: { available: !!meta.model, model: meta.model },
     trace: [],
-  });
+  }, { threadId, messageId: m.id });
 }
 
 function renderThread(thread) {
@@ -1636,7 +1974,7 @@ function renderThread(thread) {
   }
   box.innerHTML = msgs.map((m) => m.role === "user"
     ? `<div class="bub-user">${esc(m.content)}</div>`
-    : `<div class="bub-ai">${bubbleFromHistory(m)}</div>`
+    : `<div class="bub-ai" data-mid="${esc(m.id || "")}">${bubbleFromHistory(m, thread.id)}</div>`
   ).join("");
   box.querySelectorAll(".bub-ai").forEach(bindFold);
   box.scrollTop = box.scrollHeight;
@@ -2217,7 +2555,10 @@ async function switchPerson(pid) {
   }
   PID.set(pid);
   $("#idMenu").hidden = true;
+  // 提醒按人算：换身份不刷新，铃铛上还是上一个人的数，点开才发现内容对不上
+  NT.data = null;
   await loadWorkspace();
+  await loadNotify({ silent: true });
   renderIdMenu();
   const p = WS && WS.person;
   toast(p ? `已切换到「${p.name}」：${p.scope}，关注 ${p.count} 项` : "已切换身份");
@@ -2235,6 +2576,13 @@ async function loadWorkspace() {
     renderWatch(d);
     renderFeed(d);
     renderFollow(d);
+    // 收藏状态和关注列表同一个响应。星号点亮、工作台列表都从这里同步，
+    // 免得出现"工作台有、星号没亮"这种两套状态。
+    SAVED.items = (d.saved && d.saved.items) || [];
+    SAVED.ids = new Set(SAVED.items.map((i) => i.id));
+    SAVED.max = (d.saved && d.saved.max) || SAVED.max;
+    renderSaved();
+    syncStars();
   } catch (e) {
     $("#feedList").innerHTML = `<div class="feed-item"><span class="fd muted"></span>
       <span class="ft">工作台数据加载失败：${esc(e.message)}</span></div>`;
@@ -2366,6 +2714,82 @@ async function saveWatch(codes, msg) {
 function removeWatch(code) {
   const codes = (WS && WS.watch ? WS.watch : []).map((c) => c.code).filter((c) => c !== code);
   return saveWatch(codes, "已取消关注");
+}
+
+/* ---------- 收藏的问答 ----------
+   收藏的是**原文那一条消息**，不是「这个问题的答案」这个概念：id 就是 message_id，
+   点开回到原会话原位。所以这里的每一次点击都要带 thread_id，少一个就只能存文字，
+   存文字等于收藏了一条无法核对的摘要 —— 这个项目的底线是每条结论都能回到出处。 */
+function syncStars() {
+  document.querySelectorAll("[data-star]").forEach((b) => {
+    const on = SAVED.ids.has(b.dataset.star);
+    b.classList.toggle("on", on);
+    b.textContent = on ? "★" : "☆";
+    b.title = on ? "已收藏，点击取消" : "收藏到「我的关注」";
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+
+async function setSaved(mid, tid, want) {
+  if (!mid) return;
+  try {
+    const res = await fetch("/api/saved", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      body: JSON.stringify(want ? { thread_id: tid, message_id: mid } : { action: "remove", message_id: mid }),
+    });
+    const d = await res.json();
+    if (!res.ok || !d.ok) throw new Error(d.error || "操作失败");
+    SAVED.items = d.items || [];
+    SAVED.ids = new Set(SAVED.items.map((i) => i.id));
+    SAVED.max = d.max || SAVED.max;
+    syncStars();
+    renderSaved();
+    toast(want ? "已收藏到「我的关注」" : "已取消收藏");
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+function toggleSaved(btn) {
+  const mid = btn.dataset.star;
+  return setSaved(mid, btn.dataset.tid, !SAVED.ids.has(mid));
+}
+
+function renderSaved() {
+  const box = $("#savedBox");
+  if (!box) return;
+  const items = SAVED.items || [];
+  // 空的时候整块隐藏：不留「还没有收藏」的占位，和专家选择器同一个口径
+  box.hidden = !items.length;
+  $("#savedCount").textContent = items.length ? `${items.length} / ${SAVED.max}` : "";
+  const nameOf = (code) => {
+    const hit = ((WS && WS.watch) || []).find((k) => k.code === code) ||
+      ((WS && WS.catalog) || []).find((m) => m.code === code);
+    return hit ? hit.name : code;
+  };
+  $("#savedList").innerHTML = items.map((it) => `
+    <div class="sv-item" data-svthread="${esc(it.thread_id)}" data-svmid="${esc(it.id)}" title="点开回到那条回答">
+      <div class="sv-q">${esc(it.question || it.thread_title || "（没有提问）")}</div>
+      <div class="sv-a">${esc(it.headline || "")}</div>
+      <div class="sv-meta">
+        ${(it.codes || []).map((c) => `<span class="sv-code" title="${esc(c)}">${esc(nameOf(c))}</span>`).join("")}
+        <span class="sv-at">收藏于 ${esc(it.at || "")}</span>
+      </div>
+      <span class="sv-rm" data-unsave="${esc(it.id)}" data-tid="${esc(it.thread_id)}" role="button" title="取消收藏">✕</span>
+    </div>`).join("");
+}
+
+async function jumpToSaved(tid, mid) {
+  if (!tid) return;
+  if (tid !== THREAD) await openThread(tid);
+  const el = document.querySelector(`#thread .bub-ai[data-mid="${mid}"]`);
+  if (!el) return toast("这条回答已经不在了");
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  el.classList.remove("flash");
+  void el.offsetWidth;  // 强制回流，连点两次也能重新触发动画
+  el.classList.add("flash");
+  setTimeout(() => el.classList.remove("flash"), 1800);
 }
 
 function openWatchPicker() {
@@ -2572,6 +2996,293 @@ async function saveLayout() {
    勾选之后才进督办台账。不要为了"顺手"把这两步合成一步。 */
 let MT = { list: [], stats: {}, units: [], model_ready: false, current: null, sel: new Set() };
 
+/* ---------------- 消息提醒 ----------------
+   三件事分开做，混在一起会互相拖累：
+   - 站内信：/api/notify 现算现取，打开就有，不依赖任何通道；
+   - 桌面通知：浏览器授权后才弹，只在「新出现的未读」上弹一次（localStorage 记已弹 id）；
+   - 外发：配置在服务端，页面只显示「送到没有」和最后一次真实结果。
+
+   节奏一律不由前端判断。哪条该提醒、隔多久再提醒，全在 core/notify.py 的 RULES 里 ——
+   两边各写一份，就会出现「面板说今天只提醒一次、系统弹了三次」，用户只会把通知关掉。
+   另外站内信按人算（各看各的），外发按单位算（全局一次），所以 `delivery` 由后端给，前端不自己推。 */
+const NT = { data: null, timer: null };
+const NT_POPPED = "ocgov.nt.popped";
+const NT_LEVEL = { urgent: "紧急", high: "重要", normal: "留意", low: "提示" };
+const NT_REF = { oversight: "台账", meeting: "会议记录", metric: "指标口径", period: "统计期次" };
+
+function openNtModal() {
+  $("#ntModal").classList.add("on");
+  if (!NT.data) $("#ntList").innerHTML = `<div class="nt-empty">正在读取提醒…</div>`;
+  loadNotify({ silent: true });
+}
+function closeNtModal() { $("#ntModal").classList.remove("on"); }
+
+function ntSeen() {
+  try {
+    const v = JSON.parse(localStorage.getItem(NT_POPPED) || "[]");
+    return new Set(Array.isArray(v) ? v : []);
+  } catch (e) {
+    return new Set();
+  }
+}
+
+async function loadNotify(opts = {}) {
+  let d;
+  try {
+    const res = await fetch("/api/notify", { headers: { "X-Person-Id": PID.get() } });
+    d = await res.json();
+    if (!res.ok || !d.ok) throw new Error(d.error || "读取失败");
+  } catch (e) {
+    if ($("#ntModal").classList.contains("on")) $("#ntList").innerHTML = `<div class="nt-empty">读取失败：${esc(e.message)}</div>`;
+    return;
+  }
+  const first = !NT.data;
+  NT.data = d;
+  ntBadge(d);
+  if ($("#ntModal").classList.contains("on")) ntRender();
+  // 首次进页面不炸系统弹窗：把当前这批记为「已经知道」，之后只弹真正新出现的
+  if (first) ntPrime(d);
+  else if (!opts.silent) ntPop(d);
+}
+
+function ntPrime(d) {
+  const seen = ntSeen();
+  (d.notes || []).forEach((n) => seen.add(n.id));
+  try { localStorage.setItem(NT_POPPED, JSON.stringify([...seen].slice(-400))); } catch (e) {}
+}
+
+function ntBadge(d) {
+  const b = $("#ntBadge");
+  if (!b) return;
+  const n = d.unread || 0;
+  b.hidden = n === 0;
+  b.textContent = n > 99 ? "99+" : String(n);
+  b.title = `${n} 条未读提醒`;
+}
+
+function ntPop(d) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  const h = new Date().getHours();
+  if (h >= 22 || h < 7) return; // 静默时段不弹：半夜亮屏比不提醒更烦
+  const seen = ntSeen();
+  const fresh = (d.notes || []).filter((n) => !n.read && !seen.has(n.id)).slice(0, 3);
+  fresh.forEach((n) => {
+    try {
+      const t = new Notification(`【${n.rule_label}】${n.title}`, { body: n.body, tag: n.id });
+      t.onclick = () => { window.focus(); ntOpen(n); t.close(); };
+      seen.add(n.id);
+    } catch (e) {}
+  });
+  if (fresh.length) {
+    try { localStorage.setItem(NT_POPPED, JSON.stringify([...seen].slice(-400))); } catch (e) {}
+  }
+}
+
+function ntDelivery(n, ch) {
+  if (n.delivery !== "external") return "站内 · 本机可见";
+  if (ch.mode !== "external") return "需发责任单位 · 未配通道";
+  return "需发责任单位 · 通道已配";
+}
+
+function ntItem(n) {
+  const ch = NT.data ? NT.data.channels : {};
+  const refName = NT_REF[n.ref.type] || "来源";
+  const refId = n.ref.type === "oversight" ? ` ${esc(n.ref.id)}` : "";
+  return `<div class="nt-item lv-${esc(n.level)} ${n.read ? "read" : ""}" data-ntid="${esc(n.id)}">
+    <div class="nt-main">
+      <div class="nt-hd">
+        <span class="nt-rule lv-${esc(n.level)}">${esc(n.rule_label)}</span>
+        <span class="nt-title">${esc(n.title)}</span>
+      </div>
+      <div class="nt-text">${esc(n.body)}</div>
+      <div class="nt-why">${esc(n.why)}</div>
+      <div class="nt-foot">
+        <span class="nt-dot ${n.read ? "" : "on"}"></span><span>${n.read ? "已读" : "未读"}</span>
+        <span class="nt-sep">·</span><span>${esc(n.at || "—")}</span>
+        <span class="nt-sep">·</span><span>${ntDelivery(n, ch)}</span>
+        <span class="nt-sep">·</span><span>${refName}${refId}</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+function ntRender() {
+  const d = NT.data;
+  if (!d) return;
+  $("#ntUrgent").textContent = d.urgent;
+  $("#ntTotal").textContent = d.total;
+  $("#ntUnread").textContent = d.unread;
+
+  const nx = $("#ntNext");
+  if (d.next) {
+    nx.hidden = false;
+    nx.innerHTML = `<b>${esc(d.next.at)}</b>　下一次主动提醒：${esc(d.next.label)}`;
+  } else {
+    nx.hidden = true;
+  }
+
+  $("#ntList").innerHTML = d.notes.length
+    ? d.notes.map(ntItem).join("")
+    : `<div class="nt-empty">今天没有需要提醒的事。<br>台账时限、会议时间、指标披露日都会自动变成提醒 —— 不用手工加。</div>`;
+
+  $("#ntRuleBody").innerHTML = `
+    <div>${esc(d.rule)}</div>
+    <table class="nt-tbl">
+      <tr><th style="width:44%">什么时候</th><th>提醒什么</th><th style="width:62px">级别</th></tr>
+      ${d.rules.map((r) => `<tr><td>${esc(r.when)}</td><td>${esc(r.label)}</td><td>${esc(NT_LEVEL[r.level] || r.level)}</td></tr>`).join("")}
+    </table>
+    <div style="margin-top:7px;color:var(--muted)">口径：${esc(d.basis)}　·　同一件事每天只提醒一次，第二天没办会再出现；只有「紧急」和「重要」会外发，其余留在面板里。</div>`;
+
+  const c = d.channels;
+  const desktop = "Notification" in window && Notification.permission === "granted";
+  const chan = (nm, on, ok, text) => `<div class="nt-chan"><span class="nm">${nm}</span><span class="st">${text}</span>${
+    !on
+      ? '<span class="nt-idle">未启用</span>'
+      : ok === true
+        ? '<span class="nt-ok">上次成功</span>'
+        : ok === false
+          ? '<span class="nt-bad">上次失败</span>'
+          : '<span class="nt-idle">尚未发送</span>'
+  }</div>`;
+  $("#ntChanBody").innerHTML = `
+    ${chan("站内信", true, true, "打开工作台就能看到，不依赖任何通道")}
+    ${chan("桌面通知", desktop, null, desktop ? "已授权，页面开着时新提醒会弹出来" : "未授权，需要点右上角「开启桌面通知」")}
+    ${chan("群机器人", c.webhook.configured, c.webhook.ok, c.webhook.configured ? `${esc(c.webhook.target)}（${esc(c.webhook.format)}）` : "未配置 webhook")}
+    ${chan("邮件", c.smtp.configured, c.smtp.ok, c.smtp.configured ? esc(c.smtp.target) : "未配置 SMTP")}
+    <div style="margin:7px 0 0;color:var(--muted)">${esc(c.note)}</div>
+    <div style="margin:5px 0 0;color:var(--faint);font-size:10px">
+      静默 ${esc((c.quiet_hours || []).join("–") || "未设")}　·　日限额 ${c.daily_limit} 条　·　${c.workdays_only ? "周末只发紧急" : "周末照常"}
+    </div>
+    ${c.mode === "external" ? `<div style="display:flex;gap:6px;margin-top:9px"><button class="mini" id="ntTestHook">测试群机器人</button><button class="mini" id="ntTestMail">测试邮件</button></div>` : ""}
+    <div style="margin-top:9px">贴到 <span class="mono">config/notify.json</span> 后重启服务生效（该文件已 gitignore，webhook key 不入库）：</div>
+    <pre class="nt-pre">${esc(c.template || "")}</pre>
+    <div style="margin-top:6px"><button class="mini" id="ntCopyCfg">复制配置模板</button></div>`;
+
+  const btn = $("#ntDesktop");
+  btn.textContent = desktop ? "桌面通知已开启" : "开启桌面通知";
+  btn.disabled = desktop;
+}
+
+function ntOpen(n) {
+  const r = n.ref || {};
+  if (!n.read) ntRead([n.id]);
+  closeNtModal();
+  if (r.type === "oversight") return openOversight(r.id);
+  if (r.type === "meeting") return openMeetModal(r.id);
+  if (r.type === "metric") {
+    switchView("compass");
+    const el = document.querySelector(`[data-metric="${r.id}"]`);
+    if (el) {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.classList.add("nt-flash");
+      setTimeout(() => el.classList.remove("nt-flash"), 1600);
+    }
+    return;
+  }
+  switchView("compass");
+}
+
+async function ntRead(ids, all) {
+  try {
+    const res = await fetch("/api/notify/read", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      body: JSON.stringify(all ? { all: true } : { ids }),
+    });
+    const d = await res.json();
+    if (!res.ok || !d.ok) throw new Error(d.error || "标记失败");
+    await loadNotify({ silent: true });
+    return true;
+  } catch (e) {
+    toast(e.message);
+    return false;
+  }
+}
+
+function ntCopyText(text) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); } catch (e) {}
+  ta.remove();
+  return Promise.resolve();
+}
+
+$("#ntClose").onclick = closeNtModal;
+$("#ntModal").onclick = (e) => { if (e.target.id === "ntModal") closeNtModal(); };
+
+$("#ntList").onclick = (e) => {
+  const row = e.target.closest("[data-ntid]");
+  if (!row || !NT.data) return;
+  const n = NT.data.notes.find((x) => x.id === row.dataset.ntid);
+  if (n) ntOpen(n);
+};
+
+$("#ntReadAll").onclick = async () => {
+  if (!NT.data || !NT.data.unread) return toast("没有未读提醒");
+  if (await ntRead(null, true)) toast("已全部标为已读");
+};
+
+$("#ntDispatch").onclick = async () => {
+  const btn = $("#ntDispatch");
+  if (btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = "巡检中…";
+  try {
+    const res = await fetch("/api/notify/dispatch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      body: "{}",
+    });
+    const d = await res.json();
+    toast(d.message || (d.sent ? `已发送 ${d.sent} 条` : "没有需要外发的提醒"));
+    await loadNotify({ silent: true });
+  } catch (e) {
+    toast(`巡检失败：${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "执行一次巡检";
+  }
+};
+
+$("#ntDesktop").onclick = async () => {
+  if (!("Notification" in window)) return toast("这个浏览器不支持桌面通知，换 Chrome / Edge 试试");
+  if (Notification.permission === "granted") return toast("桌面通知已经开着");
+  const p = await Notification.requestPermission();
+  toast(p === "granted" ? "桌面通知已开启：页面开着时，新提醒会弹出来" : "未授权，提醒只在面板里显示");
+  ntRender();
+};
+
+$("#ntChanBody").onclick = async (e) => {
+  const id = e.target.id;
+  if (!id) return;
+  if (id === "ntCopyCfg") {
+    await ntCopyText((NT.data.channels || {}).template || "");
+    return toast("配置模板已复制");
+  }
+  if (id === "ntTestHook" || id === "ntTestMail") {
+    const kind = id === "ntTestMail" ? "smtp" : "webhook";
+    e.target.disabled = true;
+    try {
+      const res = await fetch("/api/notify/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+        body: JSON.stringify({ channel: kind }),
+      });
+      const d = await res.json();
+      toast(d.message || (d.ok ? "测试消息已发送" : "发送失败"));
+      await loadNotify({ silent: true });
+      $("#ntFoldChan").open = true;
+    } finally {
+      e.target.disabled = false;
+    }
+  }
+};
+
 /* ---------------- AI 日程 ----------------
    数据全部来自 /api/schedule（服务端按身份算好）。前端只做两件事：
    1. 把事件按日期摆成时间线；
@@ -2586,6 +3297,382 @@ function openCalModal() {
   refreshCal();
 }
 function closeCalModal() { $("#calModal").classList.remove("on"); }
+
+/* ---------------- 材料助手 ----------------
+   两段式生成：先用规则版秒出纸面，模型版到了再替换「下一步」一节。
+   材料本身是确定的（数字和事项都来自服务端），只有那一节会变，所以不需要转圈等模型。 */
+const DC = { opt: null, cfg: null, doc: null, seq: 0, busy: false, pid: null };
+
+function dcDefaults(opt) {
+  const preset = opt.presets[0];
+  return {
+    kind: preset.id,
+    period: opt.default_period,
+    sections: preset.sections.slice(),
+    codes: null, // null = 让后端替我挑；数组 = 我自己挑的（空数组表示一项都不要）
+    meeting_id: (opt.meetings[0] || {}).id || null,
+  };
+}
+
+function dcPreset() {
+  return (DC.opt.presets.find((p) => p.id === DC.cfg.kind) || DC.opt.presets[0]);
+}
+
+function dcRenderSide() {
+  const o = DC.opt, c = DC.cfg;
+  const preset = dcPreset();
+  const secs = c.sections || preset.sections;
+  const max = o.max_metrics || 12;
+
+  const kinds = o.presets.map((p) => `
+    <button class="dc-kind ${p.id === c.kind ? "on" : ""}" data-dckind="${esc(p.id)}">
+      <b>${esc(p.label)}</b><span>${esc(p.hint)}</span>
+    </button>`).join("");
+
+  const periods = o.periods.map((p) => `<option value="${esc(p.value)}" ${p.value === c.period ? "selected" : ""}>${esc(p.label)}</option>`).join("");
+
+  const checks = o.sections.map((s) => `
+    <label><input type="checkbox" data-dcsec="${esc(s.id)}" ${secs.includes(s.id) ? "checked" : ""}>${esc(s.name)}</label>`).join("");
+
+  const eff = new Set(dcEffectiveCodes());
+  const pills = o.metrics.map((m) => `
+    <button class="dc-pill ${eff.has(m.code) ? "on" : ""}" data-dcmet="${esc(m.code)}" title="${esc(m.department)}·${esc(m.definition)}">${esc(m.name)}</button>`).join("");
+
+  const meeting = o.meetings.length
+    ? `<select class="dc-sel" id="dcMeet">${o.meetings.map((m) => `<option value="${esc(m.id)}" ${m.id === c.meeting_id ? "selected" : ""}>${esc(m.title)}（${esc(m.held_at || "时间待定")}）</option>`).join("")}</select>`
+    : `<div class="dc-tip">还没有会议记录，这类材料会退化为工作汇报。</div>`;
+
+  $("#dcSide").innerHTML = `
+    <div><div class="dc-lab"><b>材料类型</b></div><div class="dc-kinds">${kinds}</div></div>
+    <div><div class="dc-lab"><b>指标期次</b><span>只列已披露</span></div><select class="dc-sel" id="dcPeriod">${periods}</select></div>
+    <div id="dcMeetWrap" ${c.kind === "minutes" ? "" : "hidden"}><div class="dc-lab"><b>会议</b></div>${meeting}</div>
+    <div><div class="dc-lab"><b>章节</b><span id="dcSecCount"></span></div><div class="dc-checks">${checks}</div></div>
+    <div><div class="dc-lab"><b>指标</b><span id="dcMetCount"></span></div><div class="dc-pills">${pills}</div></div>
+    <button class="mini dc-go" id="dcGo">重新生成</button>
+    <div class="dc-tip">材料不存档。要留存请「下载 .md」或「打印」，导出的文件里带着每处数字的部门与披露日。</div>
+  `;
+  dcCounts();
+}
+
+function dcEffectiveCodes() {
+  const c = DC.cfg;
+  if (Array.isArray(c.codes)) return c.codes;
+  const used = DC.doc && DC.doc.meta && DC.doc.meta.metric_codes;
+  if (used && used.length) return used;
+  return (DC.opt.default_metrics || []).slice();
+}
+
+function dcRefreshPills() {
+  const eff = new Set(dcEffectiveCodes());
+  document.querySelectorAll("[data-dcmet]").forEach((el) => {
+    el.classList.toggle("on", eff.has(el.dataset.dcmet));
+  });
+  dcCounts();
+}
+
+function dcCounts() {
+  const c = DC.cfg;
+  const secEl = $("#dcSecCount"), metEl = $("#dcMetCount");
+  if (secEl) secEl.textContent = `${(c.sections || []).length} 节`;
+  if (metEl) metEl.textContent = `${dcEffectiveCodes().length} 项`;
+}
+
+function dcTools() {
+  const d = DC.doc;
+  const badge = !d
+    ? ""
+    : d.model && d.model.source === "model"
+      ? `<span class="mbadge ok">「下一步」由模型撰写</span>`
+      : `<span class="mbadge warn">按台账事实生成</span>`;
+  $("#dcTools").innerHTML = `
+    <span class="dt-state">${d ? `${d.blocks.length} 节 · ${esc(d.meta.period_label)} · ${esc(d.meta.generated_at)}` : "尚未生成"}</span>
+    ${badge}
+    <span class="sp"></span>
+    <button class="mini" id="dcCopy" ${d ? "" : "disabled"}>复制 Markdown</button>
+    <button class="mini" id="dcDown" ${d ? "" : "disabled"}>下载 .md</button>
+    <button class="mini" id="dcPrint" ${d ? "" : "disabled"}>打印</button>
+    ${DC.busy ? `<span class="dt-state">生成中…</span>` : ""}
+  `;
+}
+
+function dcTable(cols, rows, cell, widths) {
+  const th = cols.map((c) => `<th>${esc(c)}</th>`).join("");
+  const tr = rows.map((r) => `<tr>${cell(r).map((v) => `<td>${v}</td>`).join("")}</tr>`).join("");
+  const cg = widths ? `<colgroup>${widths.map((w) => `<col style="width:${w}%">`).join("")}</colgroup>` : "";
+  return `<table>${cg}<thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
+}
+
+function dcBlock(b) {
+  const head = `<h2 class="dp-h2">${esc(b.no)}、${esc(b.title)}</h2>`;
+  const lead = b.lead ? `<p class="dp-lead">${esc(b.lead)}</p>` : "";
+  let body = "";
+
+  if (b.kind === "table") {
+    body = dcTable(b.columns.map((c) => c.label), b.rows,
+      (r) => b.columns.map((c) => esc(r[c.k] || "—")), [20, 11, 19, 16, 14, 20]);
+  } else if (b.kind === "oversight") {
+    const stats = `<div class="dp-stats">${b.stats.map((s) =>
+      `<div><b>${esc(s.label)}</b><span class="${esc(s.tone || "muted")}">${esc(s.value)}</span></div>`).join("")}</div>`;
+    const rows = b.rows.length
+      ? dcTable(["事项", "责任单位", "时限", "状态", "风险", "台账编号"], b.rows, (r) => [
+          esc(r.title),
+          esc(r.assignee),
+          esc(r.deadline || "—"),
+          esc(r.status),
+          r.risk ? `<span class="dp-tag ${esc(r.tone)}">${esc(r.risk)}</span>` : "—",
+          esc(r.code || "未落库"),
+        ], [30, 15, 12, 9, 9, 15])
+      : `<div class="dp-note">没有需要单独列出的风险事项。</div>`;
+    const units = b.assignees && b.assignees.length
+      ? `<div class="dp-h2" style="font-size:12.5px">分单位办理情况</div>` +
+        dcTable(["责任单位", "在办", "已办结", "逾期"], b.assignees, (r) => [
+          esc(r.unit), String(r.open), String(r.closed), String(r.overdue),
+        ], [49, 17, 17, 17])
+      : "";
+    body = stats + rows + units;
+  } else if (b.kind === "meeting") {
+    const m = b.meeting;
+    const kv = `<ul class="dp-kv">
+      <li><b>会议</b>：${esc(m.title)}（${esc(m.id)}）</li>
+      <li><b>时间</b>：${esc(m.held_at || "待定")}</li>
+      <li><b>主持人</b>：${esc(m.host || "未填")}</li>
+      <li><b>参会单位</b>：${esc((m.attendees || []).join("、") || "未填")}</li>
+    </ul>`;
+    const rows = b.rows.length
+      ? dcTable(["交办事项", "责任单位", "时限", "状态", "来源"], b.rows, (r) => [
+          esc(r.title), esc(r.assignee), esc(r.deadline || "—"), esc(r.status), esc(r.source || "—"),
+        ], [38, 17, 13, 12, 12])
+      : `<div class="dp-note">这场会没有抽取到交办事项。</div>`;
+    body = kv + rows;
+  } else if (b.kind === "list") {
+    body = dcTable(["会议", "时间", "主持人", "参会单位", "交办", "已落库"], b.rows, (r) => [
+      esc(r.title), esc(r.held_at || "—"), esc(r.host || "—"), esc(r.attendees),
+      String(r.items), String(r.committed),
+    ], [27, 15, 13, 21, 8, 8]);
+  } else if (b.kind === "pending") {
+    body = dcTable(["期次", "预计披露日"], b.rows, (r) => [esc(r.period), esc(r.due)], [55, 45]);
+  } else if (b.kind === "text") {
+    // 一整段，不按句断开：公文里「下一步」是一段话，拆成五行就成了清单
+    body = `<p class="dp-p">${esc(b.text || "")}</p>`;
+  }
+
+  const note = b.note ? `<div class="dp-note">${esc(b.note)}</div>` : "";
+  return `<section>${head}${lead}${body}${note}</section>`;
+}
+
+function dcRenderPaper() {
+  const p = $("#dcPaper"), d = DC.doc;
+  if (!d) {
+    p.className = "doc-paper blank";
+    p.textContent = "左侧选好材料和期次，材料会自动生成。";
+    return;
+  }
+  p.className = "doc-paper";
+  const m = d.meta;
+  const metaLine = m.meeting
+    ? `会议：${esc(m.meeting.title)}（${esc(m.meeting.held_at || "时间待定")}）　｜　范围：${esc(m.scope_text)}<br>指标期次：${esc(m.period_label)}　｜　生成时间：${esc(m.generated_at)}`
+    : `报告期：${esc(m.period_label)}　｜　范围：${esc(m.scope_text)}　｜　生成时间：${esc(m.generated_at)}`;
+  const warns = (d.warnings || []).map((w) => `<div class="dp-warn">${esc(w)}</div>`).join("");
+  const mock = m.mock
+    ? `<div class="dp-mock">演示数据：指标取自内置样例库，未接入真实数据源，不可直接用于对外报送。</div>`
+    : "";
+  const src = (m.sources || []).length
+    ? `<div class="dp-src"><b>资料来源</b>${m.sources.map((s) =>
+        `<div>${esc(s.department)}　${esc(s.report)}　${esc(s.published_at)} 披露</div>`).join("")}</div>`
+    : "";
+  const foot = `<div class="dp-foot">${esc(m.city)}　${esc(m.person.name)}　${esc(m.generated_at)} 生成</div>`;
+
+  p.innerHTML = `
+    <h1 class="dp-title">${esc(m.title)}</h1>
+    <div class="dp-meta">${metaLine}</div>
+    ${mock}${warns}
+    ${d.blocks.map(dcBlock).join("")}
+    ${src}${foot}
+  `;
+  $("#dcWrap").scrollTop = 0;
+}
+
+async function dcPost(payload) {
+  const res = await fetch("/api/briefdoc", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+    body: JSON.stringify(payload),
+  });
+  const d = await res.json();
+  if (!res.ok || !d.ok) throw new Error(d.error || "生成失败");
+  return d;
+}
+
+async function dcGenerate() {
+  const c = DC.cfg;
+  const seq = ++DC.seq;
+  DC.busy = true;
+  dcTools();
+  const base = {
+    kind: c.kind,
+    period: c.period,
+    sections: c.sections,
+    codes: c.codes,
+    meeting_id: c.kind === "minutes" ? c.meeting_id : null,
+  };
+  try {
+    const quick = await dcPost({ ...base, use_model: false });
+    if (seq !== DC.seq) return;
+    DC.doc = quick;
+    dcRenderPaper();
+    dcRefreshPills();
+    dcTools();
+    // 只有选了「下一步」这一节才值得再等模型；没有这一节就别白花一次调用
+    if ((c.sections || []).includes("next")) {
+      const full = await dcPost({ ...base, use_model: true });
+      if (seq !== DC.seq) return;
+      if (full.ok) {
+        DC.doc = full;
+        dcRenderPaper();
+        dcRefreshPills();
+      }
+    }
+  } catch (e) {
+    if (seq === DC.seq) toast(e.message);
+  } finally {
+    if (seq === DC.seq) {
+      DC.busy = false;
+      dcTools();
+    }
+  }
+}
+
+async function openDocModal() {
+  $("#docModal").classList.add("on");
+  const pid = PID.get();
+  if (!DC.opt || DC.pid !== pid) {
+    try {
+      const res = await fetch("/api/briefdoc/options", { headers: { "X-Person-Id": pid } });
+      const d = await res.json();
+      if (!d.ok) throw new Error(d.error || "读取配置失败");
+      DC.opt = d;
+      DC.pid = pid;
+      DC.cfg = dcDefaults(d);
+      DC.doc = null;
+    } catch (e) {
+      toast(e.message);
+      return;
+    }
+  }
+  dcRenderSide();
+  dcTools();
+  if (DC.doc) dcRenderPaper();
+  else {
+    dcRenderPaper(); // 先铺空纸，别让弹窗中间留一块纯白什么都不说
+    dcGenerate();    // 生成不 await：规则版先到，模型版后到，中间不让用户干等
+  }
+}
+
+function closeDocModal() {
+  $("#docModal").classList.remove("on");
+  DC.seq += 1; // 关掉就不再接受迟到的结果，否则会在下次打开时突然换掉纸面
+}
+
+function dcCopyMarkdown() {
+  const text = DC.doc && DC.doc.markdown;
+  if (!text) return;
+  const done = () => toast("Markdown 已复制");
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => dcFallbackCopy(text, done));
+  } else {
+    dcFallbackCopy(text, done);
+  }
+}
+
+function dcFallbackCopy(text, done) {
+  // 内网 http 下 navigator.clipboard 不可用，必须留一条退路
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand("copy");
+    done();
+  } catch (e) {
+    toast("复制失败，请手动下载 .md");
+  }
+  document.body.removeChild(ta);
+}
+
+function dcDownload() {
+  const d = DC.doc;
+  if (!d) return;
+  const blob = new Blob([d.markdown], { type: "text/markdown;charset=utf-8" });
+  const a = document.createElement("a");
+  const day = (d.meta.generated_at || "").slice(0, 10) || "draft";
+  a.href = URL.createObjectURL(blob);
+  a.download = `${d.meta.title}-${day}.md`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(a.href);
+    document.body.removeChild(a);
+  }, 0);
+}
+
+$("#dcSide").onclick = (e) => {
+  if (e.target.id === "dcGo") return dcGenerate();
+  const kind = e.target.closest("[data-dckind]");
+  if (kind) {
+    const preset = DC.opt.presets.find((p) => p.id === kind.dataset.dckind);
+    if (!preset || preset.id === DC.cfg.kind) return;
+    DC.cfg.kind = preset.id;
+    DC.cfg.sections = preset.sections.slice(); // 换骨架就换章节默认值，不沿用上一份
+    DC.cfg.codes = null; // 指标也回到自动：两种材料该看的指标本来就不一样
+    dcRenderSide();
+    return dcGenerate();
+  }
+  const met = e.target.closest("[data-dcmet]");
+  if (met) {
+    const code = met.dataset.dcmet;
+    const eff = dcEffectiveCodes();
+    const has = eff.includes(code);
+    const max = DC.opt.max_metrics || 12;
+    if (!has && eff.length >= max) return toast(`最多 ${max} 项指标`);
+    DC.cfg.codes = has ? eff.filter((x) => x !== code) : [...eff, code];
+    met.classList.toggle("on", !has);
+    dcCounts();
+    return dcGenerate();
+  }
+};
+
+$("#dcSide").onchange = (e) => {
+  if (e.target.id === "dcPeriod") {
+    DC.cfg.period = e.target.value;
+    return dcGenerate();
+  }
+  if (e.target.id === "dcMeet") {
+    DC.cfg.meeting_id = e.target.value;
+    return dcGenerate();
+  }
+  const sec = e.target.closest("[data-dcsec]");
+  if (sec) {
+    const id = sec.dataset.dcsec;
+    const set = new Set(DC.cfg.sections || []);
+    if (sec.checked) set.add(id); else set.delete(id);
+    // 章节顺序按服务端的固定顺序，不跟着点击顺序变
+    DC.cfg.sections = DC.opt.sections.map((s) => s.id).filter((x) => set.has(x));
+    dcCounts();
+    return dcGenerate();
+  }
+};
+
+$("#dcTools").onclick = (e) => {
+  const id = e.target.id;
+  if (id === "dcCopy") return dcCopyMarkdown();
+  if (id === "dcDown") return dcDownload();
+  if (id === "dcPrint") return window.print();
+};
+$("#dcClose").onclick = closeDocModal;
+$("#docModal").onclick = (e) => { if (e.target.id === "docModal") closeDocModal(); };
+
 
 async function refreshCal() {
   const seq = ++CAL.seq;
@@ -2652,14 +3739,13 @@ function calBriefHtml(b, d, pending) {
 
 function calRow(it) {
   const ref = it.ref && it.ref.type ? `${it.ref.type}:${it.ref.id}` : "";
-  const why = (CAL.brief && (CAL.brief.why || {})[it.id]) || it.why;
-  const aiWhy = !!(CAL.brief && CAL.brief.source === "model" && (CAL.brief.why || {})[it.id]);
+  // 先一律按规则渲染，模型简报到了由 applyBrief 覆盖；data-why0 留着原文好回退
   return `<div class="cal-row">
     <div class="cal-t"><b>${it.time ? esc(it.time) : "全天"}</b></div>
-    <div class="cal-card ${esc(it.tone)}${ref ? " link" : ""}" ${ref ? `data-calref="${esc(ref)}"` : ""}>
-      <div class="cal-top"><b>${esc(it.title)}</b><span class="cal-tag ${esc(it.tone)}">${esc(it.kind_label)}</span></div>
+    <div class="cal-card tk-${esc(it.tone)}${ref ? " cal-link" : ""}" ${ref ? `data-calref="${esc(ref)}"` : ""}>
+      <div class="cal-top"><b>${esc(it.title)}</b><span class="cal-tag tk-${esc(it.tone)}">${esc(it.kind_label)}</span></div>
       ${it.sub ? `<div class="cal-sub">${esc(it.sub)}</div>` : ""}
-      <div class="cal-why ${aiWhy ? "ai" : "rule"}" data-calwhy="${esc(it.id)}">${esc(why)}</div>
+      <div class="cal-why rule" data-calwhy="${esc(it.id)}" data-why0="${esc(it.why)}">${esc(it.why)}</div>
     </div>
   </div>`;
 }
@@ -2707,10 +3793,10 @@ function applyBrief() {
   const model = !!CAL.brief && CAL.brief.source === "model";
   document.querySelectorAll("#calBody [data-calwhy]").forEach((el) => {
     const t = why[el.dataset.calwhy];
-    if (!t) return;
-    el.textContent = t;
-    el.classList.toggle("ai", model);
-    el.classList.toggle("rule", !model);
+    const ai = !!t && model;
+    el.textContent = t || el.dataset.why0 || "";
+    el.classList.toggle("ai", ai);
+    el.classList.toggle("rule", !ai);
   });
 }
 
@@ -3231,10 +4317,24 @@ async function boot() {
   if (location.hash === "#meeting") openMeetModal();
   // #oversight 直达督办台账
   if (location.hash === "#oversight") openOversight();
+  // #doc 直达材料助手
+  if (location.hash === "#doc") openDocModal();
+  // #cal 直达 AI 日程（日程按当前身份现算，收藏链接换人也跟着换）
+  if (location.hash === "#cal") openCalModal();
 
   // #ask=问题 可以直接发问 —— 把一个问题作为链接发给同事，打开就有答案
   const preset = location.hash.match(/^#ask=(.+)$/);
   if (preset) ask(decodeURIComponent(preset[1]));
+
+  // 消息提醒：先静默拉一次（只亮铃铛上的未读数，不弹系统通知），
+  // 之后每分钟轮询一次。切到后台就停 —— 后台标签页每分钟发一次请求没有意义，
+  // 回来时补一次，避免"挂着一下午回来还是旧数字"。
+  loadNotify();
+  NT.timer = setInterval(() => { if (!document.hidden) loadNotify(); }, 60000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) loadNotify(); });
+
+  // #notify 直达提醒面板
+  if (location.hash === "#notify") openNtModal();
 }
 
 /* ---------- 板块切换 ---------- */
@@ -3252,6 +4352,15 @@ function switchView(which) {
 document.addEventListener("click", (e) => {
   // 点别处先收起身份菜单（菜单项自己也在 document 上，收起不影响下面的读取）
   if (!e.target.closest("#idMenu") && !e.target.closest("#avatar")) $("#idMenu").hidden = true;
+
+  // 收藏星号 / 收藏夹里的取消与跳转，排在所有委托最前面：
+  // 星号长在答案气泡里，后面「点来源胶囊看口径」那类委托会抢走同一次点击。
+  const starBtn = e.target.closest("[data-star]");
+  if (starBtn) return toggleSaved(starBtn);
+  const svRm = e.target.closest("[data-unsave]");
+  if (svRm) return setSaved(svRm.dataset.unsave, svRm.dataset.tid, false);
+  const svItem = e.target.closest("[data-svthread]");
+  if (svItem) return jumpToSaved(svItem.dataset.svthread, svItem.dataset.svmid);
 
   // 取消关注要排在 [data-metric] 之前：✕ 在卡片内部，否则会被"打开指标抽屉"接走
   const unw = e.target.closest("[data-unwatch]");
@@ -3328,6 +4437,18 @@ document.addEventListener("click", (e) => {
   const ovact = e.target.closest("[data-ovact]");
   if (ovact) return ovAct(ovact.dataset.ovact);
 
+  // 知识库条目：事项跳台账详情，会议跳会议记录
+  const kbref = e.target.closest("[data-kbref]");
+  if (kbref) {
+    const [type, ...rest] = kbref.dataset.kbref.split(":");
+    const id = rest.join(":");
+    // openOversight(id) 是「打开并定位」；showOvItem 只渲染详情、不打开弹窗，
+    // 单独调它会出现「点了没反应」——页面上什么都没变，其实数据已经取回来了
+    if (type === "oversight") return openOversight(id);
+    if (type === "meeting") return openMeetModal(id);
+    return;
+  }
+
   const ovcard = e.target.closest("[data-ovitem]");
   if (ovcard) return showOvItem(ovcard.dataset.ovitem);
 
@@ -3372,7 +4493,9 @@ document.addEventListener("click", (e) => {
   if (tool) {
     if (tool.dataset.tool === "meeting") return openMeetModal();
     if (tool.dataset.tool === "oversight") return openOversight();
+    if (tool.dataset.tool === "doc") return openDocModal();
     if (tool.dataset.tool === "cal") return openCalModal();
+    if (tool.dataset.tool === "bell") return openNtModal();
     return toast(`「${tool.textContent.trim()}」未接入，需要单独的连接器`);
   }
 

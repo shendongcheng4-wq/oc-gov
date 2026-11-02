@@ -39,7 +39,7 @@ import ledger as mt_ledger  # noqa: E402
 import modelcfg  # noqa: E402
 import oversight as ov  # noqa: E402
 import workbench as wb  # noqa: E402
-from mockdata import METRICS, query_metric  # noqa: E402
+from mockdata import DISCLOSURE_DAY, METRICS, query_metric  # noqa: E402
 
 from datetime import date, timedelta  # noqa: E402
 
@@ -524,6 +524,14 @@ def test_experts() -> None:
     check("专家解读不进模型上下文", all("增速偏高" not in m.get("content", "") for m in ctx), str(ctx)[:90])
     chat.delete(th["id"])
 
+    # 前端静态约定：没选人就是空白，不给「不召唤」一个名字；全组叫参谋团。
+    # 这两条是产品口径，改坏了页面照样能跑，只能在这里卡住。
+    html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("默认态不留「不召唤」占位", '>不召唤</b>' not in html and '"不召唤"' not in html, "")
+    check("空态不占位（:empty 隐藏）", ".es-name:empty" in html and ".es-state:empty" in html, "")
+    check("全组叫参谋团", 'name.textContent = "参谋团"' in html and 'item("__all", "团", "参谋团"' in html, "")
+    check("再点一次可取消", "EXP.cur = !eid || EXP.cur === eid ? null : eid" in html, "")
+
 
 def test_meeting() -> None:
     print("[9] 会议助手：引文校验 / 人工认领 / 落督办")
@@ -657,13 +665,334 @@ def test_meeting() -> None:
     check("全部落库后状态为 committed", mt_ledger.get(m["id"])["status"] == "committed", "")
 
 
+def test_knowledge() -> None:
+    """知识库：口径 / 事项 / 会议原文。
+
+    这里最值钱的一条是「引句必须逐字出现在会议原文中」——知识库一旦开始转述，
+    「依据」就变成了第二手说法，和模型编造只差一个自以为是的程度。
+    """
+    print("\n[13] 知识库：口径 / 事项 / 会议原文可核")
+    import ask
+    import knowledge as kb
+    import llm as llm_mod
+    import mockdata as md_mod
+    import people as people_mod
+
+    mayor = people_mod.meta("mayor")
+    bureau = people_mod.meta("bureau")
+
+    # 自己造数据：不依赖前面几个测试留下了什么，单跑这一段也能过
+    today = ov.today()
+    a = ov.create_item(
+        title="知识库测试·生态环境局事项",
+        assignee="市生态环境局",
+        deadline=(today + timedelta(days=6)).isoformat(),
+        standard="有可核验结果",
+    )
+    b = ov.create_item(
+        title="知识库测试·住建局事项",
+        assignee="市住建局",
+        deadline=(today + timedelta(days=4)).isoformat(),
+        standard="有可核验结果",
+    )
+
+    text = (
+        "一、会议议定：由市生态环境局负责，12月28日前完成冬季河道巡查并建立问题台账。\n"
+        "二、会议要求市城管局加快雪天道路清扫预案报备。"
+    )
+    mk = mt_ledger.create(
+        "知识库检索测试会",
+        text,
+        held_at="2026-11-01 09:00",
+        host="市长",
+        attendees=["市生态环境局", "市城管局"],
+    )
+    mt_ledger.save_parse(
+        mk["id"],
+        {
+            "items": [
+                {
+                    "title": "完成冬季河道巡查并建立问题台账",
+                    "assignee": "市生态环境局",
+                    "deadline": "2026-12-28",
+                    "quote": "由市生态环境局负责，12月28日前完成冬季河道巡查并建立问题台账",
+                    "confidence": "high",
+                }
+            ]
+        },
+    )
+
+    idx = kb.index(mayor)
+    kinds = {e["kind"] for e in idx}
+    check("索引覆盖四类来源", kinds == {"metric", "oversight", "meeting", "decision"}, str(sorted(kinds)))
+    no_src = [e["id"] for e in idx if not (e["source"].get("department") and e["source"].get("report"))]
+    check("索引每条都带得出出处", not no_src, str(no_src[:3]))
+
+    # 口径必须是字典原样搬运。知识库一旦「顺一下句子」，纸面和口径说明就对不上，
+    # 而这种不一致在人工核对时几乎查不出来。
+    meta_gy = md_mod.get_metric("GY_VA_GROWTH")
+    ent = next(e for e in idx if e["kind"] == "metric" and e["id"] == "GY_VA_GROWTH")
+    check("口径原样搬运，不是改写", ent["quote"] == meta_gy["definition"], "")
+
+    dec = [e for e in idx if e["kind"] == "decision" and e["id"].startswith(mk["id"])]
+    check("议定事项单独成条", len(dec) == 1, f"实际 {len(dec)}")
+    if dec:
+        check("议定条目带原文引句", bool(dec[0]["quote"]), "")
+        check("引句逐字出现在会议原文中", dec[0]["quote"] in text, dec[0]["quote"])
+
+    # 检索：俗称、短词、无关问题
+    check("俗称能命中（环保局 → 生态环境局）", bool(kb.search("环保局那件事", mayor)), "")
+    check("全称也能命中", bool(kb.search("生态环境局", mayor)), "")
+    check("短查询仍能命中（供暖 只有一个二字组）", bool(kb.search("供暖", mayor)), "")
+    check("只对上一个通用词不算命中", kb.answer("火星基地建设情况", mayor)["refused"], "")
+    check("无关问题不硬凑", kb.answer("今天晚上吃什么", mayor)["refused"], "")
+
+    # 身份收窄：住建局那件只在市长眼里，局长看不到
+    ids_bureau = {e["id"] for e in kb.index(bureau) if e["kind"] == "oversight"}
+    check("知识库按身份收窄", b["item_id"] not in ids_bureau, f"局长索引里有 {b['item_id']}")
+    check("本单位事项在自己索引里", a["item_id"] in ids_bureau, f"局长索引 {sorted(ids_bureau)[:4]}")
+
+    # 回放裁剪
+    hit = kb.search("入河排污口", mayor, 1) or kb.search("河道巡查", mayor, 1)
+    check("构造的会可被检索到", bool(kb.search("河道巡查", mayor)), "")
+    if hit:
+        meta = kb.to_meta(hit)
+        check("回放裁剪去掉 score", "score" not in meta[0], str(sorted(meta[0])))
+        check("回放保留跳转与引句", bool(meta[0].get("ref")) and "quote" in meta[0], str(sorted(meta[0])))
+
+    # 问数分支：什么话术算「问事项」
+    check("事项类话术被识别", ask._wants_matter("环保局那件事办到哪了"), "")
+    check("数值类话术不被误判为事项", not ask._wants_matter("规上工业增加值是多少"), "")
+    check("口径类话术不被误判为事项", not ask._wants_matter("空气质量优良天数比例怎么算"), "")
+
+    # 真跑一次，模型关掉走规则：问的是事项，绝不能答出一个数值
+    orig = llm_mod.available
+    llm_mod.available = lambda: False
+    try:
+        r = ask.ask("河道巡查那件事办到哪了", person_id="mayor")
+    finally:
+        llm_mod.available = orig
+    check("事项类问题走知识库", r.get("intent") == "knowledge", str(r.get("intent")))
+    check("事项类问题不返回数值", not (r.get("facts") or []), str(r.get("facts"))[:80])
+    check("知识库答案带条目", bool(r.get("knowledge")), "")
+
+    # 前端静态约定：类名统一 kb- 前缀（.brand 撞过顶栏 display:flex，代价是一次截图）
+    html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("前端有知识库渲染函数", "function kbBlock(" in html, "")
+    check("前端回放带上知识库条目", "knowledge: meta.knowledge" in html, "")
+    check("知识库卡片样式存在", ".kb-item{" in html and ".kb-kind{" in html, "")
+    check("知识库类名不与既有选择器同名", ".kb-item{" in html and not re.search(r"^\.item\{", html, re.M), "")
+    check("知识库卡片可跳回出处", "data-kbref" in html, "")
+    # showOvItem 只渲染不打开弹窗，用它会出现「点了没反应」
+    check("跳转用 openOversight 而非 showOvItem", 'return openOversight(id)' in html, "")
+
+
+def test_notify() -> None:
+    """消息提醒：只搬运、按天去重、发送失败不影响站内信。
+
+    最要紧的两条：
+    - 每条提醒都能顺着 ref 回到台账 / 会议 / 指标。回不去就是第二份真相；
+    - 外发闸门（静默时段 / 重复批次 / 无通道）真的拦得住，且只发紧急与重要。
+      闸门失灵比不发更糟：群里一天被刷十条，第二周所有人都会把机器人屏蔽掉。
+    """
+    print("[16] 消息提醒")
+    import notify
+
+    now = ov._now()
+    view = notify.build("mayor", now=now)
+    check(
+        "提醒带完整结构",
+        all(k in view for k in ("notes", "groups", "rules", "channels", "unread", "next", "basis")),
+        str(list(view))[:90],
+    )
+    check("提醒带规则表", len(view["rules"]) >= 6, str(len(view["rules"])))
+    check("提醒有内容可测", view["total"] > 0, "种子台账里应至少有一条逾期或临期")
+
+    # 提醒是派生视图：生成一百次也不能改台账。改了就成了第二个写入点。
+    before = {i["id"]: (i["status"], i["progress"]) for i in ov.list_items()}
+    for _ in range(3):
+        notify.build("mayor", now=now)
+    after = {i["id"]: (i["status"], i["progress"]) for i in ov.list_items()}
+    check("生成提醒不改台账", before == after, "")
+
+    orphan = []
+    for n in view["notes"]:
+        r = n["ref"]
+        if r["type"] == "oversight" and ov.detail(r["id"]) is None:
+            orphan.append(n["id"])
+        elif r["type"] == "meeting" and mt_ledger.meeting_get(r["id"]) is None:
+            orphan.append(n["id"])
+        elif r["type"] == "metric" and r["id"] not in METRICS:
+            orphan.append(n["id"])
+    check("每条提醒都能追回出处", not orphan, str(orphan)[:90])
+
+    # 一件事一天只能出现一次：逾期和停滞会同时命中，拆成两条用户得自己对编号
+    ov_ids = [n["ref"]["id"] for n in view["notes"] if n["ref"]["type"] == "oversight"]
+    check("同一事项只提醒一次", len(ov_ids) == len(set(ov_ids)), str(ov_ids)[:90])
+
+    # id 里带日期桶：同一时刻稳定，跨天重来。这就是「每天提醒一次」的实现方式。
+    again = notify.build("mayor", now=now)
+    check("同一时刻 id 稳定", [n["id"] for n in again["notes"]] == [n["id"] for n in view["notes"]], "")
+    tomorrow = notify.build("mayor", now=now + timedelta(days=1))
+    check(
+        "跨天重新提醒",
+        bool({n["id"] for n in tomorrow["notes"]} - {n["id"] for n in view["notes"]}),
+        "第二天没有新 id，说明去重桶没跟着日期走",
+    )
+
+    bureau = notify.build("bureau", now=now)
+    wrong = [
+        n["ref"]["id"]
+        for n in bureau["notes"]
+        if n["ref"]["type"] == "oversight" and (ov.detail(n["ref"]["id"]) or {}).get("assignee") != "市生态环境局"
+    ]
+    check("局长只收到本单位事项", not wrong, str(wrong)[:70])
+
+    if view["notes"]:
+        target = view["notes"][0]["id"]
+        r = notify.mark_read("mayor", [target])
+        check("标已读成功", r.get("ok") is True, str(r)[:70])
+        v2 = notify.build("mayor", now=now)
+        check("已读后未读数减一", v2["unread"] == view["unread"] - 1, f"{view['unread']} -> {v2['unread']}")
+        check("已读不减少提醒条数", v2["total"] == view["total"], f"{view['total']} -> {v2['total']}")
+    check("空 id 不等于全部已读", notify.mark_read("mayor", []).get("ok") is False, "")
+
+    # ── 外发 ──────────────────────────────────────────────────────────
+    os.environ.pop("OCGOV_NOTIFY_WEBHOOK", None)
+    no_chan = notify.dispatch(now=now)
+    check("未配通道只记账不报错", no_chan.get("ok") is True and no_chan.get("skipped") == "no_channel", str(no_chan)[:80])
+
+    os.environ["OCGOV_NOTIFY_WEBHOOK"] = "https://qyapi.example.com/cgi-bin/webhook/send?key=SECRET-KEY-1234"
+    try:
+        quiet = notify.dispatch(now=now.replace(hour=23, minute=10))
+        check("静默时段不外发", quiet.get("skipped") == "quiet_hours", str(quiet)[:70])
+
+        pool: list[dict] = []
+
+        def fake_hook(cfg, text, items):
+            pool.extend(items)
+            return True, ""
+
+        sent = notify.dispatch(now=now, send_hook=fake_hook)
+        check("配通道后能发出", sent.get("sent", 0) > 0 and sent.get("delivered") == ["webhook"], str(sent)[:80])
+        check("只外发紧急与重要", all(n["level"] in notify._EXTERNAL_LEVELS for n in pool), str([n["level"] for n in pool]))
+        check("外发只含督办类", all(n["kind"] == "oversight" for n in pool), str({n["kind"] for n in pool}))
+        check("外发正文带台账编号", "台账编号" in (sent.get("text") or ""), "")
+        check("外发正文不冒充模型结论", "未经模型改写" in (sent.get("text") or ""), "")
+
+        dup = notify.dispatch(now=now, send_hook=fake_hook)
+        check("同批次不重发", dup.get("skipped") == "duplicate", str(dup)[:70])
+
+        def bad_hook(cfg, text, items):
+            return False, "HTTP 403 Forbidden"
+
+        failed = notify.dispatch(now=now, send_hook=bad_hook, force=True)
+        check("发送失败如实返回", failed.get("ok") is False and bool(failed.get("failed")), str(failed)[:80])
+        st = notify.channels_status()
+        check("失败原因记进通道状态", st["webhook"]["ok"] is False and "403" in st["webhook"]["error"], str(st["webhook"])[:90])
+        check("webhook 地址打码", "SECRET-KEY-1234" not in st["webhook"]["target"], st["webhook"]["target"])
+        check("群消息按企微格式", notify.config()["channels"]["webhook"]["format"] == "wecom", "")
+
+        # 发送失败不能连带站内信：提醒还在面板里，这是两件事
+        still = notify.build("mayor", now=now)
+        check("外发失败不影响站内信", still["total"] == view["total"], f"{view['total']} -> {still['total']}")
+        check("未配/失败时如实标注送达", still["channels"]["mode"] == "external", still["channels"]["mode"])
+    finally:
+        os.environ.pop("OCGOV_NOTIFY_WEBHOOK", None)
+
+    # 规则表上写的节奏必须和代码里的分支对得上：文案和实现分家比没有文案更糟
+    src = (ROOT / "core" / "notify.py").read_text(encoding="utf-8")
+    missing = [r["id"] for r in notify.RULES if src.count(f'"{r["id"]}"') < 2]
+    check("每条规则都有生成分支", not missing, str(missing))
+
+    html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("顶栏铃铛接上面板", 'tool.dataset.tool === "bell") return openNtModal' in html, "")
+    check("提醒面板有规则表", "ntRuleBody" in html and "什么时候提醒什么" in html, "")
+    check("未配通道如实标注", "未配通道" in html, "")
+    check("提醒定时轮询", "setInterval" in html and "loadNotify()" in html, "")
+    check("提醒类名统一 nt- 前缀", ".nt-item{" in html and not re.search(r"^\.item\{", html, re.M), "")
+
+
+def test_saved() -> None:
+    """收藏问答：收的是原文那条消息，按人存，删会话要连收藏一起清。
+
+    最要紧的一条是「只认 message_id」：接口拒收前端传的正文，正文一律回 chats 取。
+    否则收藏夹可以塞进任何一句话，"我查过这个数"就成了自说自话。
+    """
+    print("[17] 收藏问答")
+    import saved as sv
+
+    th = chat.create("smoke-saved")
+    chat.append(th["id"], "user", "全市 GDP 是多少？")
+    msg = chat.append(
+        th["id"],
+        "assistant",
+        "2026年1—9月累计，全市地区生产总值为 1,286.5 亿元。",
+        meta={"metric_codes": ["GDP_TOTAL"]},
+    )
+    sv.remove("mayor", msg["id"])
+
+    r = sv.add("mayor", th["id"], msg["id"])
+    check("能收藏一条回答", r.get("ok") is True and r.get("count") == 1, str(r)[:90])
+    item = r.get("item") or {}
+    check("收藏带提问原文", str(item.get("question", "")).startswith("全市 GDP"), str(item.get("question")))
+    check("收藏带回答原文", "1,286.5" in str(item.get("headline")), str(item.get("headline"))[:60])
+    check("收藏记下指标代码", item.get("codes") == ["GDP_TOTAL"], str(item.get("codes")))
+    check("重复收藏幂等", sv.add("mayor", th["id"], msg["id"]).get("duplicate") is True, "")
+    check("收藏按人隔离", len(sv.list_of("bureau")) == 0, str(sv.list_of("bureau"))[:60])
+
+    # 这三条是「不收前端内容」的另一面：只认会话里真有的东西
+    check("拒绝不存在的消息", sv.add("mayor", th["id"], "m_fake")["ok"] is False, "")
+    check("拒绝不存在的会话", sv.add("mayor", "th_fake", msg["id"])["ok"] is False, "")
+    ubad = chat.append(th["id"], "user", "再问一句")
+    check("不能收藏提问", sv.add("mayor", th["id"], ubad["id"])["ok"] is False, "")
+
+    ws = wb.workspace("mayor")
+    check(
+        "工作台带出收藏",
+        ws["saved"]["count"] == 1 and ws["saved"]["items"][0]["id"] == msg["id"],
+        str(ws["saved"])[:90],
+    )
+    check("收藏上限随数据下发", ws["saved"]["max"] == sv.MAX_SAVED, str(ws["saved"].get("max")))
+
+    rm = sv.remove("mayor", msg["id"])
+    check("能取消收藏", rm.get("ok") is True and rm.get("count") == 0 and rm.get("removed") == 1, str(rm)[:70])
+    check("重复取消不报错", sv.remove("mayor", msg["id"]).get("removed") == 0, "")
+
+    # 删会话必须连收藏一起清：只靠 list_of 读时过滤，死条目会一直躺在存储里
+    sv.add("mayor", th["id"], msg["id"])
+    n = sv.purge_thread(th["id"])
+    check("删会话清掉指向它的收藏", n == 1 and sv.list_of("mayor") == [], f"purged={n}")
+
+    # 上限：造 MAX+1 条消息，最后一条必须被拦下
+    th2 = chat.create("smoke-saved-max")
+    ids = [chat.append(th2["id"], "assistant", f"第 {i} 条答案")["id"] for i in range(sv.MAX_SAVED + 1)]
+    th2 = chat.get(th2["id"]) or th2
+    for mid in ids[: sv.MAX_SAVED]:
+        sv.add("mayor", th2["id"], mid)
+    over = sv.add("mayor", th2["id"], ids[-1])
+    check("收藏有上限", over.get("ok") is False and str(sv.MAX_SAVED) in str(over.get("error")), str(over)[:70])
+    sv.purge_thread(th2["id"])
+    chat.delete(th["id"])
+    chat.delete(th2["id"])
+    check("清理后收藏为空", sv.list_of("mayor") == [], str(sv.list_of("mayor"))[:60])
+
+    # 前端静态约定：星号挂在答案上，且只在拿到后端消息 id 之后才画
+    html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("答案上有收藏星号", 'class="star-btn' in html and "data-star=" in html, "")
+    check("星号用落库 id 定位", "messageId: f.message_id" in html and "data-mid=" in html, "")
+    check("工作台有收藏区", 'id="savedBox"' in html and "function renderSaved" in html, "")
+    check("收藏能跳回原回答", "function jumpToSaved" in html and "data-svmid" in html, "")
+    check("空收藏不留占位", "savedBox" in html and "box.hidden = !items.length" in html, "")
+
+
 def test_frontend_theme() -> None:
     """前端主题的静态约定。
 
     前端没有浏览器测试，但"深色主题漏定义变量"这类错误是纯文本可查的，
     而它的后果只在深色下露出一块白底 —— 最容易漏测，必须卡在提交前。
     """
-    print("\n[10] 前端主题")
+    print("\n[14] 前端主题")
     html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
     m = re.search(r"<style>(.*?)</style>", html, re.S)
     check("页面含样式块", m is not None, "")
@@ -704,10 +1033,16 @@ def test_frontend_theme() -> None:
             "",
         )
 
+    # AI 日程：tone 必须带 tk- 前缀。`brand` 是顶栏 logo 的全局类（display:flex），
+    # 写成 .cal-card.brand 会把卡片变成横向排列 —— 踩过一次，静态查得出来。
+    check("日程弹窗存在", 'id="calModal"' in html, "")
+    check("日程 tone 有防撞前缀", ".cal-card.tk-brand" in body and ".cal-card.brand{" not in body, "")
+    check("日程按钮已接到弹窗", 'tool.dataset.tool === "cal"' in html, "")
+
 
 def test_http(port: int | None = None) -> None:
     port = port or int(os.environ.get("OCGOV_PORT") or 8090)
-    print(f"[11] HTTP 接口（127.0.0.1:{port}，未启动则跳过）")
+    print(f"[15] HTTP 接口（127.0.0.1:{port}，未启动则跳过）")
     base = f"http://127.0.0.1:{port}"
 
     def get(path: str):
@@ -761,6 +1096,21 @@ def test_http(port: int | None = None) -> None:
     except urllib.error.HTTPError as e:
         check("/api/experts 可读", False, f"code={e.code}")
 
+    # 收藏接口只收 id：拿一个不存在的消息去收必须被拒（这条不落盘，可以天天跑；
+    # 造真实收藏会写进真实 workspaces.json，清理不干净就留下"市长收藏了一条假回答"）
+    try:
+        req = urllib.request.Request(
+            base + "/api/saved",
+            data=json.dumps({"thread_id": "th_nope", "message_id": "m_nope"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            bad_saved = json.loads(r.read().decode("utf-8"))
+        check("/api/saved 拒绝不存在的消息", bad_saved.get("ok") is False, str(bad_saved)[:80])
+    except urllib.error.HTTPError as e:
+        check("/api/saved 拒绝不存在的消息", e.code == 400, f"code={e.code}")
+
     detail = get("/api/metric/GDP_TOTAL")
     check("/api/metric/GDP_TOTAL", detail.get("ok") is True and detail.get("code") == "GDP_TOTAL", "")
 
@@ -769,6 +1119,59 @@ def test_http(port: int | None = None) -> None:
         check("未注册指标返回 404", False, "居然返回了 200")
     except urllib.error.HTTPError as e:
         check("未注册指标返回 404", e.code == 404, f"code={e.code}")
+
+    # ---- 消息提醒 ----
+    try:
+        nt = get("/api/notify")
+        check("/api/notify 返回提醒", nt.get("ok") is True and isinstance(nt.get("notes"), list), str(list(nt))[:80])
+        check("/api/notify 带规则表", len(nt.get("rules") or []) >= 6, str(len(nt.get("rules") or [])))
+        ch = nt.get("channels") or {}
+        check("/api/notify 带通道状态", ch.get("mode") in ("local", "external"), str(ch.get("mode")))
+        # 打码检查只看真实配置字段：template 里那个 key=… 是给人填的占位符
+        check("不返回完整推送地址", "key=" not in ((ch.get("webhook") or {}).get("target") or ""), str((ch.get("webhook") or {}).get("target")))
+
+        ntb = get("/api/notify?person=bureau")
+        check("换身份换提醒范围", (ntb.get("basis") or "") != (nt.get("basis") or ""), f"{nt.get('basis')} / {ntb.get('basis')}")
+
+        # 用「全部标已读」而不是「标一条、断言减一」：后者第二次跑就不成立
+        # （那条早就是已读了），会变成一个只能在新环境通过的假测试。
+        # 但这是打真实服务，写的是真实已读状态 —— 跑完必须还原，否则每跑一次
+        # 提醒就多一层「读过」的假象，用户打开面板发现该看的都灰了。
+        ws_file = ROOT / "data" / "workspaces.json"
+        ws_before = ws_file.read_bytes() if ws_file.exists() else None
+        if ntb.get("notes"):
+            req = urllib.request.Request(
+                base + "/api/notify/read",
+                data=json.dumps({"all": True}).encode("utf-8"),
+                headers={"Content-Type": "application/json", "X-Person-Id": "bureau"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as r:
+                rd = json.loads(r.read().decode("utf-8"))
+            check("提醒可全部标已读", rd.get("ok") is True and rd.get("unread") == 0, str(rd)[:90])
+            check("全部已读不改提醒条数", rd.get("total") == ntb.get("total"), f"{ntb.get('total')} -> {rd.get('total')}")
+        if ws_before is not None:
+            ws_file.write_bytes(ws_before)
+            again = get("/api/notify?person=bureau")
+            check("已读状态跑完还原", again.get("unread") == ntb.get("unread"),
+                  f"{ntb.get('unread')} -> {again.get('unread')}")
+
+        req = urllib.request.Request(
+            base + "/api/notify/dispatch",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            dp = json.loads(r.read().decode("utf-8"))
+        check("巡检接口可用", dp.get("ok") is True and ("skipped" in dp or dp.get("sent", 0) >= 0), str(dp)[:90])
+        check(
+            "未配通道时巡检不假装发送",
+            dp.get("skipped") == "no_channel" or dp.get("sent", 0) > 0,
+            str(dp)[:90],
+        )
+    except urllib.error.HTTPError as e:
+        check("/api/notify 可读", False, f"code={e.code}（服务跑的是旧代码？）")
 
     models = get("/api/models")
     check("/api/models 有 resolved 列表", isinstance(models.get("resolved"), list), str(type(models.get("resolved"))))
@@ -797,6 +1200,115 @@ def test_http(port: int | None = None) -> None:
         with urllib.request.urlopen(dreq, timeout=10) as r:
             deleted = json.loads(r.read().decode("utf-8"))
         check("DELETE /api/threads 删除", deleted.get("ok") is True, str(deleted))
+
+    # ---- AI 日程 ----
+    # 只测读 + 降级简报：brief 传 use_model=false，跑测试不该消耗一次模型调用。
+    sched = get("/api/schedule?days=14")
+    check("/api/schedule 返回日程", sched.get("ok") is True and isinstance(sched.get("groups"), list), str(list(sched.keys()))[:80])
+    check(
+        "/api/schedule 带窗口与口径",
+        (sched.get("window") or {}).get("days") == 14 and bool(sched.get("basis")),
+        str(sched.get("window")),
+    )
+    rows = [i for g in sched.get("groups") or [] for i in g.get("items") or []]
+    stray = [i for i in rows if i.get("ref") and i["ref"].get("type") not in ("oversight", "meeting")]
+    check("日程的跳转只有台账和会议两种", not stray, str(stray[:1]))
+    check(
+        "日程条数等于分组内条数",
+        (sched.get("summary") or {}).get("total") == len(rows),
+        f"{sched.get('summary')} vs {len(rows)}",
+    )
+
+    sched_b = get("/api/schedule?days=14&person=bureau")
+    check(
+        "日程按身份收窄",
+        (sched_b.get("summary") or {}).get("total", 999) <= (sched.get("summary") or {}).get("total", 0),
+        f"{sched_b.get('summary')} / {sched.get('summary')}",
+    )
+    check("日程写明分管口径", "分管单位" in (sched_b.get("basis") or ""), str(sched_b.get("basis")))
+
+    req = urllib.request.Request(
+        base + "/api/schedule/brief",
+        data=json.dumps({"days": 14, "use_model": False}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        brief_res = json.loads(r.read().decode("utf-8"))
+    check(
+        "日程简报可降级",
+        brief_res.get("ok") is True and brief_res.get("degraded") is True and brief_res.get("source") == "rule",
+        str(brief_res)[:120],
+    )
+
+    # ---- 材料助手 ----
+    bopt = get("/api/briefdoc/options")
+    check(
+        "/api/briefdoc/options 返回骨架与期次",
+        bopt.get("ok") is True and len(bopt.get("presets") or []) == 3 and bool(bopt.get("periods")),
+        str(list(bopt.keys()))[:60],
+    )
+
+    req = urllib.request.Request(
+        base + "/api/briefdoc",
+        data=json.dumps({"kind": "bulletin", "use_model": False, "person": "bureau"}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=15) as r:
+        bdoc = json.loads(r.read().decode("utf-8"))
+    check(
+        "POST /api/briefdoc 按身份收窄",
+        bdoc.get("ok") is True and "含协办" in (bdoc.get("meta", {}).get("scope_text") or ""),
+        str(bdoc.get("meta", {}).get("scope_text")),
+    )
+    check("材料的导出 Markdown 可用", str(bdoc.get("markdown") or "").startswith("# "), "")
+    check(
+        "HTTP 入口同样不给模型写数",
+        (bdoc.get("model") or {}).get("source") == "rule",
+        str(bdoc.get("model")),
+    )
+
+    # ---- 知识库 ----
+    kres = get("/api/knowledge?q=%E5%85%A5%E6%B2%B3%E6%8E%92%E6%B1%A1%E5%8F%A3")
+    check(
+        "/api/knowledge 返回条目",
+        kres.get("ok") is True and bool(kres.get("hits")),
+        str(kres.get("total")),
+    )
+    check(
+        "知识库条目带出处与跳转",
+        all((h.get("source") or {}).get("report") and h.get("ref") for h in (kres.get("hits") or [])),
+        "",
+    )
+    check("知识库报告索引规模", int(kres.get("index_size") or 0) >= len(METRICS), str(kres.get("index_size")))
+    empty = get("/api/knowledge?q=%E7%81%AB%E6%98%9F%E5%9F%BA%E5%9C%B0%E5%BB%BA%E8%AE%BE")
+    check("/api/knowledge 无命中返回空而不是硬凑", empty.get("ok") is True and not empty.get("hits"), str(empty.get("total")))
+
+    # 问数接口：事项类问题由知识库接住，且不掺数值
+    req = urllib.request.Request(
+        base + "/api/ask",
+        data=json.dumps({"question": "上次开会定了什么", "person": "mayor"}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=90) as r:
+        kask = json.loads(r.read().decode("utf-8"))
+    check("POST /api/ask 事项问题走知识库", kask.get("intent") == "knowledge", str(kask.get("intent")))
+    check("知识库答案不带数值", not (kask.get("facts") or []), str(kask.get("facts"))[:60])
+    # 这一问会在真实 data/chats.json 里建一个会话。以前没删，跑 N 次测试就攒下 N 条
+    # 同名会话（「上次开会定了什么」）—— 脏数据是测试自己造的，测试就该自己清掉。
+    ktid = kask.get("thread_id")
+    if ktid:
+        try:
+            with urllib.request.urlopen(
+                urllib.request.Request(f"{base}/api/threads/{ktid}", method="DELETE"), timeout=10
+            ) as r:
+                r.read()
+            left = [t for t in (get("/api/threads").get("items") or []) if t.get("id") == ktid]
+            check("问数测试自清会话", not left, f"仍在：{ktid}")
+        except urllib.error.HTTPError as e:
+            check("问数测试自清会话", False, f"code={e.code}")
 
     # ---- 督办台账 ----
     # 这里只测「读」和「被拒绝的写」：真正的流转会往真实台账里追加事件，而事项
@@ -954,6 +1466,244 @@ def test_oversight_flow() -> None:
     check("新建事项时限不能早于今天", bad.get("ok") is False and "早于今天" in str(bad.get("error")), str(bad)[:70])
 
 
+def test_briefdoc() -> None:
+    """材料助手：装配出来的每个数字都要能追回出处，模型只能写「下一步」。
+
+    这里最要紧的一条是「材料里的指标值 == 问数接口的值」：材料是给外面看的，
+    如果它和问数回答对不上，两份东西摆在一张桌上就没人能解释差在哪。
+    """
+    print("\n[12] 材料助手")
+    import ask
+    import briefdoc as doc
+    import llmclient
+
+    md_mod = doc.md
+    today = ov.today()
+    ov.create_item(title="材料测试·生态环境局事项", assignee="市生态环境局", deadline=(today + timedelta(days=5)).isoformat(), standard="有可核验结果")
+    ov.create_item(title="材料测试·住建局事项", assignee="市住建局", deadline=(today + timedelta(days=2)).isoformat(), standard="有可核验结果")
+
+    opt = doc.options("mayor")
+    check(
+        "配置项给出三种骨架",
+        [p["id"] for p in opt["presets"]] == ["report", "minutes", "bulletin"],
+        str([p["id"] for p in opt["presets"]]),
+    )
+    check(
+        "配置项的期次都是已披露的",
+        all(p["value"] in md_mod.available_periods(today) for p in opt["periods"]),
+        str([p["value"] for p in opt["periods"]][:3]),
+    )
+    check("配置项带指标清单", bool(opt["metrics"]), "")
+
+    d = doc.compose("mayor", use_model=False)
+    ids = [b["id"] for b in d["blocks"]]
+    check("工作汇报默认四节", ids == ["metrics", "oversight", "meeting", "next"], str(ids))
+    check("章节用中文序号", [b["no"] for b in d["blocks"]] == ["一", "二", "三", "四"], str([b["no"] for b in d["blocks"]]))
+
+    mb = next(b for b in d["blocks"] if b["id"] == "metrics")
+    mismatch = []
+    for row in mb["rows"]:
+        ref = query_metric(row["code"], d["meta"]["period"], 1, today)
+        if row["value"] != ask.fmt_value(ref["value"], ref["unit"]):
+            mismatch.append((row["code"], row["value"], ask.fmt_value(ref["value"], ref["unit"])))
+    check("材料里的指标值与问数接口一致", not mismatch, str(mismatch[:2]))
+    check("每个指标都写了数据来源", all(r["source"] for r in mb["rows"]), "")
+    check("资料来源带部门和披露日", all(s["published_at"] and s["department"] for s in d["meta"]["sources"]), "")
+    check("指标口径写在备注里", "口径" in (mb.get("note") or ""), str(mb.get("note"))[:40])
+
+    def nums(text: str) -> set[str]:
+        return set(re.findall(r"\d+(?:\.\d+)?", text or ""))
+
+    allowed = nums(d["meta"]["period_label"]) | nums(d["meta"]["generated_at"])
+    for b in d["blocks"]:
+        allowed |= nums(json.dumps(b, ensure_ascii=False))
+    stray = nums(d["markdown"]) - allowed
+    check("Markdown 里的数字都能在结构里找到", not stray, str(sorted(stray))[:80])
+    check("Markdown 带标题与资料来源", d["markdown"].startswith("# ") and "资料来源" in d["markdown"], "")
+    check("演示数据要标明", "未接入真实数据源" in d["markdown"], "")
+
+    d2 = doc.compose("mayor", codes=[], use_model=False)
+    check("指标全不选就不出指标块", not any(b["id"] == "metrics" for b in d2["blocks"]), str([b["id"] for b in d2["blocks"]]))
+    check("指标全不选会给提示", any("没有选择指标" in w for w in d2["warnings"]), str(d2["warnings"]))
+    d3 = doc.compose("mayor", sections=[], use_model=False)
+    check("章节全不选就不出块（不能回落成默认）", d3["blocks"] == [], str([b["id"] for b in d3["blocks"]]))
+
+    pend = md_mod.pending_periods(today)
+    if pend:
+        d4 = doc.compose("mayor", period=pend[0], use_model=False)
+        check("未披露期次退回最新一期", d4["meta"]["period"] == md_mod.latest_available(today), d4["meta"]["period"])
+        check("退回时写明原因", any("披露日" in w for w in d4["warnings"]), str(d4["warnings"]))
+
+    def total_of(pid: str) -> tuple[int, str]:
+        r = doc.compose(pid, kind="bulletin", use_model=False)
+        blk = next(x for x in r["blocks"] if x["id"] == "oversight")
+        return int(blk["stats"][0]["value"].split()[0]), r["meta"]["scope_text"]
+
+    m_total, m_scope = total_of("mayor")
+    b_total, b_scope = total_of("bureau")
+    check("局长看到的台账少于市长", b_total < m_total, f"{b_total} / {m_total}")
+    check("分管口径写明含协办", "含协办" in b_scope, b_scope)
+    check("全市口径不写含协办", "含协办" not in m_scope, m_scope)
+
+    mt_ledger.create(
+        title="材料测试会",
+        text="一、议定：由市生态环境局负责，月底前完成整改。",
+        held_at=f"{today} 09:00",
+        attendees=["市生态环境局"],
+    )
+    latest_mt = mt_ledger.list_meetings()[0]
+    d5 = doc.compose("mayor", kind="minutes", use_model=False)
+    mb2 = next(b for b in d5["blocks"] if b["id"] == "meeting")
+    check("会议材料指向最近一场会", mb2["meeting"]["id"] == latest_mt["id"], f"{mb2['meeting']['id']} vs {latest_mt['id']}")
+    check("会议材料第一块就是会议", [b["id"] for b in d5["blocks"]][0] == "meeting", str([b["id"] for b in d5["blocks"]]))
+    # 参会单位是市生态环境局，它发布的指标要被挑进来；挑不满 4 项才用本人关注补
+    check("会议材料按参会单位挑指标", "AQI_GOOD_DAYS" in d5["meta"]["metric_codes"], str(d5["meta"]["metric_codes"]))
+
+    # 数字闸：模型写的段落里出现材料外的数字就整段丢
+    orig_chat, orig_avail = llmclient.chat_json, llmclient.available
+    llmclient.available = lambda: True
+    try:
+        llmclient.chat_json = lambda *a, **k: {"data": {"next": "明年要把增速做到 12.3% 才算过关。"}}
+        dm = doc.compose("mayor", use_model=True)
+        nb = next(b for b in dm["blocks"] if b["id"] == "next")
+        check("模型编的数字被整段丢弃", dm["model"]["source"] == "rule" and "12.3" not in nb["text"], dm["model"]["note"])
+
+        llmclient.chat_json = lambda *a, **k: {"data": {"next": "字" * 300}}
+        dl = doc.compose("mayor", use_model=True)
+        check("模型写过长的段落被丢弃", dl["model"]["source"] == "rule", dl["model"]["note"])
+
+        st = ov.stats()
+        say = f"台账共 {st['total']} 项，先办逾期和临界的。"
+        llmclient.chat_json = lambda *a, **k: {"data": {"next": say}}
+        dok = doc.compose("mayor", use_model=True)
+        nok = next(b for b in dok["blocks"] if b["id"] == "next")
+        check("模型复述材料里的数字可以通过", dok["model"]["source"] == "model" and nok["text"] == say, dok["model"]["note"])
+        check("模型写过之后注释跟着换", "模型" in (nok.get("note") or ""), str(nok.get("note"))[:40])
+    finally:
+        llmclient.chat_json, llmclient.available = orig_chat, orig_avail
+
+    body = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("材料弹窗在页面上", 'id="docModal"' in body and "function openDocModal" in body, "")
+    check("顶栏按钮已接上分发", 'tool.dataset.tool === "doc"' in body, "")
+    m = re.search(r"\.doc-paper\{([^}]*)\}", body)
+    paper_css = m.group(1) if m else ""
+    check("纸张底色写死白纸、不跟随主题", "#fff" in paper_css and "var(--" not in paper_css, paper_css[:60])
+    check("打印样式只保留纸张", "@media print" in body and "visibility:hidden" in body, "")
+
+
+def test_schedule() -> None:
+    """AI 日程：只收已有时间的事、按身份过滤、同日不重复、模型只写话不排期。
+
+    造数是必要的：数据层测试跑在空目录里，没有事项就没有日程。这里造的三条
+    正好覆盖三种形态（待签收 / 今天到期 / 已逾期），会议补一场未来的、一场过去的。
+    """
+    print("\n[11] AI 日程")
+    import schedule as cal
+
+    today = ov.today()
+
+    def mk(title: str, assignee: str, days: int) -> str:
+        r = ov.create_item(title=title, assignee=assignee, deadline=(today + timedelta(days=days)).isoformat(), standard="有可核验结果")
+        assert r.get("ok"), r
+        return r["item_id"]
+
+    mk("日程测试·待签收", "市测试局", 4)
+    mk("日程测试·今天到期", "市测试局", 0)
+    late = mk("日程测试·已逾期", "市测试二局", 1)
+    # 逾期事项不能新建（create_item 会拒），只能建完再改时限——真实系统里就是时间走到了。
+    # 先签收：待签收的动作优先级高于逾期，不签收测出来的会是 sign 而不是 overdue。
+    ov.advance(late, "签收", "市测试二局")
+    ov._ITEMS[late].deadline = (today - timedelta(days=2)).isoformat()
+
+    mt_ledger.create(
+        title="日程测试会",
+        text="议定：由市测试局办理。",
+        held_at=f"{today + timedelta(days=1)} 09:00",
+        host="常务副市长",
+        attendees=["市测试局"],
+    )
+    mt_ledger.create(
+        title="日程测试·昨天的会",
+        text="议定：已办。",
+        held_at=f"{today - timedelta(days=1)} 09:00",
+        attendees=["市测试局"],
+    )
+
+    data = cal.build("mayor", 14)
+    groups = data["groups"]
+    flat = [i for g in groups for i in g["items"]]
+
+    check("日程按日期升序", [g["date"] for g in groups] == sorted(g["date"] for g in groups), "")
+    check("今天永远是第一段", not groups or groups[0]["is_today"] or groups[0]["date"] > today.isoformat(), "")
+    check("待签收进入今天", any(i["kind"] == "sign" and "待签收" in i["title"] for i in flat), "")
+
+    sign_rows = [i for i in flat if "待签收" in i["title"]]
+    check("签收动作与其后时限是两天两条", len(sign_rows) == 2, f"实际 {len(sign_rows)}")
+    check("今天动作那行落在今天", any(i["date"] == today.isoformat() and i["kind"] == "sign" for i in sign_rows), "")
+
+    due_rows = [i for i in flat if "今天到期" in i["title"]]
+    check("当天到期的动作与时限不重复", len(due_rows) == 1, f"实际 {len(due_rows)}")
+
+    over = [i for i in flat if i["kind"] == "overdue" and "已逾期" in i["title"]]
+    check("逾期事项归到今天", bool(over) and over[0]["date"] == today.isoformat(), "")
+    check(
+        "逾期保留原时限",
+        bool(over) and over[0]["extra"].get("origin_deadline") == (today - timedelta(days=2)).isoformat(),
+        str(over[0]["extra"] if over else None),
+    )
+
+    check("已结束的会议不进日程", all("昨天的会" not in i["title"] for i in flat), "")
+    check("未来的会议进日程", any("日程测试会" in i["title"] for i in flat), "")
+
+    # 跳转必须落地：ref 指向的督办/会议真的存在，否则点了会 404
+    bad_refs = [
+        i["ref"]
+        for i in flat
+        if i["ref"]
+        and not ((i["ref"]["type"] == "oversight" and ov.get(i["ref"]["id"])) or (i["ref"]["type"] == "meeting" and mt_ledger.get(i["ref"]["id"])))
+    ]
+    check("每条日程的跳转都指向存在的对象", not bad_refs, str(bad_refs[:2]))
+
+    bureau = cal.build("bureau", 14)
+    bureau_titles = [i["title"] for g in bureau["groups"] for i in g["items"]]
+    check("局长看不到别的单位的事", all("市测试" not in t for t in bureau_titles), str(bureau_titles[:3]))
+    check("局长的日程按分管单位标注口径", bureau["basis"] == "分管单位：市生态环境局", bureau["basis"])
+
+    vm = cal.build("vmayor", 14)
+    vm_titles = [i["title"] for g in vm["groups"] for i in g["items"]]
+    check("常务副市长能看到自己主持的会", any("日程测试会" in t for t in vm_titles), str(vm_titles[:3]))
+    check("无关的会不塞给别人", all("日程测试会" not in t for t in bureau_titles), "")
+
+    disc = cal._next_disclosure(today)
+    check("披露日固定在 10 号", disc.day == DISCLOSURE_DAY, str(disc))
+    check("披露日在今天之后", disc > today, str(disc))
+
+    rule = cal.brief("mayor", 14, use_model=False)
+    check("没有模型时降级为规则排序", rule["degraded"] is True and rule["source"] == "rule", str(rule.get("note")))
+    allowed = {str(data["summary"]["today"]), str(data["summary"]["total"])}
+    for e in flat:
+        allowed |= cal._nums(" ".join([e["title"], e["sub"], e["why"], e["date"], e["time"]]))
+    check("规则简报不引入清单外的数字", not (cal._nums(rule["brief"]) - allowed), rule["brief"])
+
+    # 数字闸：模型写了一个清单里没有的数字（99），整句必须被丢掉
+    real_chat, real_avail = cal.llmclient.chat_json, cal.llmclient.available
+    cal.llmclient.available = lambda: True
+    try:
+        cal.llmclient.chat_json = lambda *a, **k: {"data": {"brief": "今天有 99 件事要办", "why": {}}, "model": "stub"}
+        bad = cal.brief("mayor", 14)
+        check("模型编出来的数字被丢弃", bad["degraded"] is True and "数字" in (bad.get("note") or ""), str(bad.get("note")))
+
+        cal.llmclient.chat_json = lambda *a, **k: {"data": {"brief": "先办逾期那件，会后补报进展。", "why": {}}, "model": "stub"}
+        good = cal.brief("mayor", 14)
+        check("合规简报被采纳", good["degraded"] is False and good["source"] == "model", str(good.get("note")))
+
+        cal.llmclient.chat_json = lambda *a, **k: {"data": {"brief": "今天" + "。" * 90, "why": {}}, "model": "stub"}
+        long = cal.brief("mayor", 14)
+        check("超长简报被丢弃", long["degraded"] is True and "长度" in (long.get("note") or ""), str(long.get("note")))
+    finally:
+        cal.llmclient.chat_json, cal.llmclient.available = real_chat, real_avail
+
+
 def main() -> int:
     print(f"oc-gov 冒烟测试  测试数据目录 {TEST_DATA}")
     test_data_layer()
@@ -966,6 +1716,11 @@ def main() -> int:
     test_experts()
     test_meeting()
     test_oversight_flow()
+    test_schedule()
+    test_briefdoc()
+    test_knowledge()
+    test_notify()
+    test_saved()
     test_frontend_theme()
     test_http()
     print()
