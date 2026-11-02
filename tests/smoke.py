@@ -874,8 +874,13 @@ def test_notify() -> None:
     check("空 id 不等于全部已读", notify.mark_read("mayor", []).get("ok") is False, "")
 
     # ── 外发 ──────────────────────────────────────────────────────────
+    # 静默时段（默认 22:00–07:00）会让所有外发用例变成 quiet_hours，
+    # 用真实时钟跑这套测试，晚上 10 点后必然全红。外发用例固定到当天 10:00，
+    # 静默时段另用 23:10 单独测 —— 两件事由两段代码各自负责。
+    work = now.replace(hour=10, minute=0, second=0, microsecond=0)
+
     os.environ.pop("OCGOV_NOTIFY_WEBHOOK", None)
-    no_chan = notify.dispatch(now=now)
+    no_chan = notify.dispatch(now=work)
     check("未配通道只记账不报错", no_chan.get("ok") is True and no_chan.get("skipped") == "no_channel", str(no_chan)[:80])
 
     os.environ["OCGOV_NOTIFY_WEBHOOK"] = "https://qyapi.example.com/cgi-bin/webhook/send?key=SECRET-KEY-1234"
@@ -889,20 +894,20 @@ def test_notify() -> None:
             pool.extend(items)
             return True, ""
 
-        sent = notify.dispatch(now=now, send_hook=fake_hook)
+        sent = notify.dispatch(now=work, send_hook=fake_hook)
         check("配通道后能发出", sent.get("sent", 0) > 0 and sent.get("delivered") == ["webhook"], str(sent)[:80])
         check("只外发紧急与重要", all(n["level"] in notify._EXTERNAL_LEVELS for n in pool), str([n["level"] for n in pool]))
         check("外发只含督办类", all(n["kind"] == "oversight" for n in pool), str({n["kind"] for n in pool}))
         check("外发正文带台账编号", "台账编号" in (sent.get("text") or ""), "")
         check("外发正文不冒充模型结论", "未经模型改写" in (sent.get("text") or ""), "")
 
-        dup = notify.dispatch(now=now, send_hook=fake_hook)
+        dup = notify.dispatch(now=work, send_hook=fake_hook)
         check("同批次不重发", dup.get("skipped") == "duplicate", str(dup)[:70])
 
         def bad_hook(cfg, text, items):
             return False, "HTTP 403 Forbidden"
 
-        failed = notify.dispatch(now=now, send_hook=bad_hook, force=True)
+        failed = notify.dispatch(now=work, send_hook=bad_hook, force=True)
         check("发送失败如实返回", failed.get("ok") is False and bool(failed.get("failed")), str(failed)[:80])
         st = notify.channels_status()
         check("失败原因记进通道状态", st["webhook"]["ok"] is False and "403" in st["webhook"]["error"], str(st["webhook"])[:90])
@@ -1349,9 +1354,12 @@ def test_http(port: int | None = None) -> None:
         with urllib.request.urlopen(req, timeout=10) as r:
             dp = json.loads(r.read().decode("utf-8"))
         check("巡检接口可用", dp.get("ok") is True and ("skipped" in dp or dp.get("sent", 0) >= 0), str(dp)[:90])
+        # 这条走的是真实服务，用的是服务进程的时钟，改不了它的 now：
+        # 夜里跑会命中默认静默时段（22:00–07:00），skipped 是 quiet_hours。
+        # 两者都表示「一条都没发出去」，断言就问这件事，别绑死其中一个原因。
         check(
             "未配通道时巡检不假装发送",
-            dp.get("skipped") == "no_channel" or dp.get("sent", 0) > 0,
+            dp.get("sent", 0) == 0 and dp.get("skipped") in ("no_channel", "quiet_hours"),
             str(dp)[:90],
         )
     except urllib.error.HTTPError as e:
@@ -2037,8 +2045,54 @@ def test_frontend_sidebar() -> None:
     check("旧「新对话」按钮不再残留", 'id="newChat"' not in html, "")
 
 
+def test_frontend_live() -> None:
+    """页面必须真的跟本地服务说话。
+
+    V3 那份 index.html 是「静态快照」导出：文件头部自带一段 window.fetch 覆盖，
+    把所有 /api/* 换成内联的 SNAP 数据，问答接口直接回一句
+    「这是静态快照，问答需要启动本地服务」。放进服务里跑，页面看着一切正常，
+    实际一个请求都没发出去 —— 问答、材料、督办操作全是死的。
+
+    这类问题浏览器不报错，页面也照常渲染，只能静态卡住。
+    """
+    print("\n[20] 页面直连服务（不许有快照垫片）")
+    html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+
+    check("页面没有覆盖 fetch", "window.fetch =" not in html and "window.fetch=" not in html, "")
+    check("没有静态快照文案", "这是静态快照" not in html and "静态快照模式" not in html, "")
+    check(
+        "问答走真实流式接口",
+        'fetch("/api/ask/stream"' in html and "res.body.getReader()" in html,
+        "",
+    )
+
+    # 页面里写死的接口，后端必须真的认。缺一个（比如当初的 /api/focus）不会白屏：
+    # 页面静默降级或吃 404，只有点开那个弹窗的人才知道坏了。
+    import re
+
+    main_py = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+    routes = set(re.findall(r'path == "(/api/[^"]*)"', main_py))
+    prefixes = set(re.findall(r'path\.startswith\("(/api/[^"]*)"\)', main_py))
+
+    def known(path: str) -> bool:
+        if path in routes or any(path.startswith(x) for x in prefixes):
+            return True
+        # 页面里 "/api/meetings/" + id 这种拼接会留下裸前缀
+        if path.endswith("/"):
+            base = path.rstrip("/")
+            return base in routes or any(r.startswith(path) for r in routes)
+        return False
+
+    calls = set()
+    for m in re.finditer(r"fetch\(\s*[`'\"]([^`'\"]+)[`'\"]", html):
+        url = m.group(1).split("?")[0]
+        if url.startswith("/api/") and "${" not in url:
+            calls.add(url)
+    missing = sorted(c for c in calls if not known(c))
+    check("页面调用的接口后端都实现了", bool(calls) and not missing, ",".join(missing)[:120])
+
+
 def main() -> int:
-    print(f"oc-gov 冒烟测试  测试数据目录 {TEST_DATA}")
     test_data_layer()
     test_alerts()
     test_same_source()
@@ -2058,6 +2112,7 @@ def main() -> int:
     test_attach_entry()
     test_frontend_theme()
     test_frontend_sidebar()
+    test_frontend_live()
     test_http()
     print()
     if FAILS:
