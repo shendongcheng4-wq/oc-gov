@@ -1,6 +1,59 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+<script>
+/* 静态快照：接口响应内联在下面，界面代码与原版一致。
+   写接口一律回 ok —— 这是给人看的快照，不落库也不改数据。 */
+(function () {
+  var SNAP = {"/api/experts": {"ok": true, "experts": [{"id": "economy", "name": "经济参谋", "avatar": "经", "focus": "工业、投资、财政、市场主体", "angle": "先看总量与增速是否匹配年度节奏，再看结构（投资/工业/消费）有没有拖后腿的单项。"}, {"id": "livelihood", "name": "民生参谋", "avatar": "民", "focus": "12345 诉求、就业、民生实事", "angle": "先看群众诉求的办理质量，再看就业与民生实事的兑现进度，注意「办结率高但满意度低」的组合。"}, {"id": "eco", "name": "生态环境参谋", "avatar": "环", "focus": "空气质量、工业排放相关指标", "angle": "把空气质量和工业增速放在一起看：两者同向要警惕，反向要说明代价。"}], "max": 3, "model_ready": true, "rule": "专家只给解读，不报数字；解读里出现数字会被整段丢弃。"}, "/api/models": {"ok": true, "providers": [{"id": "prov_982ee890", "name": "deepseek", "kind": "openai", "base_url": "https://api.deepseek.com/v1", "enabled": true, "note": "从 config/local.env 自动导入", "models": [{"name": "deepseek-chat", "enabled": true, "chat": true, "context_window": null, "max_output_tokens": null, "id": "deepseek-chat"}], "created_at": 1793582990, "updated_at": 1793582990, "has_key": true, "api_key_masked": "sk-5******f899"}], "resolved": [{"ref": "deepseek/deepseek-chat", "provider": "deepseek", "provider_id": "prov_982ee890", "model": "deepseek-chat", "label": "deepseek-chat", "context_window": null, "max_output_tokens": null}], "active": "deepseek/deepseek-chat", "ready": true}, "/api/overview": {"ok": true, "city": "溧阳市", "title": "溧阳市AI市长工作台", "period": "2026年1—9月", "period_label": "当期数据", "disclosed_on": "2026-10-10", "generated_at": "2026-11-02 17:58:46", "kpis": [{"code": "GDP_TOTAL", "name": "地区生产总值", "value": 1286.5, "unit": "亿元", "display": "1,286.5", "yoy_text": "同比 ↑ 5.2%", "yoy_tone": "up", "yoy_why": "按现价总量计算的同比增速", "note": null, "note_why": null, "period_label": "2026年9月", "series": [452.9, 595.4, 738.1, 882.6, 1024.8, 1148.3, 1286.5], "source": {"department": "市统计局", "report": "《本市地区生产总值核算月报》2026年9月", "period": "2026年9月", "api": "GET /api/metrics/GDP_TOTAL"}, "caveats": ["累计口径：年初从 0 起算，12 月为全年数，不做环比。", "总量为现价、增速为不变价，用总量相除算出的增速与公布增速不一致属正常。", "季度核算数据在后续季度可能被修订，以最新一期为准。"]}, {"code": "GY_VA_GROWTH", "name": "规模以上工业增加值增速", "value": 8.9, "unit": "%", "display": "8.9", "yoy_text": "同比 +2.2 pct", "yoy_tone": "up", "yoy_why": "较上年同期的百分点变化", "note": "当月 · 高于年度目标 2.4 pct", "note_why": "年度目标 6.5%", "period_label": "2026年9月", "series": [7.8, 8.2, 7.6, 8.5, 8.0, 7.2, 8.9], "source": {"department": "市统计局", "report": "《本市统计月报》2026年9月", "period": "2026年9月", "api": "GET /api/metrics/GY_VA_GROWTH"}, "caveats": ["口径限定为年主营业务收入 2000 万元及以上的规上企业，不含规下企业与个体户。", "增速为可比价计算，与按现价自行加总的结果会有差异。"]}, {"code": "BUDGET_REV", "name": "一般公共预算收入", "value": 312.8, "unit": "亿元", "display": "312.8", "yoy_text": "同比 ↑ 4.1%", "yoy_tone": "up", "yoy_why": "按现价总量计算的同比增速", "note": null, "note_why": null, "period_label": "2026年9月", "series": [107.4, 143.2, 178.5, 213.6, 248.9, 281.5, 312.8], "source": {"department": "市财政局", "report": "《财政收支月报》2026年9月", "period": "2026年9月", "api": "GET /api/metrics/BUDGET_REV"}, "caveats": ["为地方留成口径，不等于全市组织的财政收入总量。", "非税收入受一次性因素影响较大，单月波动不代表趋势。"]}, {"code": "FAI_GROWTH", "name": "固定资产投资增速", "value": 5.6, "unit": "%", "display": "5.6", "yoy_text": "同比 +0.5 pct", "yoy_tone": "up", "yoy_why": "较上年同期的百分点变化", "note": null, "note_why": null, "period_label": "2026年9月", "series": [5.8, 6.0, 5.5, 5.9, 6.2, 5.8, 5.6], "source": {"department": "市统计局", "report": "《固定资产投资统计月报》2026年9月", "period": "2026年9月", "api": "GET /api/metrics/FAI_GROWTH"}, "caveats": ["累计口径：1 月至当月末累计同比，不做环比。", "统计起点为计划总投资 500 万元以上项目，不含 500 万元以下项目。"]}], "boards": [{"key": "economy", "title": "经济运行", "code": "GY_VA_GROWTH", "metric_name": "规模以上工业增加值增速", "value_display": "8.9%", "sub": "规上工业增加值增速 · 高于年度目标 2.4 pct", "progress": 100.0, "status": "正常", "status_tone": "ok", "status_why": "2026年9月当月增速 8.9%，年度目标 6.5%", "trend": [8.2, 7.6, 8.5, 8.0, 7.2, 8.9], "trend_labels": ["2026年4月", "2026年5月", "2026年6月", "2026年7月", "2026年8月", "2026年9月"], "source": {"department": "市统计局", "report": "《本市统计月报》2026年9月", "period": "2026年9月", "api": "GET /api/metrics/GY_VA_GROWTH"}, "caveats": ["口径限定为年主营业务收入 2000 万元及以上的规上企业，不含规下企业与个体户。", "增速为可比价计算，与按现价自行加总的结果会有差异。"]}, {"key": "invest", "title": "招商引资", "code": "INVEST_SIGNED", "metric_name": "招商引资新签约亿元以上项目数", "value_display": "86 个", "sub": "新签约亿元以上项目 · 完成年度目标 71%", "progress": 71.1, "status": "正常", "status_tone": "ok", "status_why": "年度目标 121 个，1—9 月已完成 86 个（71.1%），时序进度 75%", "trend": [34, 43, 52, 61, 71, 86], "trend_labels": ["2026年4月", "2026年5月", "2026年6月", "2026年7月", "2026年8月", "2026年9月"], "source": {"department": "市投资促进局", "report": "《招商引资月报》2026年9月", "period": "2026年9月", "api": "GET /api/metrics/INVEST_SIGNED"}, "caveats": ["只计已签正式协议的项目，签约到落地开工仍有距离。", "项目数不等于投资额，单个项目体量差异大。"]}, {"key": "project", "title": "重大项目", "code": "FAI_PROGRESS", "metric_name": "市重大项目年度投资完成率", "value_display": "73.9%", "sub": "年度投资完成率 · 时序进度 75%", "progress": 73.9, "status": "预警", "status_tone": "warn", "status_why": "累计完成率 73.9%，低于 1—9 月时序进度 1.1 pct，需关注滞后项目", "trend": [31.8, 40.6, 49.3, 57.1, 65.4, 73.9], "trend_labels": ["2026年4月", "2026年5月", "2026年6月", "2026年7月", "2026年8月", "2026年9月"], "source": {"department": "市发展和改革委员会", "report": "《市重大项目月度调度表》2026年9月", "period": "2026年9月", "api": "GET /api/metrics/FAI_PROGRESS"}, "caveats": ["累计口径：年初从 0 起算，年内逐月递增，不做环比。", "全市完成率为加权值，与各区县完成率直接平均的结果不一致属正常。"]}, {"key": "society", "title": "社会治理", "code": "TZ_12345_CLOSURE", "metric_name": "12345 群众诉求按期办结率", "value_display": "96.2%", "sub": "12345 诉求按期办结率 · 环比 +0.8 pct", "progress": 96.2, "status": "正常", "status_tone": "ok", "status_why": "按期办结率 96.2%，95% 为市级考核基准线", "trend": [96.4, 95.1, 94.6, 96.9, 95.4, 96.2], "trend_labels": ["2026年4月", "2026年5月", "2026年6月", "2026年7月", "2026年8月", "2026年9月"], "source": {"department": "市政务服务和数据管理局（12345 热线中心）", "report": "《12345 热线运行月报》2026年9月", "period": "2026年9月", "api": "GET /api/metrics/TZ_12345_CLOSURE"}, "caveats": ["分母为应办结工单数，不是全部受理量；跨月工单在办结月计入。", "全市数为按工单量加权，不等于各承办单位办结率的简单平均。"]}, {"key": "livelihood", "title": "民生保障", "code": "LIVELIHOOD_DONE", "metric_name": "民生实事完成项数", "value_display": "38 / 45 项", "sub": "民生实事已完成 · 完成率 84%", "progress": 84.4, "status": "正常", "status_tone": "ok", "status_why": "年度 45 项，已验收 38 项，时序进度 75%", "trend": [14, 18, 23, 27, 31, 38], "trend_labels": ["2026年4月", "2026年5月", "2026年6月", "2026年7月", "2026年8月", "2026年9月"], "source": {"department": "市政府办公室（民生实事专班）", "report": "《民生实事项目进度月报》2026年9月", "period": "2026年9月", "api": "GET /api/metrics/LIVELIHOOD_DONE"}, "caveats": ["只计已通过验收的项目，临近完工但未验收的不算完成。", "项数不代表工作量，单个项目规模差异大。"]}], "focus": {"count": 3, "items": [{"title": "小区停车位收费争议诉求集中", "meta": "受理 128 件 · 环比 ↑42%", "tag": "集中", "tone": "warn", "source": "12345 热线 · 市政务服务和数据管理局"}, {"title": "农贸市场周边流动摊贩占道反弹", "meta": "涉及 6 个市场 · 连续 3 日", "tag": "反弹", "tone": "info", "source": "12345 热线 · 市城管局巡查"}, {"title": "某企业欠薪线索涉 37 人", "meta": "9月28日受理 · 已转人社局核查", "tag": "转办", "tone": "muted", "source": "工单 TZ20260928147"}]}, "alerts": [{"id": "DB2026-0027", "title": "高铁东站周边路网配套工程", "assignee": "市住建局", "risk": "逾期", "tag": "已逾期 5 天", "tone": "danger", "status": "办理中", "deadline": "2026-10-28", "remind_count": 2, "why": "已逾期 5 天；12 天无新进展；已催办 2 次"}, {"id": "DB2026-0030", "title": "秋季校园食品安全专项检查", "assignee": "市市场监管局", "risk": "逾期", "tag": "已逾期 1 天", "tone": "danger", "status": "办理中", "deadline": "2026-11-01", "remind_count": 0, "why": "已逾期 1 天"}, {"id": "DB2026-0029", "title": "12345 高频诉求「停车难」专项治理", "assignee": "市城管局", "risk": "临期", "tag": "剩 1 天", "tone": "warn", "status": "待审核", "deadline": "2026-11-03", "remind_count": 0, "why": "距时限还有 1 天"}], "oversight": {"total": 8, "open": 7, "closed": 1, "overdue": 2, "due_soon": 1, "stalled": 2, "on_time_rate": 100.0}, "pending_periods": ["2026-10"], "metric_count": 11, "mock": true}, "/api/workspace": {"ok": true, "city": "溧阳市", "title": "个人工作台", "person": {"id": "mayor", "name": "市长", "avatar": "市", "post": "市长", "scope": "全市", "note": "总量、增速、重大项目、民情", "units": [], "watch": ["GDP_TOTAL", "BUDGET_REV", "TZ_12345_CLOSURE", "FAI_GROWTH", "AQI_GOOD_DAYS", "GY_VA_GROWTH"], "count": 6, "max_watch": 8, "follow": [], "max_follow": 20, "layout": ["watch", "feed", "follow"], "blocks": [{"id": "watch", "name": "我的关注"}, {"id": "feed", "name": "关注动态 · 今日提醒"}, {"id": "follow", "name": "重点注意事项 · 我跟进的"}], "demo": true}, "period": "2026年1—9月", "period_label": "2026年9月", "watch": [{"code": "GDP_TOTAL", "name": "地区生产总值", "value": 1286.5, "unit": "亿元", "display": "1,286.5", "yoy_text": "同比 ↑ 5.2%", "yoy_tone": "up", "yoy_why": "按现价总量计算的同比增速", "note": null, "note_why": null, "period_label": "2026年9月", "series": [452.9, 595.4, 738.1, 882.6, 1024.8, 1148.3, 1286.5], "source": {"department": "市统计局", "report": "《本市地区生产总值核算月报》2026年9月", "period": "2026年9月", "api": "GET /api/metrics/GDP_TOTAL"}, "caveats": ["累计口径：年初从 0 起算，12 月为全年数，不做环比。", "总量为现价、增速为不变价，用总量相除算出的增速与公布增速不一致属正常。", "季度核算数据在后续季度可能被修订，以最新一期为准。"]}, {"code": "BUDGET_REV", "name": "一般公共预算收入", "value": 312.8, "unit": "亿元", "display": "312.8", "yoy_text": "同比 ↑ 4.1%", "yoy_tone": "up", "yoy_why": "按现价总量计算的同比增速", "note": null, "note_why": null, "period_label": "2026年9月", "series": [107.4, 143.2, 178.5, 213.6, 248.9, 281.5, 312.8], "source": {"department": "市财政局", "report": "《财政收支月报》2026年9月", "period": "2026年9月", "api": "GET /api/metrics/BUDGET_REV"}, "caveats": ["为地方留成口径，不等于全市组织的财政收入总量。", "非税收入受一次性因素影响较大，单月波动不代表趋势。"]}, {"code": "TZ_12345_CLOSURE", "name": "12345 群众诉求按期办结率", "value": 96.2, "unit": "%", "display": "96.2", "yoy_text": "同比 +0.3 pct", "yoy_tone": "up", "yoy_why": "较上年同期的百分点变化", "note": null, "note_why": null, "period_label": "2026年9月", "series": [95.8, 96.4, 95.1, 94.6, 96.9, 95.4, 96.2], "source": {"department": "市政务服务和数据管理局（12345 热线中心）", "report": "《12345 热线运行月报》2026年9月", "period": "2026年9月", "api": "GET /api/metrics/TZ_12345_CLOSURE"}, "caveats": ["分母为应办结工单数，不是全部受理量；跨月工单在办结月计入。", "全市数为按工单量加权，不等于各承办单位办结率的简单平均。"]}, {"code": "FAI_GROWTH", "name": "固定资产投资增速", "value": 5.6, "unit": "%", "display": "5.6", "yoy_text": "同比 +0.5 pct", "yoy_tone": "up", "yoy_why": "较上年同期的百分点变化", "note": null, "note_why": null, "period_label": "2026年9月", "series": [5.8, 6.0, 5.5, 5.9, 6.2, 5.8, 5.6], "source": {"department": "市统计局", "report": "《固定资产投资统计月报》2026年9月", "period": "2026年9月", "api": "GET /api/metrics/FAI_GROWTH"}, "caveats": ["累计口径：1 月至当月末累计同比，不做环比。", "统计起点为计划总投资 500 万元以上项目，不含 500 万元以下项目。"]}, {"code": "AQI_GOOD_DAYS", "name": "空气质量优良天数比例", "value": 86.5, "unit": "%", "display": "86.5", "yoy_text": "同比 -0.7 pct", "yoy_tone": "down", "yoy_why": "较上年同期的百分点变化", "note": null, "note_why": null, "period_label": "2026年9月", "series": [72.5, 83.0, 88.5, 76.0, 62.5, 70.0, 86.5], "source": {"department": "市生态环境局", "report": "《环境空气质量月报》2026年9月", "period": "2026年9月", "api": "GET /api/metrics/AQI_GOOD_DAYS"}, "caveats": ["分母为有效监测天数，因设备校准等原因缺测的天数不计入。", "受季节影响显著，冬季取暖期偏低属常态，跨月比较需注意季节性。"]}, {"code": "GY_VA_GROWTH", "name": "规模以上工业增加值增速", "value": 8.9, "unit": "%", "display": "8.9", "yoy_text": "同比 +2.2 pct", "yoy_tone": "up", "yoy_why": "较上年同期的百分点变化", "note": "当月 · 高于年度目标 2.4 pct", "note_why": "年度目标 6.5%", "period_label": "2026年9月", "series": [7.8, 8.2, 7.6, 8.5, 8.0, 7.2, 8.9], "source": {"department": "市统计局", "report": "《本市统计月报》2026年9月", "period": "2026年9月", "api": "GET /api/metrics/GY_VA_GROWTH"}, "caveats": ["口径限定为年主营业务收入 2000 万元及以上的规上企业，不含规下企业与个体户。", "增速为可比价计算，与按现价自行加总的结果会有差异。"]}], "watch_count": 6, "saved": {"count": 3, "max": 24, "items": [{"id": "m_2a9b26396754", "thread_id": "th_7263c173ca4e", "question": "重大项目投资完成率有多少，跟时序进度比怎么样", "headline": "2026年1—9月累计，市重大项目年度投资完成率为 73.9%，同比上升 1.5 个百分点。", "codes": ["FAI_PROGRESS"], "at": "2026-11-02 16:04", "ts": 1793601594, "thread_title": "重大项目投资完成率有多少，跟时序进度比怎么样"},
+        {"id": "m_3c7d51e8a2f9", "thread_id": "th_8a51c9d2e7f4", "question": "今年1-9月全市规上工业增加值增速多少？全年目标完成得怎么样", "headline": "1—9月规上工业增加值同比增长 8.9%，高于年度目标 2.4 个百分点。", "codes": ["GY_VA_GROWTH"], "at": "2026-10-28 10:12", "ts": 1793232720, "thread_title": "今年1-9月全市规上工业增加值增速多少？全年目标完成得怎么样"},
+        {"id": "m_4e8f62b93c1d", "thread_id": "th_9b62da83f1a5", "question": "一般公共预算收入进度如何，序时进度差多少", "headline": "1—9月一般公共预算收入 312.8 亿元，完成预算的 76.2%，快于序时 1.4 个百分点。", "codes": ["BUDGET_REV"], "at": "2026-10-25 15:40", "ts": 1792971600, "thread_title": "一般公共预算收入进度如何，序时进度差多少"}]}, "catalog": [{"code": "GY_VA_GROWTH", "name": "规模以上工业增加值增速", "unit": "%", "display": "8.9", "note": "高于年度目标 2.4 pct", "watched": true}, {"code": "FAI_PROGRESS", "name": "市重大项目年度投资完成率", "unit": "%", "display": "73.9", "note": null, "watched": false}, {"code": "TZ_12345_CLOSURE", "name": "12345 群众诉求按期办结率", "unit": "%", "display": "96.2", "note": null, "watched": true}, {"code": "AQI_GOOD_DAYS", "name": "空气质量优良天数比例", "unit": "%", "display": "86.5", "note": null, "watched": true}, {"code": "UR_RATE", "name": "城镇调查失业率", "unit": "%", "display": "5.1", "note": null, "watched": false}, {"code": "SS_ENTERPRISE", "name": "新增市场主体户数", "unit": "户", "display": "5,610", "note": null, "watched": false}, {"code": "GDP_TOTAL", "name": "地区生产总值", "unit": "亿元", "display": "1,286.5", "note": null, "watched": true}, {"code": "BUDGET_REV", "name": "一般公共预算收入", "unit": "亿元", "display": "312.8", "note": null, "watched": true}, {"code": "FAI_GROWTH", "name": "固定资产投资增速", "unit": "%", "display": "5.6", "note": null, "watched": true}, {"code": "INVEST_SIGNED", "name": "招商引资新签约亿元以上项目数", "unit": "个", "display": "86", "note": "距离年度目标还差 35个", "watched": false}, {"code": "LIVELIHOOD_DONE", "name": "民生实事完成项数", "unit": "项", "display": "38", "note": "距离年度目标还差 7项", "watched": false}], "feed": [{"kind": "oversight", "key": "oversight:DB2026-0027:1af6aebb", "text": "高铁东站周边路网配套工程 · 已逾期 5 天", "label": "临近时限", "tag": "临近时限", "tone": "danger", "source": "市住建局", "code": null, "ov_id": "DB2026-0027", "unread": true}, {"kind": "oversight", "key": "oversight:DB2026-0030:350208ba", "text": "秋季校园食品安全专项检查 · 已逾期 1 天", "label": "临近时限", "tag": "临近时限", "tone": "danger", "source": "市市场监管局", "code": null, "ov_id": "DB2026-0030", "unread": true}, {"kind": "oversight", "key": "oversight:DB2026-0029:3e5d87b3", "text": "12345 高频诉求「停车难」专项治理 · 剩 1 天", "label": "临近时限", "tag": "临近时限", "tone": "warn", "source": "市城管局", "code": null, "ov_id": "DB2026-0029", "unread": true}, {"kind": "oversight", "key": "oversight:DB2026-0033:577be5b8", "text": "入河排污口排查整治 · 交办未签收", "label": "督办动态", "tag": "督办动态", "tone": "info", "source": "市生态环境局", "code": null, "ov_id": "DB2026-0033", "unread": true}, {"kind": "oversight", "key": "oversight:DB2026-0035:337e5a92", "text": "冬季供暖保障预案报备 · 交办未签收", "label": "督办动态", "tag": "督办动态", "tone": "info", "source": "市城管局", "code": null, "ov_id": "DB2026-0035", "unread": true}, {"kind": "period", "key": "period:2026-10:5e094f89", "text": "2026-10 期数据尚未披露，当前展示的是 2026-09 期", "label": "待披露", "tag": "待披露", "tone": "info", "source": "指标接口", "code": null, "ov_id": null, "unread": true}], "unread": 6, "follow": {"count": 6, "items": [{"id": "DB2026-0027", "title": "高铁东站周边路网配套工程", "assignee": "市住建局", "co_assignees": ["市交通运输局", "云山区政府"], "status": "办理中", "risk": "逾期", "risk_reasons": ["已逾期 5 天", "12 天无新进展", "已催办 2 次"], "tone": "danger", "days_left": -5, "progress": 72, "deadline": "2026-10-28", "priority": "重点", "source": "unit"}, {"id": "DB2026-0030", "title": "秋季校园食品安全专项检查", "assignee": "市市场监管局", "co_assignees": ["市教育局"], "status": "办理中", "risk": "逾期", "risk_reasons": ["已逾期 1 天"], "tone": "danger", "days_left": -1, "progress": 96, "deadline": "2026-11-01", "priority": "一般", "source": "unit"}, {"id": "DB2026-0029", "title": "12345 高频诉求「停车难」专项治理", "assignee": "市城管局", "co_assignees": ["市公安局交警支队", "云山区政府"], "status": "待审核", "risk": "临期", "risk_reasons": ["距时限还有 1 天"], "tone": "warn", "days_left": 1, "progress": 100, "deadline": "2026-11-03", "priority": "重点", "source": "unit"}, {"id": "DB2026-0035", "title": "冬季供暖保障预案报备", "assignee": "市城管局", "co_assignees": ["市住建局", "市应急管理局"], "status": "待签收", "risk": "签收超时", "risk_reasons": ["交办超过 24 小时未签收"], "tone": "info", "days_left": 8, "progress": 0, "deadline": "2026-11-10", "priority": "一般", "source": "unit"}, {"id": "DB2026-0033", "title": "入河排污口排查整治", "assignee": "市生态环境局", "co_assignees": ["市水务局"], "status": "待签收", "risk": "签收超时", "risk_reasons": ["交办超过 24 小时未签收"], "tone": "info", "days_left": 18, "progress": 0, "deadline": "2026-11-20", "priority": "重点", "source": "unit"}, {"id": "DB2026-0025", "title": "城市运行管理服务平台数据接入", "assignee": "市大数据局", "co_assignees": ["市城管局", "市交通运输局", "市水务局"], "status": "办理中", "risk": "停滞", "risk_reasons": ["已 13 天没有新进展"], "tone": "info", "days_left": 13, "progress": 45, "deadline": "2026-11-15", "priority": "重点", "source": "unit"}], "total": 7, "normal": 1, "manual": 0, "units": [], "basis": "全市"}, "layout": ["watch", "feed", "follow"], "generated_at": "2026-11-02 17:58:46", "mock": true}, "/api/people": {"ok": true, "people": [{"id": "mayor", "name": "市长", "avatar": "市", "post": "市长", "scope": "全市", "note": "总量、增速、重大项目、民情", "units": []}, {"id": "vmayor", "name": "常务副市长", "avatar": "常", "post": "常务副市长", "scope": "分管经济与项目", "note": "盯投资、工业、财政收支", "units": ["市发改委", "市大数据局", "市住建局"]}, {"id": "bureau", "name": "市生态环境局局长", "avatar": "环", "post": "局长", "scope": "生态环境", "note": "盯空气质量和群众投诉", "units": ["市生态环境局"]}], "current": "mayor", "max_watch": 8, "demo": true}, "/api/notify": {"ok": true, "person": {"id": "mayor", "name": "市长", "post": "市长", "scope": "全市", "demo": true}, "now": "2026-11-02 17:58", "today": "2026-11-02", "total": 6, "unread": 6, "urgent": 2, "notes": [{"id": "ov_overdue:DB2026-0027:2026-11-02", "rule": "ov_overdue", "rule_label": "事项已逾期", "kind": "oversight", "level": "urgent", "level_rank": 0, "to": "unit", "title": "高铁东站周边路网配套工程", "body": "市住建局等 · 原定 2026-10-28 办结，已逾 5 天 · 进度 72%", "why": "逾期事项每个工作日都要有书面进展，否则只能靠催办推动", "when": "逾期后每天一次（不受上班时间限制：已经出事了，不该等到 08:30）", "at": "2026-11-02", "bucket": "2026-11-02", "ref": {"type": "oversight", "id": "DB2026-0027"}, "extra": {"deadline": "2026-10-28", "days_left": -5, "progress": 72}, "read": false, "delivery": "external"}, {"id": "ov_overdue:DB2026-0030:2026-11-02", "rule": "ov_overdue", "rule_label": "事项已逾期", "kind": "oversight", "level": "urgent", "level_rank": 0, "to": "unit", "title": "秋季校园食品安全专项检查", "body": "市市场监管局等 · 原定 2026-11-01 办结，已逾 1 天 · 进度 96%", "why": "逾期事项每个工作日都要有书面进展，否则只能靠催办推动", "when": "逾期后每天一次（不受上班时间限制：已经出事了，不该等到 08:30）", "at": "2026-11-02", "bucket": "2026-11-02", "ref": {"type": "oversight", "id": "DB2026-0030"}, "extra": {"deadline": "2026-11-01", "days_left": -1, "progress": 96}, "read": false, "delivery": "external"}, {"id": "ov_unsigned:DB2026-0035:2026-11-02", "rule": "ov_unsigned", "rule_label": "交办未签收", "kind": "oversight", "level": "high", "level_rank": 1, "to": "unit", "title": "冬季供暖保障预案报备", "body": "市城管局等 · 交办超过 24 小时未签收", "why": "未签收的台账进不了办理状态，等于交办没落地", "when": "交办满 24 小时后每天（08:30 之后）", "at": "2026-11-02 08:30", "bucket": "2026-11-02", "ref": {"type": "oversight", "id": "DB2026-0035"}, "extra": {"issued_deadline": "2026-11-10", "remind_count": 0}, "read": false, "delivery": "external"}, {"id": "ov_unsigned:DB2026-0033:2026-11-02", "rule": "ov_unsigned", "rule_label": "交办未签收", "kind": "oversight", "level": "high", "level_rank": 1, "to": "unit", "title": "入河排污口排查整治", "body": "市生态环境局等 · 交办超过 24 小时未签收 · 已催 1 次", "why": "未签收的台账进不了办理状态，等于交办没落地", "when": "交办满 24 小时后每天（08:30 之后）", "at": "2026-11-02 08:30", "bucket": "2026-11-02", "ref": {"type": "oversight", "id": "DB2026-0033"}, "extra": {"issued_deadline": "2026-11-20", "remind_count": 1}, "read": false, "delivery": "external"}, {"id": "ov_soon:DB2026-0029:D-1", "rule": "ov_soon", "rule_label": "临近时限", "kind": "oversight", "level": "high", "level_rank": 1, "to": "unit", "title": "12345 高频诉求「停车难」专项治理", "body": "市城管局等 · 距时限还有 1 天 · 进度 100%", "why": "临期还有调整余地，逾期之后只能补说明", "when": "到期前 3 天和 1 天各一次", "at": "2026-11-02 08:30", "bucket": "D-1", "ref": {"type": "oversight", "id": "DB2026-0029"}, "extra": {"deadline": "2026-11-03", "days_left": 1, "progress": 100}, "read": false, "delivery": "external"}, {"id": "ov_stall:DB2026-0025:W45", "rule": "ov_stall", "rule_label": "进展停滞", "kind": "oversight", "level": "normal", "level_rank": 2, "to": "unit", "title": "城市运行管理服务平台数据接入", "body": "市大数据局等 · 已 13 天没有新进展 · 进度 45%", "why": "进度数据不动，通常不是没事，是没人报", "when": "停滞满 7 天后每周一提醒一次", "at": "2026-11-02 08:30", "bucket": "W45", "ref": {"type": "oversight", "id": "DB2026-0025"}, "extra": {"idle_days": 13, "progress": 45}, "read": false, "delivery": "inapp"}], "groups": [{"level": "urgent", "label": "需要立刻处理", "count": 2, "items": [{"id": "ov_overdue:DB2026-0027:2026-11-02", "rule": "ov_overdue", "rule_label": "事项已逾期", "kind": "oversight", "level": "urgent", "level_rank": 0, "to": "unit", "title": "高铁东站周边路网配套工程", "body": "市住建局等 · 原定 2026-10-28 办结，已逾 5 天 · 进度 72%", "why": "逾期事项每个工作日都要有书面进展，否则只能靠催办推动", "when": "逾期后每天一次（不受上班时间限制：已经出事了，不该等到 08:30）", "at": "2026-11-02", "bucket": "2026-11-02", "ref": {"type": "oversight", "id": "DB2026-0027"}, "extra": {"deadline": "2026-10-28", "days_left": -5, "progress": 72}, "read": false, "delivery": "external"}, {"id": "ov_overdue:DB2026-0030:2026-11-02", "rule": "ov_overdue", "rule_label": "事项已逾期", "kind": "oversight", "level": "urgent", "level_rank": 0, "to": "unit", "title": "秋季校园食品安全专项检查", "body": "市市场监管局等 · 原定 2026-11-01 办结，已逾 1 天 · 进度 96%", "why": "逾期事项每个工作日都要有书面进展，否则只能靠催办推动", "when": "逾期后每天一次（不受上班时间限制：已经出事了，不该等到 08:30）", "at": "2026-11-02", "bucket": "2026-11-02", "ref": {"type": "oversight", "id": "DB2026-0030"}, "extra": {"deadline": "2026-11-01", "days_left": -1, "progress": 96}, "read": false, "delivery": "external"}]}, {"level": "high", "label": "今天要跟进", "count": 3, "items": [{"id": "ov_unsigned:DB2026-0035:2026-11-02", "rule": "ov_unsigned", "rule_label": "交办未签收", "kind": "oversight", "level": "high", "level_rank": 1, "to": "unit", "title": "冬季供暖保障预案报备", "body": "市城管局等 · 交办超过 24 小时未签收", "why": "未签收的台账进不了办理状态，等于交办没落地", "when": "交办满 24 小时后每天（08:30 之后）", "at": "2026-11-02 08:30", "bucket": "2026-11-02", "ref": {"type": "oversight", "id": "DB2026-0035"}, "extra": {"issued_deadline": "2026-11-10", "remind_count": 0}, "read": false, "delivery": "external"}, {"id": "ov_unsigned:DB2026-0033:2026-11-02", "rule": "ov_unsigned", "rule_label": "交办未签收", "kind": "oversight", "level": "high", "level_rank": 1, "to": "unit", "title": "入河排污口排查整治", "body": "市生态环境局等 · 交办超过 24 小时未签收 · 已催 1 次", "why": "未签收的台账进不了办理状态，等于交办没落地", "when": "交办满 24 小时后每天（08:30 之后）", "at": "2026-11-02 08:30", "bucket": "2026-11-02", "ref": {"type": "oversight", "id": "DB2026-0033"}, "extra": {"issued_deadline": "2026-11-20", "remind_count": 1}, "read": false, "delivery": "external"}, {"id": "ov_soon:DB2026-0029:D-1", "rule": "ov_soon", "rule_label": "临近时限", "kind": "oversight", "level": "high", "level_rank": 1, "to": "unit", "title": "12345 高频诉求「停车难」专项治理", "body": "市城管局等 · 距时限还有 1 天 · 进度 100%", "why": "临期还有调整余地，逾期之后只能补说明", "when": "到期前 3 天和 1 天各一次", "at": "2026-11-02 08:30", "bucket": "D-1", "ref": {"type": "oversight", "id": "DB2026-0029"}, "extra": {"deadline": "2026-11-03", "days_left": 1, "progress": 100}, "read": false, "delivery": "external"}]}, {"level": "normal", "label": "留意", "count": 1, "items": [{"id": "ov_stall:DB2026-0025:W45", "rule": "ov_stall", "rule_label": "进展停滞", "kind": "oversight", "level": "normal", "level_rank": 2, "to": "unit", "title": "城市运行管理服务平台数据接入", "body": "市大数据局等 · 已 13 天没有新进展 · 进度 45%", "why": "进度数据不动，通常不是没事，是没人报", "when": "停滞满 7 天后每周一提醒一次", "at": "2026-11-02 08:30", "bucket": "W45", "ref": {"type": "oversight", "id": "DB2026-0025"}, "extra": {"idle_days": 13, "progress": 45}, "read": false, "delivery": "inapp"}]}], "next": {"at": "2026-11-03 08:30", "label": "明天的到期与临期提醒"}, "channels": {"mode": "local", "webhook": {"enabled": false, "configured": false, "format": "wecom", "target": "", "ok": null, "error": "", "last_at": ""}, "smtp": {"enabled": false, "configured": false, "target": " → ", "ok": null, "error": "", "last_at": ""}, "quiet_hours": ["22:00", "07:00"], "workdays_only": true, "daily_limit": 20, "note": "未配置外发通道：提醒只在本机可见，责任单位收不到。配置方式见「送达配置」", "template": "{\n  \"channels\": {\n    \"webhook\": {\n      \"enabled\": true,\n      \"url\": \"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…\",\n      \"format\": \"wecom\"\n    },\n    \"smtp\": {\n      \"enabled\": false,\n      \"host\": \"smtp.example.gov.cn\",\n      \"port\": 465,\n      \"ssl\": true,\n      \"user\": \"noreply@example.gov.cn\",\n      \"password\": \"…\",\n      \"to\": [\n        \"zhuren@example.gov.cn\"\n      ]\n    }\n  },\n  \"quiet_hours\": [\n    \"22:00\",\n    \"07:00\"\n  ],\n  \"workdays_only\": true,\n  \"daily_limit\": 20\n}"}, "rules": [{"id": "ov_overdue", "kind": "oversight", "label": "事项已逾期", "level": "urgent", "to": "unit", "when": "逾期后每天一次（不受上班时间限制：已经出事了，不该等到 08:30）", "why": "逾期事项每个工作日都要有书面进展，否则只能靠催办推动"}, {"id": "ov_today", "kind": "oversight", "label": "今日到期", "level": "urgent", "to": "both", "when": "办结时限当天 08:30 之后", "why": "今天不到 18:00 反馈，明天就变成逾期"}, {"id": "ov_unsigned", "kind": "oversight", "label": "交办未签收", "level": "high", "to": "unit", "when": "交办满 24 小时后每天（08:30 之后）", "why": "未签收的台账进不了办理状态，等于交办没落地"}, {"id": "ov_soon", "kind": "oversight", "label": "临近时限", "level": "high", "to": "unit", "when": "到期前 3 天和 1 天各一次", "why": "临期还有调整余地，逾期之后只能补说明"}, {"id": "ov_stall", "kind": "oversight", "label": "进展停滞", "level": "normal", "to": "unit", "when": "停滞满 7 天后每周一提醒一次", "why": "进度数据不动，通常不是没事，是没人报"}, {"id": "meet_soon", "kind": "meeting", "label": "会议即将开始", "level": "high", "to": "self", "when": "会议开始前 60 分钟内", "why": "材料、参会人、议题都要在进会场前过一遍"}, {"id": "metric_low", "kind": "metric", "label": "关注指标低于目标", "level": "normal", "to": "self", "when": "新期次数据披露后（每期一次）", "why": "数据已经发布了，低于目标的指标要有人解释"}, {"id": "period_due", "kind": "period", "label": "期次待披露", "level": "low", "to": "self", "when": "披露日前 2 天", "why": "提前知道哪一期还没出，汇报时才不会把旧数当新数"}], "outbox": {"last": null, "sent_today": 0, "history": []}, "basis": "全市（不按单位筛）", "rule": "提醒只从台账状态、会议时间、指标披露里派生，不新增事项；同一件事每天只提醒一次，第二天没办会再出现。", "mock": true}, "/api/oversight": {"ok": true, "items": [{"id": "DB2026-0027", "title": "高铁东站周边路网配套工程", "assignee": "市住建局", "co_assignees": ["市交通运输局", "云山区政府"], "deadline": "2026-10-28", "priority": "重点", "status": "办理中", "progress": 72, "days_left": -5, "idle_days": 12, "remind_count": 2, "risk": "逾期", "risk_rank": 0, "risk_reasons": ["已逾期 5 天", "12 天无新进展", "已催办 2 次"], "last_progress_at": "2026-10-21 10:30", "last_event_at": "2026-10-31 17:00", "allowed_actions": ["反馈进展", "提交办结", "催办"], "source": "市政府第 12 次常务会议定事项", "source_ref": "常务会议纪要〔2026〕12 号 第 7 项"}, {"id": "DB2026-0030", "title": "秋季校园食品安全专项检查", "assignee": "市市场监管局", "co_assignees": ["市教育局"], "deadline": "2026-11-01", "priority": "一般", "status": "办理中", "progress": 96, "days_left": -1, "idle_days": 4, "remind_count": 0, "risk": "逾期", "risk_rank": 0, "risk_reasons": ["已逾期 1 天"], "last_progress_at": "2026-10-29 17:10", "last_event_at": "2026-10-29 17:10", "allowed_actions": ["反馈进展", "提交办结", "催办"], "source": "市政府办专项部署", "source_ref": "专项部署〔2026〕41 号"}, {"id": "DB2026-0029", "title": "12345 高频诉求「停车难」专项治理", "assignee": "市城管局", "co_assignees": ["市公安局交警支队", "云山区政府"], "deadline": "2026-11-03", "priority": "重点", "status": "待审核", "progress": 100, "days_left": 1, "idle_days": 2, "remind_count": 0, "risk": "临期", "risk_rank": 2, "risk_reasons": ["距时限还有 1 天"], "last_progress_at": "2026-10-31 10:10", "last_event_at": "2026-10-31 10:10", "allowed_actions": ["确认办结", "退回", "催办"], "source": "12345 集中诉求分析", "source_ref": "12345 月报〔2026〕10 期"}, {"id": "DB2026-0035", "title": "冬季供暖保障预案报备", "assignee": "市城管局", "co_assignees": ["市住建局", "市应急管理局"], "deadline": "2026-11-10", "priority": "一般", "status": "待签收", "progress": 0, "days_left": 8, "idle_days": 2, "remind_count": 0, "risk": "签收超时", "risk_rank": 3, "risk_reasons": ["交办超过 24 小时未签收"], "last_progress_at": "2026-10-31 15:00", "last_event_at": "2026-10-31 15:00", "allowed_actions": ["签收", "催办"], "source": "市政府办专项部署", "source_ref": "专项部署〔2026〕45 号"}, {"id": "DB2026-0033", "title": "入河排污口排查整治", "assignee": "市生态环境局", "co_assignees": ["市水务局"], "deadline": "2026-11-20", "priority": "重点", "status": "待签收", "progress": 0, "days_left": 18, "idle_days": 3, "remind_count": 1, "risk": "签收超时", "risk_rank": 3, "risk_reasons": ["交办超过 24 小时未签收"], "last_progress_at": "2026-10-30 09:00", "last_event_at": "2026-10-31 16:00", "allowed_actions": ["签收", "催办"], "source": "市政府主要领导批示", "source_ref": "批示件〔2026〕203 号"}, {"id": "DB2026-0025", "title": "城市运行管理服务平台数据接入", "assignee": "市大数据局", "co_assignees": ["市城管局", "市交通运输局", "市水务局"], "deadline": "2026-11-15", "priority": "重点", "status": "办理中", "progress": 45, "days_left": 13, "idle_days": 13, "remind_count": 1, "risk": "停滞", "risk_rank": 4, "risk_reasons": ["已 13 天没有新进展"], "last_progress_at": "2026-10-20 16:00", "last_event_at": "2026-10-26 09:00", "allowed_actions": ["反馈进展", "提交办结", "催办"], "source": "市政府主要领导批示", "source_ref": "批示件〔2026〕187 号"}, {"id": "DB2026-0018", "title": "第二批老旧小区改造项目开工", "assignee": "市住建局", "co_assignees": ["云山区政府", "临江区政府"], "deadline": "2026-09-30", "priority": "重点", "status": "已办结", "progress": 100, "days_left": -33, "idle_days": 37, "remind_count": 0, "risk": "正常", "risk_rank": 90, "risk_reasons": ["已办结"], "last_progress_at": "2026-09-26 09:15", "last_event_at": "2026-09-26 09:15", "allowed_actions": [], "source": "市政府第 9 次常务会议定事项", "source_ref": "常务会议纪要〔2026〕9 号 第 3 项"}, {"id": "DB2026-0031", "title": "重大项目「容缺受理」清单落地", "assignee": "市发改委", "co_assignees": ["市自然资源局", "市生态环境局"], "deadline": "2026-11-30", "priority": "一般", "status": "办理中", "progress": 40, "days_left": 28, "idle_days": 6, "remind_count": 0, "risk": "正常", "risk_rank": 90, "risk_reasons": [], "last_progress_at": "2026-10-27 14:00", "last_event_at": "2026-10-27 14:00", "allowed_actions": ["反馈进展", "提交办结", "催办"], "source": "市政府第 12 次常务会议定事项", "source_ref": "常务会议纪要〔2026〕12 号 第 2 项"}], "stats": {"total": 8, "open": 7, "closed": 1, "by_status": {"待签收": 2, "办理中": 4, "待审核": 1, "已办结": 1}, "by_assignee": {"市住建局": {"在办": 1, "已办结": 1, "逾期": 1}, "市大数据局": {"在办": 1, "已办结": 0, "逾期": 0}, "市城管局": {"在办": 2, "已办结": 0, "逾期": 0}, "市市场监管局": {"在办": 1, "已办结": 0, "逾期": 1}, "市发改委": {"在办": 1, "已办结": 0, "逾期": 0}, "市生态环境局": {"在办": 1, "已办结": 0, "逾期": 0}}, "on_time_closed": 1, "on_time_rate": 100.0, "overdue": 2, "overdue_ids": ["DB2026-0027", "DB2026-0030"], "due_soon": 1, "due_soon_ids": ["DB2026-0029"], "stalled": 2, "stalled_ids": ["DB2026-0025", "DB2026-0027"], "avg_idle_days": 6.0}, "scan": {"scanned_at": "2026-11-02 17:58", "today": "2026-11-02", "window_days": 5, "open_items": 7, "hit_count": 7, "item_count": 6, "buckets": {"逾期": [{"id": "DB2026-0027", "title": "高铁东站周边路网配套工程", "assignee": "市住建局", "co_assignees": ["市交通运输局", "云山区政府"], "deadline": "2026-10-28", "priority": "重点", "status": "办理中", "progress": 72, "days_left": -5, "idle_days": 12, "remind_count": 2, "risk": "逾期", "risk_rank": 0, "risk_reasons": ["已逾期 5 天", "12 天无新进展", "已催办 2 次"], "last_progress_at": "2026-10-21 10:30", "last_event_at": "2026-10-31 17:00", "allowed_actions": ["反馈进展", "提交办结", "催办"], "source": "市政府第 12 次常务会议定事项", "source_ref": "常务会议纪要〔2026〕12 号 第 7 项"}, {"id": "DB2026-0030", "title": "秋季校园食品安全专项检查", "assignee": "市市场监管局", "co_assignees": ["市教育局"], "deadline": "2026-11-01", "priority": "一般", "status": "办理中", "progress": 96, "days_left": -1, "idle_days": 4, "remind_count": 0, "risk": "逾期", "risk_rank": 0, "risk_reasons": ["已逾期 1 天"], "last_progress_at": "2026-10-29 17:10", "last_event_at": "2026-10-29 17:10", "allowed_actions": ["反馈进展", "提交办结", "催办"], "source": "市政府办专项部署", "source_ref": "专项部署〔2026〕41 号"}], "今日到期": [], "临期": [{"id": "DB2026-0029", "title": "12345 高频诉求「停车难」专项治理", "assignee": "市城管局", "co_assignees": ["市公安局交警支队", "云山区政府"], "deadline": "2026-11-03", "priority": "重点", "status": "待审核", "progress": 100, "days_left": 1, "idle_days": 2, "remind_count": 0, "risk": "临期", "risk_rank": 2, "risk_reasons": ["距时限还有 1 天"], "last_progress_at": "2026-10-31 10:10", "last_event_at": "2026-10-31 10:10", "allowed_actions": ["确认办结", "退回", "催办"], "source": "12345 集中诉求分析", "source_ref": "12345 月报〔2026〕10 期"}], "签收超时": [{"id": "DB2026-0033", "title": "入河排污口排查整治", "assignee": "市生态环境局", "co_assignees": ["市水务局"], "deadline": "2026-11-20", "priority": "重点", "status": "待签收", "progress": 0, "days_left": 18, "idle_days": 3, "remind_count": 1, "risk": "签收超时", "risk_rank": 3, "risk_reasons": ["交办超过 24 小时未签收"], "last_progress_at": "2026-10-30 09:00", "last_event_at": "2026-10-31 16:00", "allowed_actions": ["签收", "催办"], "source": "市政府主要领导批示", "source_ref": "批示件〔2026〕203 号"}, {"id": "DB2026-0035", "title": "冬季供暖保障预案报备", "assignee": "市城管局", "co_assignees": ["市住建局", "市应急管理局"], "deadline": "2026-11-10", "priority": "一般", "status": "待签收", "progress": 0, "days_left": 8, "idle_days": 2, "remind_count": 0, "risk": "签收超时", "risk_rank": 3, "risk_reasons": ["交办超过 24 小时未签收"], "last_progress_at": "2026-10-31 15:00", "last_event_at": "2026-10-31 15:00", "allowed_actions": ["签收", "催办"], "source": "市政府办专项部署", "source_ref": "专项部署〔2026〕45 号"}], "停滞": [{"id": "DB2026-0025", "title": "城市运行管理服务平台数据接入", "assignee": "市大数据局", "co_assignees": ["市城管局", "市交通运输局", "市水务局"], "deadline": "2026-11-15", "priority": "重点", "status": "办理中", "progress": 45, "days_left": 13, "idle_days": 13, "remind_count": 1, "risk": "停滞", "risk_rank": 4, "risk_reasons": ["已 13 天没有新进展"], "last_progress_at": "2026-10-20 16:00", "last_event_at": "2026-10-26 09:00", "allowed_actions": ["反馈进展", "提交办结", "催办"], "source": "市政府主要领导批示", "source_ref": "批示件〔2026〕187 号"}, {"id": "DB2026-0027", "title": "高铁东站周边路网配套工程", "assignee": "市住建局", "co_assignees": ["市交通运输局", "云山区政府"], "deadline": "2026-10-28", "priority": "重点", "status": "办理中", "progress": 72, "days_left": -5, "idle_days": 12, "remind_count": 2, "risk": "逾期", "risk_rank": 0, "risk_reasons": ["已逾期 5 天", "12 天无新进展", "已催办 2 次"], "last_progress_at": "2026-10-21 10:30", "last_event_at": "2026-10-31 17:00", "allowed_actions": ["反馈进展", "提交办结", "催办"], "source": "市政府第 12 次常务会议定事项", "source_ref": "常务会议纪要〔2026〕12 号 第 7 项"}]}, "headline": "扫描 7 件在办事项，6 件需要催办。"}, "statuses": ["待签收", "办理中", "待审核", "已办结"], "today": "2026-11-02"}, "/api/meetings": {"ok": true, "items": [{"id": "MT2026-0002", "title": "市政府第14次常务会议", "kind": "record", "held_at": "2026-11-02 14:30", "host": "常务副市长", "attendees": ["市城管局", "市生态环境局"], "place": "", "topics": [], "source": "manual", "status": "parsed", "from_message": "", "created_at": "2026-11-02 10:33", "parsed_at": "2026-11-02 10:33", "item_count": 2, "committed_count": 0, "needs_review_count": 1}], "stats": {"meetings": 1, "parsed": 1, "items": 2, "committed": 0}, "units": ["临江区政府", "云山区政府", "国家统计局本市调查队", "市交通运输局", "市住建局", "市公安局交警支队", "市发展和改革委员会", "市发改委", "市城管局", "市大数据局", "市市场监督管理局", "市市场监管局", "市应急管理局", "市投资促进局", "市政务服务和数据管理局（12345 热线中心）", "市政府办公室（民生实事专班）", "市教育局", "市水务局", "市生态环境局", "市统计局", "市自然资源局", "市财政局"], "model_ready": true}, "/api/threads": {"ok": true, "items": [{"id": "th_7263c173ca4e", "title": "重大项目投资完成率有多少，跟时序进度比怎么样", "created_at": 1793601592, "updated_at": 1793607106, "model_ref": "deepseek/deepseek-chat", "message_count": 4, "last_preview": "草拟了一场会（（还没说议题） · （还没说时间）），还差 3 项才能建。", "last_role": "assistant"}, {"id": "th_b67e61944804", "title": "今年1-9月全市规上工业增加值是多少？同比增速如", "created_at": 1793589503, "updated_at": 1793589552, "model_ref": "deepseek/deepseek-chat", "message_count": 4, "last_preview": "2026年9月，全市规模以上工业增加值增速为 8.9%，环比上升 1.7 个百分点，同比上升 2.2 个百分点。", "last_role": "assistant"}, {"id": "th_49a40d3105c0", "title": "你好", "created_at": 1793583977, "updated_at": 1793587904, "model_ref": "deepseek/deepseek-chat", "message_count": 8, "last_preview": "2026年9月，全市规模以上工业增加值增速为 8.9%，环比上升 1.7 个百分点，同比上升 2.2 个百分点。", "last_role": "assistant"}], "stats": {"threads": 3, "messages": 16}}, "/api/schedule": {"ok": true, "city": "溧阳市", "person": {"id": "mayor", "name": "市长", "post": "市长", "scope": "全市", "units": [], "demo": true}, "today": "2026-11-02", "now": "2026-11-02 17:58", "window": {"days": 14, "from": "2026-11-02", "to": "2026-11-15"}, "groups": [{"date": "2026-11-02", "label": "今天", "weekday": "周一", "month_day": "11月2日", "is_today": true, "days_from_today": 0, "items": [{"id": "overdue::DB2026-0027::0", "kind": "overdue", "kind_label": "已逾期", "tone": "danger", "date": "2026-11-02", "time": "", "title": "高铁东站周边路网配套工程", "sub": "市住建局 · 原定 2026-10-28 办结，已逾 5 天 · 进度 72%", "why": "逾期事项每个工作日都要有书面进展，否则只能靠催办推动", "ref": {"type": "oversight", "id": "DB2026-0027"}, "score": 95, "extra": {"origin_deadline": "2026-10-28"}}, {"id": "overdue::DB2026-0030::1", "kind": "overdue", "kind_label": "已逾期", "tone": "danger", "date": "2026-11-02", "time": "", "title": "秋季校园食品安全专项检查", "sub": "市市场监管局 · 原定 2026-11-01 办结，已逾 1 天 · 进度 96%", "why": "逾期事项每个工作日都要有书面进展，否则只能靠催办推动", "ref": {"type": "oversight", "id": "DB2026-0030"}, "score": 95, "extra": {"origin_deadline": "2026-11-01"}}, {"id": "sign::DB2026-0035::3", "kind": "sign", "kind_label": "待签收", "tone": "warn", "date": "2026-11-02", "time": "", "title": "冬季供暖保障预案报备", "sub": "市城管局 · 交办未签收", "why": "交办后 24 小时内必须签收，未签收台账无法进入办理状态", "ref": {"type": "oversight", "id": "DB2026-0035"}, "score": 88, "extra": {}}, {"id": "sign::DB2026-0033::4", "kind": "sign", "kind_label": "待签收", "tone": "warn", "date": "2026-11-02", "time": "", "title": "入河排污口排查整治", "sub": "市生态环境局 · 交办未签收 · 已催 1 次", "why": "交办后 24 小时内必须签收，未签收台账无法进入办理状态", "ref": {"type": "oversight", "id": "DB2026-0033"}, "score": 88, "extra": {}}, {"id": "review::DB2026-0029::2", "kind": "review", "kind_label": "待审核", "tone": "warn", "date": "2026-11-02", "time": "", "title": "12345 高频诉求「停车难」专项治理", "sub": "市城管局 · 已提交办结，待审核", "why": "审核通过才算办结；压着不审，台账上的时限会先到", "ref": {"type": "oversight", "id": "DB2026-0029"}, "score": 82, "extra": {}}, {"id": "nudge::DB2026-0025::5", "kind": "nudge", "kind_label": "补报进展", "tone": "warn", "date": "2026-11-02", "time": "", "title": "城市运行管理服务平台数据接入", "sub": "市大数据局 · 已 13 天没有新进展 · 进度 45%", "why": "停滞超过一周，进度数据已经不能反映现场", "ref": {"type": "oversight", "id": "DB2026-0025"}, "score": 74, "extra": {}}]}, {"date": "2026-11-03", "label": "明天", "weekday": "周二", "month_day": "11月3日", "is_today": false, "days_from_today": 1, "items": [{"id": "deadline::DB2026-0029::6", "kind": "deadline", "kind_label": "办结时限", "tone": "info", "date": "2026-11-03", "time": "", "title": "12345 高频诉求「停车难」专项治理", "sub": "市城管局 · 待审核 · 进度 100%", "why": "距时限还有 1 天，当前进度 100%", "ref": {"type": "oversight", "id": "DB2026-0029"}, "score": 53, "extra": {"days_left": 1}}]}, {"date": "2026-11-10", "label": "周二", "weekday": "周二", "month_day": "11月10日", "is_today": false, "days_from_today": 8, "items": [{"id": "deadline::DB2026-0035::7", "kind": "deadline", "kind_label": "办结时限", "tone": "info", "date": "2026-11-10", "time": "", "title": "冬季供暖保障预案报备", "sub": "市城管局 · 待签收 · 进度 0%", "why": "距时限还有 8 天，当前进度 0%", "ref": {"type": "oversight", "id": "DB2026-0035"}, "score": 46, "extra": {"days_left": 8}}, {"id": "disclosure::2026-11-10::9", "kind": "disclosure", "kind_label": "数据披露", "tone": "muted", "date": "2026-11-10", "time": "", "title": "10 月统计月报披露", "sub": "市统计局 · 《本市统计月报》按月披露，次月 10 日发布", "why": "8 天后可查上月数据，问数会用到这一期", "ref": {}, "score": 30, "extra": {"days_left": 8}}]}, {"date": "2026-11-15", "label": "周日", "weekday": "周日", "month_day": "11月15日", "is_today": false, "days_from_today": 13, "items": [{"id": "deadline::DB2026-0025::8", "kind": "deadline", "kind_label": "办结时限", "tone": "info", "date": "2026-11-15", "time": "", "title": "城市运行管理服务平台数据接入", "sub": "市大数据局 · 办理中 · 进度 45%", "why": "距时限还有 13 天，当前进度 45%", "ref": {"type": "oversight", "id": "DB2026-0025"}, "score": 41, "extra": {"days_left": 13}}]}], "summary": {"total": 10, "today": 6, "overdue": 2, "meetings": 0, "days_with_events": 4, "lead": "高铁东站周边路网配套工程"}, "basis": "全市（不按单位筛）", "rule": "日程只收已有时间的事：督办时限与状态、会议时间、统计数据披露日。没有手工排期。", "generated_at": "2026-11-02 17:58:46", "mock": true}, "/api/briefdoc/options": {"ok": true, "city": "溧阳市", "person": {"id": "mayor", "name": "市长", "post": "市长", "scope": "全市", "units": [], "demo": true}, "presets": [{"id": "report", "label": "工作汇报", "hint": "指标运行 + 重点工作 + 会议落实", "sections": ["metrics", "oversight", "meeting", "next"]}, {"id": "minutes", "label": "会议落实材料", "hint": "以一场会为单位，汇总该会交办事项的办理情况", "sections": ["meeting", "metrics", "pending", "next"]}, {"id": "bulletin", "label": "督办通报", "hint": "台账统计 + 逾期临期清单 + 单位办理情况", "sections": ["oversight", "next"]}], "sections": [{"id": "metrics", "name": "主要指标运行情况"}, {"id": "oversight", "name": "重点工作推进情况"}, {"id": "meeting", "name": "会议交办事项落实情况"}, {"id": "pending", "name": "数据报送与披露情况"}, {"id": "next", "name": "下一步工作建议"}], "periods": [{"value": "2026-09", "label": "2026年9月"}, {"value": "2026-08", "label": "2026年8月"}, {"value": "2026-07", "label": "2026年7月"}, {"value": "2026-06", "label": "2026年6月"}, {"value": "2026-05", "label": "2026年5月"}, {"value": "2026-04", "label": "2026年4月"}, {"value": "2026-03", "label": "2026年3月"}, {"value": "2026-02", "label": "2026年2月"}, {"value": "2026-01", "label": "2026年1月"}, {"value": "2025-12", "label": "2025年12月"}, {"value": "2025-11", "label": "2025年11月"}, {"value": "2025-10", "label": "2025年10月"}, {"value": "2025-09", "label": "2025年9月"}, {"value": "2025-08", "label": "2025年8月"}, {"value": "2025-07", "label": "2025年7月"}, {"value": "2025-06", "label": "2025年6月"}, {"value": "2025-05", "label": "2025年5月"}, {"value": "2025-04", "label": "2025年4月"}, {"value": "2025-03", "label": "2025年3月"}, {"value": "2025-02", "label": "2025年2月"}, {"value": "2025-01", "label": "2025年1月"}, {"value": "2024-12", "label": "2024年12月"}, {"value": "2024-11", "label": "2024年11月"}], "default_period": "2026-09", "metrics": [{"code": "GY_VA_GROWTH", "name": "规模以上工业增加值增速", "unit": "%", "department": "市统计局", "frequency": "月", "latest_period": "2026年9月", "latest_value": 8.9, "definition": "规模以上工业企业（年主营业务收入 2000 万元及以上）当月工业增加值同比增速，按可比价格计算，不含价格因素。"}, {"code": "FAI_PROGRESS", "name": "市重大项目年度投资完成率", "unit": "%", "department": "市发展和改革委员会", "frequency": "月", "latest_period": "2026年9月", "latest_value": 73.9, "definition": "列入市重大项目清单的项目，年度累计完成投资额占年度计划投资额的比重。全市数为分区县完成额加权汇总，不等于各区县完成率的简单平均。"}, {"code": "TZ_12345_CLOSURE", "name": "12345 群众诉求按期办结率", "unit": "%", "department": "市政务服务和数据管理局（12345 热线中心）", "frequency": "月", "latest_period": "2026年9月", "latest_value": 96.2, "definition": "当月受理工单中，在承诺时限内办结的工单数占应办结工单数的比重。超期后补办的工单不计入按期办结。"}, {"code": "AQI_GOOD_DAYS", "name": "空气质量优良天数比例", "unit": "%", "department": "市生态环境局", "frequency": "月", "latest_period": "2026年9月", "latest_value": 86.5, "definition": "当月 AQI 指数≤100 的天数占当月有效监测天数的比重，按《环境空气质量标准》GB 3095-2012 评价。"}, {"code": "UR_RATE", "name": "城镇调查失业率", "unit": "%", "department": "国家统计局本市调查队", "frequency": "月", "latest_period": "2026年9月", "latest_value": 5.1, "definition": "城镇常住人口中，失业人口占城镇就业人口与失业人口之和的比重，按劳动力调查制度推算。"}, {"code": "SS_ENTERPRISE", "name": "新增市场主体户数", "unit": "户", "department": "市市场监督管理局", "frequency": "月", "latest_period": "2026年9月", "latest_value": 5610, "definition": "当月新登记的市场主体户数，含企业、个体工商户和农民专业合作社。"}, {"code": "GDP_TOTAL", "name": "地区生产总值", "unit": "亿元", "department": "市统计局", "frequency": "季", "latest_period": "2026年9月", "latest_value": 1286.5, "definition": "按季度核算的地区生产总值，年内累计数（1 月至当季末）。总量为现价，同比增速按不变价计算，两者不能相互推算。"}, {"code": "BUDGET_REV", "name": "一般公共预算收入", "unit": "亿元", "department": "市财政局", "frequency": "月", "latest_period": "2026年9月", "latest_value": 312.8, "definition": "年内累计实现的一般公共预算收入，含税收收入和非税收入，为地方留成部分，不含上级转移支付和上解支出。"}, {"code": "FAI_GROWTH", "name": "固定资产投资增速", "unit": "%", "department": "市统计局", "frequency": "月", "latest_period": "2026年9月", "latest_value": 5.6, "definition": "年内累计固定资产投资额同比增速，按可比口径计算，不含农户投资，含房地产开发投资。"}, {"code": "INVEST_SIGNED", "name": "招商引资新签约亿元以上项目数", "unit": "个", "department": "市投资促进局", "frequency": "月", "latest_period": "2026年9月", "latest_value": 86, "definition": "年内累计新签约的计划总投资 1 亿元以上产业项目个数，以正式签订投资协议为准，不含意向协议和框架协议。"}, {"code": "LIVELIHOOD_DONE", "name": "民生实事完成项数", "unit": "项", "department": "市政府办公室（民生实事专班）", "frequency": "月", "latest_period": "2026年9月", "latest_value": 38, "definition": "市政府年度民生实事清单中，已完成建设并通过验收的项目项数。在建、未验收的不计入完成数。"}], "default_metrics": ["GDP_TOTAL", "BUDGET_REV", "TZ_12345_CLOSURE", "FAI_GROWTH", "AQI_GOOD_DAYS", "GY_VA_GROWTH"], "meetings": [{"id": "MT2026-0002", "title": "市政府第14次常务会议", "held_at": "2026-11-02 14:30", "host": "常务副市长"}], "max_metrics": 12, "mock": true}, "/api/knowledge": {"ok": true, "query": "", "total": 0, "index_size": 22, "hits": []}, "/api/focus": {"ok": true, "count": 6, "generated_at": "2026-11-02 18:00", "window": "近 14 天", "basis": "12345 热线、市长信箱、「我的溧阳」APP、网格员上报四渠道聚类去重后的民情焦点", "items": [{"id": "F1", "title": "小区停车位收费争议诉求集中", "tag": "集中", "tone": "warn", "meta": "受理 128 件 · 环比 ↑42%", "source": "12345 热线 · 市政务服务和数据管理局", "people": 214, "people_delta": "近 7 日新增 63 人", "type": "物业服务 · 停车收费", "region": "溧城街道、昆仑街道为主", "first_seen": "2026-10-21", "state": "已交办市发改局、市市场监管局会办", "state_tone": "warn", "detail": "10 月以来，城区多个小区业主对物业车位收费标准及上调程序提出异议。诉求集中在三类：一是包月车位费上涨未经业主大会表决；二是收费标准未在小区显著位置公示；三是临停计费规则前后不一致。涉事物业企业集中在 3 家，占诉求量的 72%。12345 已按小区拆单派发，市场监管部门已启动收费公示专项核查。", "channels": [["12345 热线", 128], ["市长信箱", 39], ["「我的溧阳」APP", 32], ["网格员上报", 15]], "keywords": [["停车收费", 96], ["物业费上调", 54], ["收费未公示", 38], ["业主大会", 27], ["包月转临停", 19]], "trend": [3, 4, 6, 5, 8, 11, 9, 14, 18, 16, 22, 25, 21, 19], "tickets": [["TZ202610250812", "燕山家园物业擅自上调包月车位费", "已派单 市市场监管局"], ["TZ202610261045", "昆仑花园临停计费与公示不一致", "已派单 市发改局"], ["TZ202610271233", "锦绣花园业主询问调价程序合法性", "办理中"]]}, {"id": "F2", "title": "农贸市场周边流动摊贩占道反弹", "tag": "反弹", "tone": "info", "meta": "涉及 6 个市场 · 连续 3 日", "source": "12345 热线 · 市城管局巡查", "people": 167, "people_delta": "近 7 日新增 28 人", "type": "城市管理 · 占道经营", "region": "西园菜市场、清溪路市场周边", "first_seen": "2026-10-05", "state": "市城管局已开展专项整治", "state_tone": "info", "detail": "西园菜市场等 6 个农贸市场周边早晚高峰流动摊贩占道经营出现反弹，影响通行并伴随垃圾落地问题。商户反映摊贩抢占门前区域影响正常经营；居民反映早高峰出行受阻。此前 9 月曾整治一轮，国庆后逐步回潮。城管局已调整勤务安排，加密早晚高峰值守，并研究划设便民疏导点。", "channels": [["12345 热线", 112], ["网格员上报", 34], ["「我的溧阳」APP", 21]], "keywords": [["占道经营", 88], ["流动摊贩", 61], ["市场周边", 33], ["出行受阻", 21], ["环境卫生", 15]], "trend": [6, 8, 7, 9, 12, 10, 13, 15, 12, 14, 17, 19, 16, 15], "tickets": [["TZ202610300921", "西园菜市场北门摊贩占道影响通行", "办理中"], ["TZ202610310655", "清溪路市场早高峰噪音扰民", "已派单 市城管局"]]}, {"id": "F3", "title": "某企业欠薪线索涉 37 人", "tag": "转办", "tone": "muted", "meta": "9月28日受理 · 已转人社局核查", "source": "工单 TZ20260928147", "people": 37, "people_delta": "近 7 日新增 2 人", "type": "劳动保障 · 欠薪", "region": "天目湖镇", "first_seen": "2026-09-28", "state": "已转市人社局劳动监察核查", "state_tone": "info", "detail": "某制造企业自 8 月起拖欠 37 名员工 7—8 月工资，累计约 46 万元。员工多次协商未果后通过 12345 与劳动监察渠道集中反映。人社局劳动监察大队已立案，约谈企业负责人，企业承诺 11 月 15 日前分期补发，首笔已支付 40%。", "channels": [["12345 热线", 21], ["劳动监察窗口", 12], ["市长信箱", 4]], "keywords": [["拖欠工资", 24], ["制造企业", 11], ["劳动监察", 8], ["分期补发", 5]], "trend": [1, 1, 2, 3, 2, 4, 3, 3, 2, 2, 1, 1, 1, 1], "tickets": [["TZ20260928147", "某制造企业 37 人欠薪线索", "已转办 市人社局"]]}, {"id": "F4", "title": "城区部分路段夜间施工噪音投诉增多", "tag": "集中", "tone": "warn", "meta": "受理 89 件 · 环比 ↑31%", "source": "12345 热线 · 市生态环境局", "people": 102, "people_delta": "近 7 日新增 24 人", "type": "生态环境 · 噪声扰民", "region": "平陵中路、天目路沿线", "first_seen": "2026-10-24", "state": "已交办市生态环境局、市城管局", "state_tone": "warn", "detail": "平陵中路改造等 3 个市政工程近期进入夜间施工阶段，沿线居民对 22 时后的机械噪声反映集中。诉求集中在两点：一是夜间施工审批公示不到位，居民不知情；二是泵车、破碎作业噪声超标。生态环境局已对 3 个工地开展边界噪声监测，城管局同步核查夜间施工许可。", "channels": [["12345 热线", 74], ["「我的溧阳」APP", 19], ["市长信箱", 9]], "keywords": [["夜间施工", 57], ["噪音扰民", 45], ["施工许可", 18], ["平陵中路", 14]], "trend": [2, 3, 4, 3, 5, 7, 6, 9, 11, 10, 13, 15, 12, 11], "tickets": [["TZ202610310902", "平陵中路改造夜间破碎作业扰民", "办理中"], ["TZ202611010531", "天目路泵车夜间作业噪声大", "已派单 市生态环境局"]]}, {"id": "F5", "title": "老旧小区电动自行车充电设施不足", "tag": "反弹", "tone": "info", "meta": "受理 76 件 · 涉及 11 个小区", "source": "「我的溧阳」APP · 市住建局", "people": 118, "people_delta": "近 7 日新增 17 人", "type": "住建物业 · 充电设施", "region": "城区老旧小区集中片区", "first_seen": "2026-10-12", "state": "纳入老旧小区改造同步实施", "state_tone": "info", "detail": "多个老旧小区反映电动自行车充电桩数量不足、飞线充电现象回潮，存在消防隐患。诉求集中在：一是已有充电棚位桩比例低、高峰排队；二是部分楼栋周边没有充电点，居民只能飞线；三是希望纳入明年老旧小区改造清单。住建局已会同消防部门排查，拟按「一小区一方案」补建。", "channels": [["「我的溧阳」APP", 63], ["12345 热线", 41], ["网格员上报", 14]], "keywords": [["充电桩", 66], ["飞线充电", 39], ["消防隐患", 27], ["老旧小区", 22]], "trend": [3, 4, 5, 6, 5, 7, 8, 7, 9, 10, 9, 11, 10, 8], "tickets": [["TZ202610291134", "惠民二村充电棚排队严重", "办理中"], ["TZ202610300815", "建议增设夜间接地充电点", "已派单 市住建局"]]}, {"id": "F6", "title": "惠民小区二次供水水质异议", "tag": "转办", "tone": "muted", "meta": "受理 41 件 · 已转卫健、水务核查", "source": "12345 热线 · 市水务集团", "people": 58, "people_delta": "近 7 日新增 5 人", "type": "供水 · 水质", "region": "惠民小区", "first_seen": "2026-10-27", "state": "已转市卫健委、市水务集团核查", "state_tone": "info", "detail": "惠民小区多名住户反映自来水出现异味，怀疑二次供水水箱清洗不及时。水务集团已对二次供水水箱取样送检，卫健委同步介入；初步排查为水箱清洗周期调整期间新旧水交替所致，检测结果 11 月 3 日前出具并向小区公示。", "channels": [["12345 热线", 37], ["「我的溧阳」APP", 15], ["市长信箱", 6]], "keywords": [["水质异味", 29], ["二次供水", 21], ["水箱清洗", 12]], "trend": [0, 1, 2, 2, 4, 6, 8, 7, 6, 5, 4, 4, 3, 3], "tickets": [["TZ202610280933", "惠民小区自来水异味排查", "办理中"]]}]}, "/api/threads/th_7263c173ca4e": {"ok": true, "thread": {"id": "th_7263c173ca4e", "title": "重大项目投资完成率有多少，跟时序进度比怎么样", "created_at": 1793601592, "updated_at": 1793607106, "model_ref": "deepseek/deepseek-chat", "messages": [{"id": "m_4ad350abae94", "seq": 1, "role": "user", "content": "重大项目投资完成率有多少，跟时序进度比怎么样", "ts": 1793601592}, {"id": "m_2a9b26396754", "seq": 2, "role": "assistant", "content": "2026年1—9月累计，市重大项目年度投资完成率为 73.9%，同比上升 1.5 个百分点。", "ts": 1793601594, "meta": {"refused": false, "planner": "llm", "intent": "value", "model": "deepseek-chat", "metric_codes": ["FAI_PROGRESS"], "metric_names": ["市重大项目年度投资完成率"], "sources": [{"department": "市发展和改革委员会", "report": "《市重大项目月度调度表》2026年9月", "period": "2026年9月", "published_at": "2026-10-10", "api": "GET /api/metrics/FAI_PROGRESS", "definition": "列入市重大项目清单的项目，年度累计完成投资额占年度计划投资额的比重。全市数为分区县完成额加权汇总，不等于各区县完成率的简单平均。"}], "notes": ["累计口径：年初从 0 起算，年内逐月递增，不做环比。", "全市完成率为加权值，与各区县完成率直接平均的结果不一致属正常。"], "facts": [{"label": "2026年1—9月累计", "value": "73.9%"}, {"label": "同比", "value": "上升 1.5 个百分点", "raw": 1.5}], "expert_views": [{"id": "economy", "name": "经济参谋", "avatar": "经", "focus": "工业、投资、财政、市场主体", "ok": true, "text": "重大项目投资完成率同比上升，但缺少与年度时序进度的对照口径，无法判断是否达标，需补充时序进度基准；同时应关注工业投资与整体投资结构是否同步，防止单靠重大项目支撑、其余投资拖后腿。", "why": ""}]}}, {"id": "m_6d69ae2b9d13", "seq": 3, "role": "user", "content": "帮我约个会议", "ts": 1793607106}, {"id": "m_35415fdd987c", "seq": 4, "role": "assistant", "content": "草拟了一场会（（还没说议题） · （还没说时间）），还差 3 项才能建。", "ts": 1793607106, "meta": {"refused": false, "planner": "rules", "intent": "meet", "model": "deepseek-chat", "metric_codes": [], "metric_names": [], "sources": [], "notes": [], "facts": [], "knowledge": [], "expert_views": [], "meet_draft": {"host": "市长", "missing": ["held_at", "title", "attendees"], "assumptions": ["没说谁主持，按当前身份（市长）填，确认时可以改"], "notes": ["没说参会单位 —— 谁要到场是会议通知的核心，不填就没法发通知"], "ready": false, "clash_count": 0}}}]}}, "/api/threads/th_b67e61944804": {"ok": true, "thread": {"id": "th_b67e61944804", "title": "今年1-9月全市规上工业增加值是多少？同比增速如", "created_at": 1793589503, "updated_at": 1793589552, "model_ref": "deepseek/deepseek-chat", "messages": [{"id": "m_ae8a38e75a2f", "seq": 1, "role": "user", "content": "今年1-9月全市规上工业增加值是多少？同比增速如何？", "ts": 1793589503}, {"id": "m_f4dc43152d20", "seq": 2, "role": "assistant", "content": "2026年9月，全市规模以上工业增加值增速为 8.9%，环比上升 1.7 个百分点，同比上升 2.2 个百分点。", "ts": 1793589506, "meta": {"refused": false, "planner": "llm", "intent": "value", "model": "deepseek-chat", "metric_codes": ["GY_VA_GROWTH"], "metric_names": ["规模以上工业增加值增速"], "sources": [{"department": "市统计局", "report": "《本市统计月报》2026年9月", "period": "2026年9月", "published_at": "2026-10-10", "api": "GET /api/metrics/GY_VA_GROWTH", "definition": "规模以上工业企业（年主营业务收入 2000 万元及以上）当月工业增加值同比增速，按可比价格计算，不含价格因素。"}], "notes": ["口径限定为年主营业务收入 2000 万元及以上的规上企业，不含规下企业与个体户。", "增速为可比价计算，与按现价自行加总的结果会有差异。"], "facts": [{"label": "2026年9月", "value": "8.9%"}, {"label": "环比", "value": "上升 1.7 个百分点", "raw": 1.7}, {"label": "同比", "value": "上升 2.2 个百分点", "raw": 2.2}]}}, {"id": "m_49771f8b9d73", "seq": 3, "role": "user", "content": "今年1-9月全市规上工业增加值是多少？同比增速如何？", "ts": 1793589548}, {"id": "m_d21aa5721601", "seq": 4, "role": "assistant", "content": "2026年9月，全市规模以上工业增加值增速为 8.9%，环比上升 1.7 个百分点，同比上升 2.2 个百分点。", "ts": 1793589552, "meta": {"refused": false, "planner": "llm", "intent": "value", "model": "deepseek-chat", "metric_codes": ["GY_VA_GROWTH"], "metric_names": ["规模以上工业增加值增速"], "sources": [{"department": "市统计局", "report": "《本市统计月报》2026年9月", "period": "2026年9月", "published_at": "2026-10-10", "api": "GET /api/metrics/GY_VA_GROWTH", "definition": "规模以上工业企业（年主营业务收入 2000 万元及以上）当月工业增加值同比增速，按可比价格计算，不含价格因素。"}], "notes": ["口径限定为年主营业务收入 2000 万元及以上的规上企业，不含规下企业与个体户。", "增速为可比价计算，与按现价自行加总的结果会有差异。"], "facts": [{"label": "2026年9月", "value": "8.9%"}, {"label": "环比", "value": "上升 1.7 个百分点", "raw": 1.7}, {"label": "同比", "value": "上升 2.2 个百分点", "raw": 2.2}]}}]}}, "/api/threads/th_49a40d3105c0": {"ok": true, "thread": {"id": "th_49a40d3105c0", "title": "你好", "created_at": 1793583977, "updated_at": 1793587904, "model_ref": "deepseek/deepseek-chat", "messages": [{"id": "m_8e3ccc945a78", "seq": 1, "role": "user", "content": "你好", "ts": 1793583977}, {"id": "m_3637cbc94577", "seq": 2, "role": "assistant", "content": "这个问题对应的指标还没有注册，我不能给出数字。", "ts": 1793583978, "meta": {"refused": true, "planner": "llm", "intent": null, "model": "deepseek-chat", "metric_codes": [], "metric_names": [], "sources": [], "notes": [], "facts": []}}, {"id": "m_dfa1d10d1519", "seq": 3, "role": "user", "content": "12345 办结率最近三个月什么走势", "ts": 1793585621}, {"id": "m_2098c5ffd1f2", "seq": 4, "role": "assistant", "content": "2026年9月，全市12345 群众诉求按期办结率为 96.2%，环比上升 0.8 个百分点，同比上升 0.3 个百分点。", "ts": 1793585622, "meta": {"refused": false, "planner": "llm", "intent": "trend", "model": "deepseek-chat", "metric_codes": ["TZ_12345_CLOSURE"], "metric_names": ["12345 群众诉求按期办结率"], "sources": [{"department": "市政务服务和数据管理局（12345 热线中心）", "report": "《12345 热线运行月报》2026年9月", "period": "2026年9月", "published_at": "2026-10-10", "api": "GET /api/metrics/TZ_12345_CLOSURE", "definition": "当月受理工单中，在承诺时限内办结的工单数占应办结工单数的比重。超期后补办的工单不计入按期办结。"}], "notes": ["分母为应办结工单数，不是全部受理量；跨月工单在办结月计入。", "全市数为按工单量加权，不等于各承办单位办结率的简单平均。"], "facts": [{"label": "2026年9月", "value": "96.2%"}, {"label": "环比", "value": "上升 0.8 个百分点", "raw": 0.8}, {"label": "同比", "value": "上升 0.3 个百分点", "raw": 0.3}]}}, {"id": "m_56f6014e3d7f", "seq": 5, "role": "user", "content": "今年1-9月全市规上工业增加值是多少？同比增速如何？", "ts": 1793587901}, {"id": "m_bbc343513afc", "seq": 6, "role": "user", "content": "今年1-9月全市规上工业增加值是多少？同比增速如何？", "ts": 1793587902}, {"id": "m_c996b0c2beae", "seq": 7, "role": "assistant", "content": "2026年9月，全市规模以上工业增加值增速为 8.9%，环比上升 1.7 个百分点，同比上升 2.2 个百分点。", "ts": 1793587902, "meta": {"refused": false, "planner": "llm", "intent": "value", "model": "deepseek-chat", "metric_codes": ["GY_VA_GROWTH"], "metric_names": ["规模以上工业增加值增速"], "sources": [{"department": "市统计局", "report": "《本市统计月报》2026年9月", "period": "2026年9月", "published_at": "2026-10-10", "api": "GET /api/metrics/GY_VA_GROWTH", "definition": "规模以上工业企业（年主营业务收入 2000 万元及以上）当月工业增加值同比增速，按可比价格计算，不含价格因素。"}], "notes": ["口径限定为年主营业务收入 2000 万元及以上的规上企业，不含规下企业与个体户。", "增速为可比价计算，与按现价自行加总的结果会有差异。"], "facts": [{"label": "2026年9月", "value": "8.9%"}, {"label": "环比", "value": "上升 1.7 个百分点", "raw": 1.7}, {"label": "同比", "value": "上升 2.2 个百分点", "raw": 2.2}]}}, {"id": "m_9d44117086ec", "seq": 8, "role": "assistant", "content": "2026年9月，全市规模以上工业增加值增速为 8.9%，环比上升 1.7 个百分点，同比上升 2.2 个百分点。", "ts": 1793587904, "meta": {"refused": false, "planner": "llm", "intent": "value", "model": "deepseek-chat", "metric_codes": ["GY_VA_GROWTH"], "metric_names": ["规模以上工业增加值增速"], "sources": [{"department": "市统计局", "report": "《本市统计月报》2026年9月", "period": "2026年9月", "published_at": "2026-10-10", "api": "GET /api/metrics/GY_VA_GROWTH", "definition": "规模以上工业企业（年主营业务收入 2000 万元及以上）当月工业增加值同比增速，按可比价格计算，不含价格因素。"}], "notes": ["口径限定为年主营业务收入 2000 万元及以上的规上企业，不含规下企业与个体户。", "增速为可比价计算，与按现价自行加总的结果会有差异。"], "facts": [{"label": "2026年9月", "value": "8.9%"}, {"label": "环比", "value": "上升 1.7 个百分点", "raw": 1.7}, {"label": "同比", "value": "上升 2.2 个百分点", "raw": 2.2}]}}]}}, "/api/meetings/MT2026-0002": {"ok": true, "meeting": {"id": "MT2026-0002", "title": "市政府第14次常务会议", "held_at": "2026-11-02 14:30", "host": "常务副市长", "attendees": ["市城管局", "市生态环境局"], "source": "manual", "text": "一、会议议定：由市生态环境局负责，11月25日前完成入河排污口排查整治，形成问题台账并逐项销号。\n二、会议要求市城管局加快主城区垃圾分类投放点改造，年底前完成，具体数量由市城管局会同各区政府确定。\n三、会议强调，要举一反三，防止问题反弹。", "status": "parsed", "created_at": "2026-11-02 10:33", "parsed_at": "2026-11-02 10:33", "model_ref": "deepseek/deepseek-chat", "warnings": ["1 条未通过校验，需人工核实后才能落督办。"], "items": [{"id": "MI-01", "title": "完成入河排污口排查整治并建立问题台账逐项销号", "assignee": "市生态环境局", "deadline": "2026-11-25", "standard": "完成入河排污口排查整治，形成问题台账并逐项销号", "quote": "由市生态环境局负责，11月25日前完成入河排污口排查整治，形成问题台账并逐项销号。", "confidence": "high", "verify": {"status": "ok", "issues": [], "quote_found": true, "confirmed_by_human": []}, "oversight_id": null, "manual": []}, {"id": "MI-02", "title": "加快主城区垃圾分类投放点改造", "assignee": "市城管局", "deadline": null, "standard": "年底前完成主城区垃圾分类投放点改造，具体数量由市城管局会同各区政府确定", "quote": "会议要求市城管局加快主城区垃圾分类投放点改造，年底前完成，具体数量由市城管局会同各区政府确定。", "confidence": "high", "verify": {"status": "needs_review", "issues": [{"code": "deadline_missing", "field": "deadline", "detail": "没有时限，无法派生逾期风险。"}], "quote_found": true, "confirmed_by_human": []}, "oversight_id": null, "manual": []}]}, "units": ["临江区政府", "云山区政府", "国家统计局本市调查队", "市交通运输局", "市住建局", "市公安局交警支队", "市发展和改革委员会", "市发改委", "市城管局", "市大数据局", "市市场监督管理局", "市市场监管局", "市应急管理局", "市投资促进局", "市政务服务和数据管理局（12345 热线中心）", "市政府办公室（民生实事专班）", "市教育局", "市水务局", "市生态环境局", "市统计局", "市自然资源局", "市财政局"]}};
+  window.__miss = [];
+  function json(obj, status) {
+    return new Response(JSON.stringify(obj), {
+      status: status || 200,
+      headers: { "Content-Type": "application/json; charset=utf-8" }
+    });
+  }
+  window.fetch = function (input, init) {
+    var raw = typeof input === "string" ? input : (input && input.url) || "";
+    // 不能用 new URL(raw, location.href)：Windows 的 file:///E:/x.html 会把盘符
+    // 当成 host，"/api/overview" 会被解析成 "/E:/api/overview"，一个都命中不了。
+    var p = raw;
+    var at = p.indexOf("/api/");
+    if (at >= 0) p = p.slice(at).split("?")[0].split("#")[0];
+    var method = ((init || {}).method || "GET").toUpperCase();
+
+    if (p === "/api/ask/stream") {
+      var sse = 'data: {"type":"error","error":"这是静态快照，问答需要启动本地服务"}\n\n';
+      return Promise.resolve(new Response(sse, {
+        status: 200, headers: { "Content-Type": "text/event-stream" }
+      }));
+    }
+    if (method === "GET" && Object.prototype.hasOwnProperty.call(SNAP, p)) {
+      return Promise.resolve(json(SNAP[p]));
+    }
+    // 督办详情：快照里只存了列表，详情按 id 从列表里取，再叠上演示补充数据
+    //（责任人 / 交办时间 / 任务节点 / 办理记录都挂在 OV_ENRICH 上）。
+    if (method === "GET" && p.indexOf("/api/oversight/") === 0) {
+      var oid = decodeURIComponent(p.slice("/api/oversight/".length));
+      var ovs = (SNAP["/api/oversight"] || {}).items || [];
+      for (var oi = 0; oi < ovs.length; oi++) {
+        if (ovs[oi].id === oid) {
+          var enr = (typeof OV_ENRICH !== "undefined" && OV_ENRICH[oid]) || {};
+          var merged = Object.assign({}, enr, ovs[oi], { ok: true });
+          merged.events = merged.events || [];
+          return Promise.resolve(json(merged));
+        }
+      }
+      return Promise.resolve(json({ ok: false, error: "没有这件事项" }));
+    }
+    window.__miss.push(p + "#" + method + "#" + Object.keys(SNAP).length);
+    return Promise.resolve(json({ ok: true, snapshot: true }));
+  };
+})();
+</script>
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI市长工作台</title>
@@ -56,24 +109,22 @@ body{
   color:#fff; flex:0 0 auto;
 }
 .brand{display:flex; align-items:center; gap:9px; font-size:14.5px; font-weight:700; letter-spacing:.2px}
-.brand .logo{
-  width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#5ea8ff,#1b6ee0);
-  display:grid;place-items:center;font-size:12px;box-shadow:0 1px 4px rgba(0,0,0,.25)
-}
-/* 顶级板块：城市罗盘 / 个人工作台，文字 + 选中下划线 */
-.cp-tabs{display:flex;align-items:center;gap:22px}
+.brand .logo-svg{height:22px;width:auto;display:block;filter:drop-shadow(0 1px 3px rgba(0,0,0,.25))}
+/* 顶级板块：城市罗盘 / 工作台页签，统一样式 —— 选中即蓝底白字胶囊，
+   两类页签在同一行里必须长一个样，不然看着像两套导航 */
+.cp-tabs{display:flex;align-items:center;gap:6px}
 .cp-tabs a{
-  position:relative;color:var(--muted);font-size:14px;font-weight:600;
-  text-decoration:none;cursor:pointer;padding:2px 0 7px;white-space:nowrap;
+  display:inline-flex;align-items:center;color:var(--ink-2);font-size:12px;font-weight:600;
+  text-decoration:none;cursor:pointer;white-space:nowrap;
+  background:var(--surface);border:1px solid var(--line);border-radius:20px;
+  padding:4px 12px;transition:.14s;
 }
-.cp-tabs a:hover{color:var(--ink)}
-.cp-tabs a.on{color:var(--brand)}
-.cp-tabs a.on::after{
-  content:"";position:absolute;left:0;right:0;bottom:0;height:2px;
-  background:var(--brand);border-radius:2px;
-}
+.cp-tabs a:hover{border-color:var(--brand);color:var(--brand)}
+.cp-tabs a.on{background:var(--brand);border-color:var(--brand);color:#fff}
 
-/* 视图容器：罗盘 / 个人工作台，同一套 flex 骨架 */
+/* 视图容器：罗盘 / 个人工作台，同一套 flex 骨架
+   V3：统筹推进内嵌了整份台账清单，罗盘一屏装不下 —— 这个视图自己纵向滚动 */
+#viewCompass{overflow-y:auto;overflow-x:hidden}
 .view{display:flex;flex-direction:column;gap:10px;flex:1;min-height:0}
 .view[hidden]{display:none}
 
@@ -98,6 +149,39 @@ body{
    所以身份标签放在这里，不挂在「我的关注」头上（那块可以被藏起来）。 */
 .desk-hd{display:flex;align-items:center;gap:8px;padding:0 2px 2px}
 .desk-hd h2{margin:0;font-size:15px;font-weight:700;letter-spacing:.2px}
+/* V3 多工作台页签：与「城市罗盘」并列横向排布在顶部，最后一个「＋ 新建工作台」；双击页签可重命名 */
+.desk-tabs{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.desk-tab{
+  display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:var(--ink-2);
+  background:var(--surface);border:1px solid var(--line);border-radius:20px;
+  padding:4px 12px;cursor:pointer;user-select:none;transition:.14s
+}
+.desk-tab:hover{border-color:var(--brand);color:var(--brand)}
+.desk-tab.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.desk-tab .dt-x{
+  font-style:normal;font-size:11px;line-height:1;opacity:.55;padding:0 1px;cursor:pointer
+}
+.desk-tab .dt-x:hover{opacity:1;color:#ffd7d7}
+.desk-tab-add{
+  display:inline-flex;align-items:center;gap:4px;font-family:inherit;font-size:12px;font-weight:600;
+  color:var(--muted);background:transparent;border:1px dashed var(--line-3);border-radius:20px;
+  padding:4px 12px;cursor:pointer;transition:.14s
+}
+.desk-tab-add:hover{border-color:var(--brand);color:var(--brand);background:var(--brand-soft)}
+/* 工作台命名输入 */
+.dm-input{
+  width:100%;font-family:inherit;font-size:13px;padding:8px 10px;
+  border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink)
+}
+.dm-input:focus{outline:2px solid var(--brand-soft);border-color:var(--brand)}
+.dm-acts{display:flex;justify-content:flex-end;margin-top:10px}
+/* 关注归属选择：一行一个工作台，点行即加入 */
+.sm-row{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:8px;cursor:pointer}
+.sm-row:hover{background:var(--hover)}
+.sm-row .nm{flex:1;min-width:0;font-size:12.5px;font-weight:600;color:var(--ink)}
+.sm-row .ct{font-size:10.5px;color:var(--faint)}
+.sm-row.cur .nm{color:var(--brand)}
+.sm-tip{font-size:11px;color:var(--muted);line-height:1.7;margin:0 0 8px}
 /* 身份名可能很长（「市生态环境局局长 · 生态环境」），给个上限加省略，别硬挤出容器 */
 .dh-who{
   font-size:11px;color:var(--muted);background:var(--surface);border:1px solid var(--line);
@@ -107,6 +191,14 @@ body{
 .kpis.cols-3 .kpi{padding:14px 16px 15px}
 .kpis.cols-3 .kpi .v{font-size:27px}
 .kpis.cols-3 .kpi .f{margin-top:8px}
+/* 「关注指标」卡底部：关注时间 + 已关注天数。虚线上隔开同比行，弱化色不抢数 */
+.kpi .wf{
+  margin-top:9px;padding-top:6px;border-top:1px dashed var(--line-2);
+  display:flex;justify-content:space-between;gap:8px;
+  font-size:10px;color:var(--faint);white-space:nowrap
+}
+/* 「关注问题」子标题：和上一组拉开一点，视觉上是两块 */
+.sec-head.sub{margin-top:14px}
 
 .feed{
   background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
@@ -281,14 +373,6 @@ body{
   font-size:10.5px;color:var(--faint);line-height:1.7;padding:9px 11px;
   background:var(--surface-2);border-radius:8px
 }
-.id-item{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:7px;cursor:pointer;color:var(--ink)}
-.id-item:hover{background:var(--brand-soft)}
-.id-item.on{background:var(--brand-soft)}
-.id-item i{width:22px;height:22px;border-radius:50%;background:var(--chip-bg);color:var(--brand);font-style:normal;display:grid;place-items:center;font-size:11px;font-weight:700;flex:0 0 auto}
-.id-item.on i{background:var(--brand);color:#fff}
-.id-item .nm{font-size:12.5px;font-weight:600;line-height:1.3}
-.id-item .sub{display:block;font-size:10.5px;color:var(--faint);font-weight:400}
-.id-note{padding:7px 8px 3px;margin-top:4px;border-top:1px solid var(--line-2);font-size:10.5px;color:var(--faint);line-height:1.65}
 
 /* ---------------- 主体 ---------------- */
 .stage{height:calc(100vh - 46px); display:flex; gap:12px; padding:12px; min-width:1180px}
@@ -336,19 +420,6 @@ html.ask-fold .ask-rail{display:flex}
 .chats-scroll{flex:1;overflow-y:auto;padding:0 8px 8px}
 .chats-scroll::-webkit-scrollbar{width:5px}
 .chats-scroll::-webkit-scrollbar-thumb{background:var(--thumb);border-radius:3px}
-/* 列表第一行：和会话条目同宽同高的一张「新建」，不是标题栏里的按钮 */
-.chat-new{
-  display:flex;align-items:center;gap:8px;width:100%;margin:0 0 2px;padding:7px 8px;
-  border:0;border-radius:8px;background:transparent;
-  font:inherit;font-size:12px;font-weight:600;color:var(--ink-2);cursor:pointer;text-align:left
-}
-.chat-new:hover{background:var(--hover-2);color:var(--brand)}
-.chat-new .cn-ic{
-  width:18px;height:18px;flex:0 0 auto;border-radius:50%;border:1px solid var(--brand);
-  color:var(--brand);display:inline-flex;align-items:center;justify-content:center;
-  font-size:11px;line-height:1;font-weight:700
-}
-.chat-new:hover .cn-ic{background:var(--brand-soft)}
 .chats-list{padding:0}
 .chats-grp{font-size:10.5px;color:var(--faint);padding:9px 6px 4px;letter-spacing:.5px}
 .chat-item{display:flex;gap:8px;padding:7px 8px;border-radius:8px;cursor:pointer;align-items:flex-start}
@@ -367,11 +438,16 @@ html.ask-fold .ask-rail{display:flex}
 .ask-head{display:flex;align-items:center;padding:13px 14px 9px; gap:8px}
 .ask-head h2{margin:0;font-size:13.5px;font-weight:700;letter-spacing:.1px}
 .ask-head h2 b{color:var(--brand)}
-.live{
-  margin-left:auto;display:flex;align-items:center;gap:5px;font-size:11px;color:var(--ok);
-  background:var(--ok-bg);border:1px solid var(--ok-line);padding:2px 7px;border-radius:20px
+/* 头部「＋新对话」：从历史对话屏的第一行提出来常驻头部，顶替「在线」状态位 ——
+   在线是系统状态，看一眼就够了；新对话是高频动作，该给最好的位置。 */
+.new-chat-head{
+  margin-left:auto;display:inline-flex;align-items:center;gap:5px;
+  font-family:inherit;font-size:11.5px;font-weight:600;color:var(--brand);
+  background:var(--brand-soft);border:1px solid var(--line-3);border-radius:7px;
+  padding:4px 10px;cursor:pointer;white-space:nowrap;transition:.15s
 }
-.live i{width:5px;height:5px;border-radius:50%;background:var(--ok);display:block}
+.new-chat-head:hover{background:var(--hover-2)}
+.new-chat-head .nch-ic{font-weight:700;line-height:1}
 .chips{display:flex;gap:6px;padding:0 14px 10px;flex-wrap:wrap}
 .chips button{
   font:inherit;font-size:11.5px;color:var(--brand);background:var(--brand-soft);
@@ -397,6 +473,8 @@ html.ask-fold .ask-rail{display:flex}
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 空着就别占位：名字/状态为空时整条只剩标签和箭头，也不留 gap 缝 */
 .expert-select .es-name:empty,.expert-select .es-state:empty{display:none}
+/* 选中参谋后「（对话中）」点亮为绿色，提示当前正在和谁对话 */
+.expert-select .es-state.on{color:var(--ok);font-weight:600}
 .expert-select .es-caret{width:13px;height:13px;color:var(--muted);flex:0 0 auto;transition:transform .15s}
 .expert-select.open .es-caret{transform:rotate(180deg)}
 .es-menu{
@@ -416,6 +494,11 @@ html.ask-fold .ask-rail{display:flex}
 }
 .es-item.on i{background:var(--brand);color:#fff}
 .es-item em{font-style:normal;font-size:10px;color:var(--faint);margin-left:auto;flex:0 0 auto}
+/* 参谋名后括号里的一句话简介：弱化色、放不下省略，悬停 title 里有完整 focus */
+.es-item .es-brief{
+  font-size:10.5px;font-weight:400;color:var(--faint);
+  min-width:0;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+}
 .es-item.sep{margin-top:5px;padding-top:9px;border-top:1px solid var(--line-2)}
 
 /* ---------- 斜杠唤起（输入框里打 / 弹这一层） ----------
@@ -450,9 +533,6 @@ html.ask-fold .ask-rail{display:flex}
   font-size:9.5px;color:var(--faint);white-space:nowrap
 }
 
-/* 底部操作行：会话 / 新对话 / 模型状态，靠右排。免责声明单独占一行，
-   不跟这堆控件抢宽度 —— 挤一行会把它压成竖排单字。 */
-.sub-ops{display:flex;align-items:center;justify-content:flex-end;gap:5px;margin-top:7px}
 
 .thread{flex:1;overflow-y:auto;padding:2px 14px 8px;display:flex;flex-direction:column;gap:12px}
 .thread::-webkit-scrollbar{width:5px}
@@ -573,12 +653,14 @@ html.ask-fold .ask-rail{display:flex}
 .trace .t code{background:var(--line-2);padding:1px 4px;border-radius:3px;font-size:10px;color:var(--ink-3)}
 
 .ask-foot{padding:9px 14px 11px;border-top:1px solid var(--line-2)}
-.inputbar{display:flex;gap:7px;position:relative}
-.inputbar input{
-  flex:1;height:34px;border:1px solid var(--line);border-radius:8px;padding:0 11px;
+.inputbar{display:flex;gap:7px;position:relative;align-items:flex-end}
+.inputbar input,.inputbar textarea{
+  flex:1;border:1px solid var(--line);border-radius:8px;padding:7px 11px;
   font:inherit;font-size:12.5px;color:var(--ink);background:var(--surface-2);outline:none
 }
-.inputbar input:focus{border-color:var(--brand);background:var(--surface);box-shadow:0 0 0 3px rgba(13,84,200,.07)}
+/* 提问框默认三行高，内容多了自己往下长（上限六行，再滚） */
+.inputbar textarea{height:auto;min-height:66px;max-height:120px;resize:none;line-height:1.55;overflow-y:auto}
+.inputbar input:focus,.inputbar textarea:focus{border-color:var(--brand);background:var(--surface);box-shadow:0 0 0 3px rgba(13,84,200,.07)}
 .inputbar button{
   width:56px;height:34px;border:0;border-radius:8px;background:var(--brand);color:#fff;
   font:inherit;font-size:12.5px;font-weight:600;cursor:pointer
@@ -605,7 +687,6 @@ html.ask-fold .ask-rail{display:flex}
 .att-chip .sz{font-size:10px;color:var(--faint);flex:0 0 auto}
 .att-chip .x{font-size:11px;line-height:1;color:var(--faint);cursor:pointer}
 .att-chip .x:hover{color:var(--danger)}
-.disclaim{font-size:10.5px;color:var(--faint);text-align:center;margin-top:7px;line-height:1.5}
 
 /* 右：罗盘 */
 .compass{flex:1;display:flex;flex-direction:column;gap:10px;overflow:hidden;min-width:0}
@@ -680,20 +761,98 @@ html.ask-fold .ask-rail{display:flex}
 .focus-item .fm{color:var(--faint);font-size:10.5px}
 .focus-more{margin-top:auto;font-size:11.5px;color:var(--brand);text-align:right;cursor:pointer;font-weight:600}
 
-/* 预警条 */
+/* 焦点弹窗：右侧详情为「左详情列 + 右数据列」两栏 */
+.fx-grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px;align-items:start}
+.fx-panel{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--surface-2)}
+.fx-panel h5{margin:0 0 9px;font-size:12px;font-weight:700;color:var(--ink-2);display:flex;align-items:center;gap:6px}
+.fx-panel h5 .num{margin-left:auto;font-weight:600;color:var(--faint);font-size:11px}
+.fx-detail{font-size:12.5px;line-height:1.9;color:var(--ink-2);margin:0}
+.fx-big{font-size:30px;font-weight:700;letter-spacing:-.5px;line-height:1;color:var(--ink)}
+.fx-big small{font-size:12px;color:var(--muted);font-weight:600;margin-left:3px}
+.fx-delta{font-size:11px;color:var(--warn);margin-top:5px;font-weight:600}
+.fx-ch{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-top:8px}
+.fx-ch .nm{flex:0 0 96px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
+.fx-ch .bar{flex:1;margin-top:0}
+.fx-ch b{flex:0 0 30px;text-align:right;font-weight:600;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.fx-kws{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.fx-kw{font-size:11px;padding:3px 9px;border-radius:20px;background:var(--surface);border:1px solid var(--line-2);color:var(--ink-2)}
+.fx-kw b{font-weight:700;margin-left:3px;color:var(--faint);font-size:10px}
+.fx-kw.top{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn);font-size:13.5px;font-weight:700}
+.fx-kw.top b{color:var(--warn);opacity:.8;font-size:11px}
+.fx-trend svg{width:100%;height:110px;display:block}
+.fx-cap{font-size:10px;color:var(--faint);margin-top:5px;line-height:1.5}
+.fx-tickets{display:flex;flex-direction:column;gap:7px}
+.fx-tk{display:flex;gap:8px;font-size:11.5px;color:var(--ink-2);align-items:center;min-width:0}
+.fx-tk code{font-family:ui-monospace,SFMono-Regular,monospace;font-size:10.5px;color:var(--muted);background:var(--surface-4);padding:1px 5px;border-radius:4px;flex:0 0 auto}
+.fx-tk .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fx-tk .st{margin-left:auto;color:var(--faint);font-size:10.5px;white-space:nowrap}
+.fx-note{margin-top:12px;font-size:10.5px;color:var(--faint);line-height:1.6;border-top:1px dashed var(--line-2);padding-top:8px}
+@media (max-width:900px){.fx-grid{grid-template-columns:1fr}}
+
+/* 预警条 → V3「统筹推进」：从一行横条升级为一整块可滚动清单 */
 .alertbar{
   background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
-  padding:9px 14px;display:flex;align-items:center;gap:14px;flex:0 0 auto
+  padding:12px 14px;display:flex;flex-direction:column;align-items:stretch;gap:9px;flex:0 0 auto
 }
 .alertbar h3{margin:0;font-size:12.5px;font-weight:700;white-space:nowrap;display:flex;align-items:center;gap:6px}
 .alertbar h3 .dot{width:6px;height:6px;border-radius:50%;background:var(--danger)}
-.alert-list{display:flex;align-items:center;gap:18px;min-width:0;overflow:hidden}
-.alert-item{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-2);white-space:nowrap;cursor:pointer}
-.alert-item:hover{color:var(--brand)}
-.alert-item .ad{width:5px;height:5px;border-radius:50%;flex:0 0 auto}
-.alert-item .ad.danger{background:var(--danger)} .alert-item .ad.warn{background:var(--warn)}
-.alert-item .ad.info{background:var(--info)}
-.alert-item .tag{color:var(--faint);font-size:10.5px}
+.coord-hd{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.coord-hint{font-size:10.5px;color:var(--faint);white-space:nowrap}
+.coord-chips{margin-left:auto;display:flex;gap:5px;flex-wrap:wrap}
+.coord-chip{
+  font-family:inherit;font-size:10.5px;padding:2px 9px;border-radius:20px;cursor:pointer;
+  border:1px solid var(--line);background:var(--surface);color:var(--muted);transition:.14s
+}
+.coord-chip b{font-weight:700;margin-left:3px}
+.coord-chip:hover{border-color:var(--brand);color:var(--brand)}
+.coord-chip.on{border-color:var(--brand);color:var(--brand);background:var(--brand-soft);font-weight:600}
+.coord-list{display:flex;flex-direction:column;gap:6px;max-height:400px;overflow-y:auto;padding-right:2px}
+/* V3.4：左统计图 / 右列表各占一半，图不再挤在一小列里 */
+.coord-body{display:flex;gap:16px;align-items:stretch;min-width:0}
+.coord-stats{
+  flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:12px;
+  border-right:1px solid var(--line-2);padding-right:16px
+}
+.coord-list-flex{flex:1 1 0;min-width:0;max-height:420px}
+@media (max-width:1180px){
+  .coord-body{flex-direction:column}
+  .coord-stats{border-right:none;padding-right:0;border-bottom:1px solid var(--line-2);padding-bottom:12px}
+}
+/* 统计块通用 */
+.cst-block{display:flex;flex-direction:column;gap:7px}
+.cst-title{font-size:11px;font-weight:700;color:var(--ink-2);display:flex;align-items:baseline;gap:6px}
+.cst-title span{font-weight:400;font-size:10px;color:var(--faint)}
+/* 环形图 + 图例 */
+.cst-donut{display:flex;align-items:center;gap:12px}
+.cst-donut svg{width:92px;height:92px;flex:0 0 auto}
+.cst-center{position:absolute;display:none}
+.cst-donut{position:relative}
+.cst-legend{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.cst-lg{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--muted)}
+.cst-lg i{width:8px;height:8px;border-radius:2px;flex:0 0 auto}
+.cst-lg span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cst-lg b{color:var(--ink);font-weight:700}
+/* 责任单位条形图 */
+.cst-bars{display:flex;flex-direction:column;gap:6px}
+.cst-row{display:flex;align-items:center;gap:7px;font-size:10.5px}
+.cst-name{width:74px;flex:0 0 auto;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
+.cst-bar{flex:1;height:9px;border-radius:5px;background:var(--line-2);overflow:hidden}
+.cst-bar i{display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,#4a90ee,#1163e6);position:relative}
+.cst-bar i b{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,#f08a6b,#d64541);border-radius:5px 0 0 5px}
+.cst-n{flex:0 0 auto;font-weight:700;color:var(--ink);min-width:16px;text-align:right}
+.coord-list::-webkit-scrollbar{width:5px}
+.coord-list::-webkit-scrollbar-thumb{background:var(--thumb);border-radius:3px}
+.coord-row{
+  display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid var(--line-2);
+  border-radius:8px;cursor:pointer;font-size:12px;transition:.13s;flex:0 0 auto
+}
+.coord-row:hover{background:var(--hover);border-color:var(--line-3)}
+.coord-row .cd{width:6px;height:6px;border-radius:50%;flex:0 0 auto}
+.coord-row .cd.danger{background:var(--danger)} .coord-row .cd.warn{background:var(--warn)}
+.coord-row .cd.info{background:var(--info)} .coord-row .cd.muted{background:var(--faint)}
+.coord-row .ct{flex:1;min-width:0;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.coord-row .cs{font-size:10.5px;color:var(--faint);flex:0 0 auto;white-space:nowrap}
+.coord-row .cs:first-of-type{color:var(--ink-2)}
 .go{
   margin-left:auto;font:inherit;font-size:11.5px;font-weight:600;color:var(--brand);
   background:var(--brand-soft);border:1px solid var(--line-3);border-radius:6px;padding:4px 10px;
@@ -928,16 +1087,50 @@ html.embedded .drawer{top:0;height:100%}
 .ov-card b{font-size:12px;font-weight:600;line-height:1.45;display:block}
 .ov-card .ov-sub{font-size:10.5px;color:var(--muted);display:block;margin-top:3px}
 .ov-main{padding:14px 18px 18px;overflow:auto;min-width:0}
+.ov-h{display:flex;align-items:baseline;gap:8px}
 .ov-h h4{margin:0;font-size:15px;line-height:1.45}
+.ov-h .ov-id{font-size:10.5px;color:var(--faint);white-space:nowrap}
 .ov-tags{display:flex;gap:5px;flex-wrap:wrap;margin:8px 0 12px}
 .ov-tag{font-size:10.5px;padding:2px 7px;border-radius:20px;border:1px solid var(--line);color:var(--muted);background:var(--surface)}
 .ov-tag.danger{background:var(--danger-bg);color:var(--danger);border-color:var(--danger-line)}
 .ov-tag.warn{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-line)}
 .ov-tag.info{background:var(--info-bg);color:var(--info);border-color:var(--info-line)}
 .ov-tag.ok{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-line)}
-.ov-kv{display:grid;grid-template-columns:76px 1fr;gap:5px 10px;font-size:12px;color:var(--ink-2);margin:0 0 14px}
-.ov-kv dt{color:var(--faint);font-size:11px;padding-top:1px}
-.ov-kv dd{margin:0;line-height:1.65}
+/* V3.2 详情要素卡：两列小卡铺满右侧，通栏项（部门/进度/标准/来源）单独占整行 */
+.ov-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:0 0 12px}
+.ov-cell{background:var(--surface-2);border:1px solid var(--line-2);border-radius:8px;padding:7px 10px;min-width:0}
+.ov-cell.full{grid-column:1/-1}
+.ov-cell .k{font-size:10.5px;color:var(--faint);margin-bottom:3px}
+.ov-cell .v{font-size:12px;color:var(--ink);line-height:1.55;word-break:break-all}
+.ov-cell .v small{color:var(--faint);font-size:10.5px}
+/* 紧急度徽章：红高 / 橙中 / 蓝低 / 灰办结 */
+.u-badge{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 9px;border-radius:20px;line-height:1.6;vertical-align:1px}
+.u-badge.danger{background:var(--danger-bg);color:var(--danger)}
+.u-badge.warn{background:var(--warn-bg);color:var(--warn)}
+.u-badge.info{background:var(--info-bg);color:var(--info)}
+.u-badge.ok{background:var(--ok-bg);color:var(--ok)}
+/* 进度条：逾期事项用红条，一眼分清「进度低」和「进度低还拖期」 */
+.ov-prog{height:5px;border-radius:3px;background:var(--line-2);margin-top:6px;overflow:hidden}
+.ov-prog i{display:block;height:100%;border-radius:3px;background:var(--brand);transition:width .2s}
+.ov-prog i.late{background:var(--danger)}
+/* 任务节点时间线：竖排，done 绿 / doing 蓝光环 / late 红 / todo 灰 */
+.ov-nodes{border:1px solid var(--line);border-radius:9px;padding:10px 12px 8px;margin:0 0 14px}
+.ov-nodes .hd{font-size:12px;font-weight:700;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.ov-nodes .hd::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--brand)}
+.ov-nodes .nd-n{font-size:10.5px;font-weight:400;color:var(--faint)}
+.ov-node{position:relative;padding:0 0 12px 18px;font-size:11.5px;line-height:1.5;color:var(--ink-2)}
+.ov-node:last-child{padding-bottom:2px}
+.ov-node::before{content:"";position:absolute;left:4px;top:5px;width:7px;height:7px;border-radius:50%;background:var(--line-3)}
+.ov-node::after{content:"";position:absolute;left:7px;top:14px;bottom:-2px;width:1px;background:var(--line-3)}
+.ov-node:last-child::after{display:none}
+.ov-node.done::before{background:var(--ok)}
+.ov-node.done::after{background:var(--ok)}
+.ov-node.doing::before{background:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
+.ov-node.late::before{background:var(--danger)}
+.ov-node .nd-date{color:var(--faint);font-size:10.5px;margin-right:7px;font-variant-numeric:tabular-nums}
+.ov-node .nd-st{font-size:10.5px;margin-left:7px}
+.nd-st.done{color:var(--ok)} .nd-st.doing{color:var(--brand)}
+.nd-st.late{color:var(--danger)} .nd-st.todo{color:var(--faint)}
 .ov-form{border:1px solid var(--line);border-radius:9px;padding:10px;background:var(--surface-2);margin:0 0 14px}
 .ov-form textarea{width:100%;box-sizing:border-box;font:inherit;font-size:12px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;min-height:56px;resize:vertical;line-height:1.65;background:var(--surface);color:var(--ink)}
 .ov-form textarea:focus{outline:none;border-color:var(--brand)}
@@ -988,12 +1181,21 @@ html.embedded .drawer{top:0;height:100%}
 .kpi.sv .f{margin-top:7px;flex-wrap:wrap;gap:5px}
 .kpi.sv .sv-code{font-size:10px;color:var(--brand);background:var(--brand-soft);border-radius:4px;padding:1px 5px}
 .kpi.sv .at{margin-left:auto;font-size:10px;color:var(--faint)}
-/* 星号：常驻可见。藏到 hover 才出现等于没有入口 —— 谁会去 hover 一段答案。
-   点亮用 --warn，浅色深色都够读。 */
-.star-btn{margin-left:auto;background:none;border:none;padding:0 3px;font-size:13px;line-height:1;
-  color:var(--faint);cursor:pointer;opacity:.7;transition:.12s}
-.star-btn:hover{opacity:1;color:var(--warn);transform:scale(1.15)}
-.star-btn.on{opacity:1;color:var(--warn)}
+/* 星号 → V3「关注」按钮：星标 + 文字，未点是灰色细字，点亮后金底金框加重 ——
+   隔着一屏也能看出哪些回答已经进了工作台。点击弹出「添加到哪个工作台」。 */
+.star-btn{
+  margin-left:auto;display:inline-flex;align-items:center;gap:4px;
+  background:transparent;border:1px solid transparent;border-radius:20px;padding:2px 9px;
+  font-family:inherit;font-size:11px;line-height:1.5;color:var(--faint);cursor:pointer;
+  opacity:.85;transition:.15s
+}
+.star-btn .sb-ic{font-size:13px;line-height:1}
+.star-btn:hover{opacity:1;color:var(--warn);border-color:var(--warn-line);background:var(--warn-bg)}
+.star-btn.on{
+  opacity:1;color:var(--warn);border-color:var(--warn);background:var(--warn-bg);
+  font-weight:700;box-shadow:0 0 0 2px rgba(217,130,0,.14)
+}
+.star-btn.on:hover{filter:brightness(.96)}
 .star-btn[disabled]{opacity:.35;cursor:default;transform:none}
 /* 从收藏夹跳回来时闪一下，否则在长会话里看不出停在哪条 */
 .bub-ai.flash{animation:svFlash 1.6s ease}
@@ -1057,10 +1259,38 @@ html.embedded .drawer{top:0;height:100%}
 }
 
 /* ---------------- AI 日程 ----------------
-   不做月历网格：14 天里绝大多数格子是空的，一屏放不下又看不出"下一件是几号"。
-   按天分组的竖排时间线，信息密度和可读性都更好；日期分组标题吸顶，滚动时知道在哪天。 */
-.cal-box{width:min(780px,95vw);max-height:88vh}
+   V3：改为月历视图 —— 一屏看清整月安排，日期格内摆事项；
+   点某天在下方看当天清单。不做假数据：14 天窗口外的日期就是空格。 */
+.cal-box{width:min(880px,96vw);max-height:90vh}
 .cal-body{padding:0 0 14px;overflow:auto}
+.cal-nav{display:flex;align-items:center;gap:10px;padding:10px 14px 6px}
+.cal-nav b{font-size:13.5px}
+.cal-nav-btn{
+  font-family:inherit;font-size:12px;padding:3px 10px;border:1px solid var(--line);
+  background:var(--surface);color:var(--ink-2);border-radius:6px;cursor:pointer;transition:.14s
+}
+.cal-nav-btn:hover{border-color:var(--brand);color:var(--brand)}
+.cal-nav-btn.ghost{color:var(--muted)}
+.cal-legend{margin-left:auto;font-size:10px;color:var(--faint)}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;padding:6px 14px 2px}
+.cal-wd{text-align:center;font-size:10.5px;color:var(--faint);padding:2px 0 4px}
+.cal-cell{
+  min-height:62px;border:1px solid var(--line-2);border-radius:8px;padding:4px 5px;cursor:pointer;
+  background:var(--surface);display:flex;flex-direction:column;gap:2px;overflow:hidden;transition:.13s
+}
+.cal-cell:hover{border-color:var(--brand)}
+.cal-cell.out{background:transparent;border-color:transparent;cursor:default}
+.cal-cell.today .cal-d{background:var(--brand);color:#fff}
+.cal-cell.sel{border-color:var(--brand);box-shadow:0 0 0 2px var(--brand-soft)}
+.cal-d{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:10.5px;font-weight:600;color:var(--ink-2);flex:0 0 auto}
+.cal-ev{font-size:9.5px;line-height:1.35;border-radius:4px;padding:1px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cal-ev.danger{background:var(--danger-bg);color:var(--danger)}
+.cal-ev.warn{background:var(--warn-bg);color:var(--warn)}
+.cal-ev.info{background:var(--info-bg);color:var(--info)}
+.cal-ev.ok{background:var(--ok-bg);color:var(--ok)}
+.cal-ev.muted{background:var(--surface-3);color:var(--muted)}
+.cal-more{font-size:9px;color:var(--faint)}
+.cal-daylist{padding:6px 14px 0}
 
 /* ---------------- 材料助手 ----------------
    纸张不跟随主题：它是一张纸，不是界面。深色主题下四周桌面是深色，纸仍然白底黑字——
@@ -1074,16 +1304,56 @@ html.embedded .drawer{top:0;height:100%}
 .dc-lab{font-size:10.5px;color:var(--muted);margin:0 0 5px;display:flex;justify-content:space-between;align-items:center}
 .dc-lab b{font-weight:600}
 .dc-lab span{color:var(--faint);font-size:10px}
-.dc-kinds{display:flex;flex-direction:column;gap:5px}
-.dc-kind{
-  text-align:left;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
-  border-radius:8px;padding:7px 9px;cursor:pointer;font-family:inherit;transition:.14s;
+/* V3 写作助手：三个栏位页签（工作汇报 / 会议落实 / 督办通报），各自独立表单 */
+.dc-tabs3{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
+.dc-tab{
+  text-align:center;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
+  border-radius:8px;padding:7px 4px;cursor:pointer;font-family:inherit;transition:.14s
 }
-.dc-kind:hover{border-color:var(--brand)}
-.dc-kind.on{border-color:var(--brand);background:var(--brand-soft)}
-.dc-kind b{display:block;font-size:12px;color:var(--ink);font-weight:600}
-.dc-kind span{display:block;font-size:10.5px;color:var(--muted);margin-top:2px;line-height:1.5}
-.dc-kind.on b{color:var(--brand)}
+.dc-tab:hover{border-color:var(--brand)}
+.dc-tab.on{border-color:var(--brand);background:var(--brand-soft)}
+.dc-tab b{display:block;font-size:12px;color:var(--ink);font-weight:600}
+.dc-tab.on b{color:var(--brand)}
+.dc-tab span{display:none}
+.dc-form{display:flex;flex-direction:column;gap:13px}
+.dc-up{
+  display:flex;align-items:center;justify-content:center;gap:5px;
+  border:1px dashed var(--line-3);border-radius:8px;padding:10px 9px;cursor:pointer;
+  font-size:11.5px;color:var(--muted);transition:.14s;background:var(--surface)
+}
+.dc-up:hover{border-color:var(--brand);color:var(--brand);background:var(--brand-soft)}
+.dc-upfiles{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.dc-upfiles span{
+  font-size:10.5px;color:var(--brand);background:var(--brand-soft);
+  border-radius:20px;padding:2px 9px;cursor:pointer
+}
+.dc-upfiles span:hover{color:var(--danger);background:var(--danger-bg)}
+.dc-up-text{
+  width:100%;font-family:inherit;font-size:11.5px;line-height:1.6;padding:7px 9px;
+  border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);resize:vertical
+}
+.dc-up-text:focus{outline:2px solid var(--brand-soft);border-color:var(--brand)}
+/* 红头公文纸面：红机关名 + 文号 + 红色反线 + 仿宋正文 + 右落款。
+   纸张不跟主题（同 .doc-paper 约定），红头红得更正式：#d40000。 */
+.doc-paper.gov{padding:52px 60px}
+.gov-org{
+  font-family:"SimSun","宋体",serif;font-size:30px;font-weight:700;color:#d40000;
+  text-align:center;letter-spacing:6px;line-height:1.4
+}
+.gov-no{font-family:"SimSun","宋体",serif;font-size:13px;color:#d40000;text-align:center;margin-top:8px}
+.gov-line{height:2px;background:#d40000;margin:14px 0 26px}
+.gov-title{
+  font-family:"SimSun","宋体",serif;font-size:20px;font-weight:700;text-align:center;
+  margin:4px 0 22px;line-height:1.6
+}
+.gov-p{
+  font-family:"FangSong","仿宋","SimSun","宋体",serif;font-size:14.5px;
+  line-height:2.1;text-indent:2em;margin:0 0 10px;color:#1a1a1a
+}
+.gov-sign{
+  font-family:"FangSong","仿宋","SimSun","宋体",serif;font-size:14.5px;line-height:2;
+  text-align:right;margin-top:38px;color:#1a1a1a
+}
 .dc-sel{
   width:100%;font-size:11.5px;padding:5px 7px;border:1px solid var(--line);
   border-radius:7px;background:var(--surface);color:var(--ink);font-family:inherit;
@@ -1184,8 +1454,6 @@ html.embedded .drawer{top:0;height:100%}
 .cal-brief-hd .who{margin-left:auto;color:var(--faint)}
 .cal-brief p{margin:6px 0 0;font-size:12.5px;line-height:1.75;color:var(--ink)}
 .cal-brief .note{margin-top:6px;font-size:10.5px;color:var(--warn);line-height:1.6}
-.cal-sk{height:15px;border-radius:5px;background:var(--surface-3);margin-top:7px;animation:calPulse 1.4s ease-in-out infinite}
-@keyframes calPulse{0%,100%{opacity:.55}50%{opacity:1}}
 
 .cal-sum{display:flex;gap:12px;flex-wrap:wrap;margin:8px 18px 0;font-size:10.5px;color:var(--muted)}
 .cal-sum b{color:var(--ink-2);font-variant-numeric:tabular-nums}
@@ -1308,13 +1576,11 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
 :root[data-theme="dark"] .bub-user,
 :root[data-theme="dark"] .inputbar button,
 :root[data-theme="dark"] .tool-badge,
-:root[data-theme="dark"] .id-item.on i,
 :root[data-theme="dark"] .es-item.on i,
 :root[data-theme="dark"] .acct-av,
 :root[data-theme="dark"] .mini.primary,
 :root[data-theme="dark"] .ov-chip.on,
-:root[data-theme="dark"] .ck.on,
-:root[data-theme="dark"] .ov-act.primary{color:#0b1220}
+:root[data-theme="dark"] .ck.on{color:#0b1220}
 
 /* ---------------- 强调色 ----------------
    顶栏渐变一起换：只换 --brand 会让顶栏还是蓝的，和按钮撞色。
@@ -1400,7 +1666,11 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
 <body>
 
 <div class="topbar">
-  <div class="brand"><span class="logo">政</span><span id="cityTitle">AI市长工作台</span></div>
+  <div class="brand"><svg class="logo-svg" width="27" height="22" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 270 220" role="img" aria-labelledby="logoTitle">
+<defs><linearGradient xmlns="http://www.w3.org/2000/svg" id="logoBlue" gradientUnits="userSpaceOnUse" x1="35" y1="190" x2="180" y2="20"><stop offset="0" stop-color="#254BFF" /><stop offset="0.55" stop-color="#3478FF" /><stop offset="1" stop-color="#60A5FA" /></linearGradient></defs>
+<g id="original-a"><path d="M 113.357 20.772 C 112.179 21.723, 106.157 32.175, 99.976 44 C 88.213 66.506, 86.981 68.826, 74.766 91.500 C 70.618 99.200, 60.705 117.650, 52.737 132.500 C 33.080 169.135, 25.226 183.081, 22.747 185.746 C 21.599 186.981, 20.922 188.255, 21.244 188.577 C 22.458 189.792, 25.703 186.938, 31.898 179.210 C 35.417 174.819, 42.846 167.197, 48.407 162.271 L 58.519 153.314 66.158 139.407 C 70.359 131.758, 79.739 114.475, 87.001 101 C 113.546 51.750, 118.388 43, 119.096 43 C 119.809 43, 133.095 67.817, 152.959 106.250 C 158.573 117.112, 163.491 126, 163.889 126 C 164.659 126, 177.288 121.885, 177.809 121.464 C 178.296 121.072, 162.701 90.562, 143.582 54.500 L 126.087 21.500 123.793 20.265 C 120.551 18.518, 115.871 18.746, 113.357 20.772 M 221.500 113.566 C 202.604 122.860, 175.506 133.368, 160 137.414 C 152.575 139.352, 140.650 141.842, 133.500 142.949 C 119.795 145.070, 110.276 147.268, 106.668 149.145 C 101.461 151.855, 94.958 157.374, 91.236 162.241 C 85.731 169.439, 75.816 185.003, 76.744 184.988 C 77.160 184.981, 84.051 179.906, 92.058 173.710 C 100.065 167.514, 109.362 161.213, 112.717 159.708 C 116.072 158.202, 126.396 155.207, 135.659 153.053 C 157.965 147.864, 165.802 145.189, 182.500 137.063 C 203.246 126.966, 238.390 106.936, 235 107.141 C 234.725 107.158, 228.650 110.049, 221.500 113.566 M 180.788 146.330 C 177.097 148.073, 174.059 149.817, 174.038 150.204 C 174.017 150.592, 177.618 158.329, 182.040 167.399 L 190.080 183.890 193.117 186.445 L 196.153 189 204.660 189 C 209.339 189, 213.017 188.662, 212.833 188.250 C 209.323 180.351, 189.222 143.054, 188.500 143.098 C 187.950 143.132, 184.480 144.586, 180.788 146.330 M 44.319 174.833 C 42.570 176.300, 38.439 179.750, 35.138 182.500 C 31.837 185.250, 29.106 187.860, 29.068 188.300 C 29.031 188.740, 31.522 188.965, 34.604 188.800 L 40.209 188.500 44.261 180.739 C 46.489 176.471, 48.129 172.796, 47.905 172.572 C 47.682 172.348, 46.068 173.366, 44.319 174.833" fill="url(#logoBlue)" fill-rule="evenodd"/></g>
+<rect id="i-node" x="196" y="102" width="9" height="9" rx="2" fill="url(#logoBlue)"/>
+</svg><span id="cityTitle">AI市长工作台</span></div>
   <div class="tools">
     <span data-tool="meeting"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H4z"/><path d="M9 20h6M12 16v4"/></svg>会议助手</span>
     <span data-tool="cal"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg>AI日程</span>
@@ -1424,7 +1694,7 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
         <svg viewBox="0 0 24 24"><path d="M19 5v14"/><path d="M14 7l-5 5 5 5"/></svg>
       </button>
       <h2><i class="ask-dot"></i><b>智能问政</b></h2>
-      <span class="live"><i></i>在线</span>
+      <button class="new-chat-head" id="headNew" title="开一个新会话"><span class="nch-ic">＋</span>新对话</button>
       <button class="hd-btn" id="askChats" title="历史对话" aria-label="历史对话">
         <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h15M4 18h11"/></svg>
       </button>
@@ -1446,9 +1716,6 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
       </div>
       <!-- 「＋新对话」是和下面会话列表并列的第一行，不跟标题挤在一起（WorkBuddy 的「新建任务」就长这样） -->
       <div class="chats-scroll">
-        <button class="chat-new" id="chatsNew" title="开一个新会话">
-          <span class="cn-ic">＋</span><span>新对话</span>
-        </button>
         <div class="chats-list" id="chatsList"></div>
       </div>
       <div class="chats-foot">
@@ -1461,19 +1728,14 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
          不是并排一堆胶囊 —— 一次只能有一个角色在对话中，选谁就谁答。
          没选人时这一行只剩「AI参谋 ▾」，不写「不召唤」这种占位词。 -->
     <div class="expert-select" id="expertSelect" tabindex="0" role="button" aria-haspopup="true" aria-expanded="false">
-      <span class="es-label">AI参谋</span>
+      <span class="es-label">选择AI参谋</span>
       <b class="es-name" id="esName"></b>
       <span class="es-state" id="esState"></span>
       <svg class="es-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
       <div class="es-menu" id="esMenu" hidden></div>
     </div>
-    <div class="chips">
-      <button data-tool="meeting">查会议资料</button>
-      <button data-ask="今年1-9月全市规上工业增加值是多少？同比增速如何？">查统计数据</button>
-      <button data-ask="重大项目投资完成率有多少，跟时序进度比怎么样">查项目进展</button>
-    </div>
     <div class="thread" id="thread">
-      <div class="thread-empty" id="threadEmpty">还没有对话。上面挑一个问题，或直接输入。<br>数值全部来自指标接口，可点开卡片核对口径。</div>
+      <div class="thread-empty" id="threadEmpty">今天能帮您做什么？选择AI参谋对专业领域提问。<br>可以查会议资料、查统计数据、查项目进展等。</div>
     </div>
     <div class="ask-foot">
       <!-- 附件芯片：选中之后才出现，没选就整行不占位 -->
@@ -1482,7 +1744,7 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
         <button class="attach" id="attachBtn" title="添加附件（这一版只支持纯文本，解析还没接）" aria-label="添加附件">
           <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.5-8.5a3.5 3.5 0 0 1 4.9 4.9l-8.5 8.5a2 2 0 0 1-2.8-2.8l7.7-7.7"/></svg>
         </button>
-        <input id="q" placeholder="请输入您的问题…" autocomplete="off">
+        <textarea id="q" rows="3" placeholder="请输入您的问题…" autocomplete="off"></textarea>
         <button id="go">发送</button>
         <input type="file" id="attachInput" multiple hidden>
         <!-- 斜杠唤起层：输入框以 / 开头时才出现。选项就是参谋名单本身，
@@ -1490,12 +1752,6 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
              不一样的状态。 -->
         <div class="slash-menu" id="slashMenu" hidden></div>
       </div>
-      <div class="sub-ops">
-        <!-- 会话切换挪去头部「历史对话」那一屏了，这里只留模型状态：
-             同一件事不再有两个入口 -->
-        <span class="model-pill" data-model-pill title="点击配置模型">未配置模型</span>
-      </div>
-      <div class="disclaim">AI 输出仅供参考 · 数值以数据接口返回为准</div>
     </div>
     </div>
   </section>
@@ -1505,7 +1761,8 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
     <div class="cp-head">
       <div class="cp-tabs">
         <a class="on" data-nav="compass">城市罗盘</a>
-        <a data-nav="desk">个人工作台</a>
+        <!-- V3：工作台页签与「城市罗盘」并列横向排布，可不断扩展；下面直接是对应页面 -->
+        <div class="desk-tabs" id="deskTabs"></div>
       </div>
       <div class="cp-right">
         <span class="period"><i></i><span id="periodText">—</span></span>
@@ -1525,19 +1782,22 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
 
     <div class="view" id="viewDesk" hidden>
       <div class="desk-hd">
-        <h2>个人工作台</h2>
         <span class="dh-who" id="deskWho" title="当前演示身份；切换可看别人的配置">—</span>
         <button class="mini sec-act" id="deskCustom" title="选择显示哪些板块、谁排前面">自定义</button>
       </div>
       <div class="desk-sec" data-block="watch">
         <div class="sec-head">
-          <h3>我的关注</h3>
+          <h3>关注指标</h3>
           <span class="sec-count" id="watchCount">—</span>
           <button class="mini sec-act" id="watchManage" title="从已注册指标里增删关注">管理关注</button>
         </div>
-        <!-- 收藏的问答不再单独占一块：它和指标卡渲染进同一个网格（renderWatch）。
-             空的时候自然什么都不画，不留「还没有收藏」的占位。 -->
         <div class="kpis cols-3" id="watchGrid"></div>
+        <div class="sec-head sub">
+          <h3>关注问题</h3>
+          <span class="sec-count" id="watchQCount">—</span>
+        </div>
+        <!-- 收藏的问答单独成栏、三张并排：和指标分开看，「问题」跟「数」不是一个东西 -->
+        <div class="kpis cols-3" id="watchQGrid"></div>
       </div>
       <div class="desk-sec desk-feed" data-block="feed">
         <div class="sec-head">
@@ -1715,6 +1975,27 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
   </div>
 </div>
 
+<!-- V3.6 民情焦点二级弹窗：左侧全部焦点（按反馈人数排序），右侧焦点详情。
+     复用督办弹窗的 ov-* 骨架，视觉上和统筹推进是一套语言。 -->
+<div class="modal" id="focusModal">
+  <div class="modal-box ov-box">
+    <div class="modal-head">
+      <div>
+        <h3>民情焦点 · 全部焦点</h3>
+        <p>12345 热线、市长信箱、「我的溧阳」APP、网格员上报四渠道诉求聚类去重。按反馈人数排序，点左侧焦点看诉求详情、来源分布、焦点词与舆论走势。</p>
+      </div>
+      <span class="modal-x" id="focusClose">✕</span>
+    </div>
+    <div class="ov-body">
+      <aside class="ov-side">
+        <div class="ov-filters" id="fxFilters"></div>
+        <div class="ov-list" id="fxList"></div>
+      </aside>
+      <section class="ov-main" id="fxMain"></section>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="watchModal">
   <div class="modal-box" style="width:min(560px,94vw)">
     <div class="modal-head">
@@ -1738,6 +2019,35 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
       <span class="modal-x" id="fmClose">✕</span>
     </div>
     <div class="modal-body" id="fmBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="deskModal">
+  <div class="modal-box" style="width:min(400px,94vw)">
+    <div class="modal-head">
+      <div>
+        <h3 id="dmTitle">新建工作台</h3>
+        <p>给这一组关注起个名字，比如「招商引资」「民生实事」。</p>
+      </div>
+      <span class="modal-x" id="dmClose">✕</span>
+    </div>
+    <div class="modal-body">
+      <input id="dmName" class="dm-input" placeholder="工作台名称（最多 12 字）" maxlength="12">
+      <div class="dm-acts"><button class="mini" id="dmOk">确定</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="starModal">
+  <div class="modal-box" style="width:min(380px,94vw)">
+    <div class="modal-head">
+      <div>
+        <h3>添加到工作台</h3>
+        <p>选择把这条回答放进哪个工作台的「我的关注」，点一行即完成。</p>
+      </div>
+      <span class="modal-x" id="smClose">✕</span>
+    </div>
+    <div class="modal-body" id="smBody"></div>
   </div>
 </div>
 
@@ -1807,6 +2117,7 @@ function kpiCard(k, opts = {}) {
         <span class="yoy ${esc(k.yoy_tone)}">${esc(k.yoy_text)}</span>
         ${k.note ? `<span class="note">${esc(k.note)}</span>` : ""}
       </div>
+      ${opts.footer || ""}
     </div>`;
 }
 
@@ -1855,30 +2166,294 @@ function renderBoards(list, focus) {
   $("#grid").innerHTML = cards + focusCard;
 }
 
-/* 预警条即督办台账的唯一入口：顶栏不再单列「统筹推进」——
-   同一件事两个入口，右上角那个还带逾期角标，用户会以为是两套东西。
-   逾期数角标就挂在这里的标题上，信息没丢，入口只剩一个。 */
-function renderAlerts(list, ov) {
-  const shown = list.slice(0, 2);
-  const overdue = (ov && ov.overdue) || 0;
+/* V3：预警条升级为「统筹推进」整块 —— 原来只露 2 条、其余要按「进入统筹推进」
+   跳弹窗，现在台账全部事项直接内嵌在这里，可滚动、可筛选；点某一条仍打开
+   督办详情弹窗看办理闭环。入口按钮因此删掉：页面本身就是入口。 */
+const AO = { items: [], filter: "全部", loaded: false };
+const AO_FILTERS = ["全部", "逾期", "今日到期", "临期", "签收超时", "停滞", "已办结"];
+const AO_TONE = { 逾期: "danger", 今日到期: "warn", 临期: "warn", 签收超时: "info", 停滞: "info" };
+
+function renderAlerts() {
   $("#alertbar").innerHTML = `
-    <h3><span class="dot"></span>追踪推进 · 预警提醒${overdue ? `<i class="tool-badge" title="${overdue} 件已逾期">${overdue}</i>` : ""}</h3>
-    <div class="alert-list">
-      ${shown.map((a) => `
-        <div class="alert-item" data-item="${esc(a.id)}" title="${esc(a.why)}">
-          <span class="ad ${esc(a.tone)}"></span>
-          <span>${esc(a.title)} · ${esc(a.tag)}</span>
-          <span class="tag">${a.remind_count ? `已催办 ${a.remind_count} 次` : esc(a.status)}</span>
-        </div>`).join("")}
-      ${list.length > 2 ? `<span class="tag" style="color:var(--faint)">另有 ${list.length - 2} 条</span>` : ""}
+    <div class="coord-hd">
+      <h3><span class="dot"></span>统筹推进</h3>
+      <span class="coord-hint">督办台账全部事项 · 点一条看办理详情</span>
+      <div class="coord-chips" id="coordChips"></div>
     </div>
-    <button class="go" id="goCoord">进入统筹推进</button>`;
+    <div class="coord-body">
+      <div class="coord-stats" id="coordStats"></div>
+      <div class="coord-list coord-list-flex" id="coordList"><div class="hint" style="margin:8px 2px">正在读取台账…</div></div>
+    </div>`;
+  AO.loaded = false;
+  loadCoord();
+}
+
+async function loadCoord() {
+  try {
+    const d = await (await fetch("/api/oversight")).json();
+    if (d.ok && (d.items || []).length) {
+      AO.items = d.items;
+    }
+  } catch (e) { /* 快照/离线时保留已有数据，不弹错误打扰罗盘 */ }
+  AO.loaded = true;
+  renderCoord();
+}
+
+/* 分类计数在前端算：口径简单（风险字样 + 时限），不值得为此再加一遍接口约定 */
+function aoCount(key) {
+  const it = AO.items;
+  if (key === "全部") return it.filter((i) => i.status !== "已办结").length;
+  if (key === "逾期") return it.filter((i) => i.risk === "逾期").length;
+  if (key === "今日到期") return it.filter((i) => i.days_left === 0 && i.status !== "已办结").length;
+  if (key === "临期") return it.filter((i) => i.risk === "临期").length;
+  if (key === "签收超时") return it.filter((i) => i.risk === "签收超时").length;
+  if (key === "停滞") return it.filter((i) => i.risk === "停滞").length;
+  if (key === "已办结") return it.filter((i) => i.status === "已办结").length;
+  return 0;
+}
+
+/* 统计图：状态环形图 + 责任单位分布条形图，纯 SVG 手绘（页面没有引图表库，
+   走同 spark() 一条路：不因为两块小图多背一个依赖）。口径全部来自台账全量。 */
+function coordStatsHtml() {
+  const items = AO.items;
+  if (!items.length) return `<div class="hint" style="margin:6px 2px">台账暂无数据。</div>`;
+  const st = {
+    逾期: items.filter((i) => i.risk === "逾期").length,
+    今日到期: items.filter((i) => i.days_left === 0 && i.status !== "已办结" && i.risk !== "逾期").length,
+    临期: items.filter((i) => i.risk === "临期" && i.days_left !== 0).length,
+    停滞: items.filter((i) => i.risk === "停滞" && i.days_left !== 0 && i.days_left > 0).length,
+    正常推进: 0,
+    已办结: items.filter((i) => i.status === "已办结").length,
+  };
+  st["正常推进"] = items.length - Object.values(st).reduce((a, b) => a + b, 0);
+  if (st["正常推进"] < 0) st["正常推进"] = 0;
+  const COLORS = { 逾期: "var(--danger)", 今日到期: "var(--warn)", 临期: "var(--info)", 停滞: "var(--muted)", 正常推进: "var(--brand)", 已办结: "var(--ok)" };
+  const total = items.length;
+
+  // 环形图：stroke-dasharray 分段。段与段之间留 1.5 单位缝，读起来不糊成一圈
+  const R = 36, C = 2 * Math.PI * R;
+  let off = 0;
+  const arcs = Object.entries(st).filter(([, n]) => n > 0).map(([k, n]) => {
+    const len = (n / total) * C;
+    const el = `<circle cx="50" cy="50" r="${R}" fill="none" stroke="${COLORS[k]}" stroke-width="14"
+      stroke-dasharray="${Math.max(len - 1.5, 0.5).toFixed(1)} ${(C - len + 1.5).toFixed(1)}"
+      stroke-dashoffset="${(-off).toFixed(1)}" transform="rotate(-90 50 50)"/>`;
+    off += len;
+    return el;
+  }).join("");
+  const legend = Object.entries(st).filter(([, n]) => n > 0).map(([k, n]) =>
+    `<div class="cst-lg"><i style="background:${COLORS[k]}"></i><span>${k}</span><b>${n}</b></div>`).join("");
+
+  // 责任单位：按事项数排序取前 6，条内红色段是逾期占比
+  const byUnit = {};
+  items.forEach((i) => {
+    const u = (byUnit[i.assignee] = byUnit[i.assignee] || { n: 0, od: 0 });
+    u.n++;
+    if (i.risk === "逾期") u.od++;
+  });
+  const units = Object.entries(byUnit).sort((a, b) => b[1].n - a[1].n).slice(0, 6);
+  const maxN = Math.max(...units.map(([, v]) => v.n), 1);
+  const bars = units.map(([u, v]) => `
+    <div class="cst-row" title="${esc(u)}：共 ${v.n} 件${v.od ? `，逾期 ${v.od} 件` : ""}">
+      <span class="cst-name">${esc(u)}</span>
+      <div class="cst-bar"><i style="width:${((v.n / maxN) * 100).toFixed(0)}%"><b style="width:${v.n ? ((v.od / v.n) * 100).toFixed(0) : 0}%"></b></i></div>
+      <span class="cst-n">${v.n}</span>
+    </div>`).join("");
+
+  return `
+    <div class="cst-block">
+      <div class="cst-title">办理状态 <span>${total} 件</span></div>
+      <div class="cst-donut">
+        <svg viewBox="0 0 100 100">${arcs}</svg>
+        <div class="cst-center"><b>${total - st["已办结"]}</b><span>在办</span></div>
+        <div class="cst-legend">${legend}</div>
+      </div>
+    </div>
+    <div class="cst-block">
+      <div class="cst-title">责任单位分布 <span>Top 6 · 红段为逾期</span></div>
+      <div class="cst-bars">${bars}</div>
+    </div>`;
+}
+
+function aoRows() {
+  const k = AO.filter;
+  if (k === "全部") return AO.items.filter((i) => i.status !== "已办结");
+  if (k === "逾期") return AO.items.filter((i) => i.risk === "逾期");
+  if (k === "今日到期") return AO.items.filter((i) => i.days_left === 0 && i.status !== "已办结");
+  if (k === "已办结") return AO.items.filter((i) => i.status === "已办结");
+  return AO.items.filter((i) => i.risk === k);
+}
+
+function renderCoord() {
+  const chips = $("#coordChips"), list = $("#coordList");
+  if (!chips || !list) return;
+  chips.innerHTML = AO_FILTERS.map((k) =>
+    `<button class="coord-chip ${AO.filter === k ? "on" : ""}" data-coordfilter="${esc(k)}">${esc(k)}<b>${aoCount(k)}</b></button>`).join("");
+  // 统计图始终看全量口径，不跟左侧筛选走 —— 图是总览，列表才是细分
+  const stats = $("#coordStats");
+  if (stats) stats.innerHTML = coordStatsHtml();
+  const rows = aoRows().slice()
+    .sort((a, b) => (a.risk_rank ?? 9) - (b.risk_rank ?? 9) || a.days_left - b.days_left);
+  list.innerHTML = rows.length ? rows.map((i) => {
+    const tone = AO_TONE[i.risk] || "muted";
+    const left = i.days_left < 0 ? `逾期 ${-i.days_left} 天` : i.days_left === 0 ? "今日到期" : `剩 ${i.days_left} 天`;
+    return `<div class="coord-row" data-item="${esc(i.id)}"
+        title="${esc((i.risk_reasons || []).join("；") || "按时限推进中")} · 点击查看督办详情">
+      <span class="cd ${tone}"></span>
+      <span class="ct">${esc(i.title)}</span>
+      <span class="cs">${esc(i.assignee)}</span>
+      <span class="cs">${esc(i.status)}</span>
+      <span class="cs">${esc(left)}${i.remind_count ? ` · 已催 ${i.remind_count} 次` : ""}</span>
+    </div>`;
+  }).join("") : `<div class="hint" style="margin:6px 2px">这个分类下没有事项。</div>`;
+}
+
+/* ---------- V3.6 民情焦点弹窗 ----------
+   「查看全部焦点」和焦点条目都开这个二级弹窗。左侧列表按反馈人数排序，
+   右侧详情：诉求详情 / 焦点来源（渠道分布）/ 反馈人数 / 焦点词 / 舆论走势。 */
+const FX = { items: [], loaded: false, sel: null, filter: "全部" };
+const FX_FILTERS = ["全部", "集中", "反弹", "转办"];
+
+async function openFocus(id) {
+  $("#focusModal").classList.add("on");
+  if (!FX.loaded) {
+    try {
+      const d = await (await fetch("/api/focus")).json();
+      if (d.ok) FX.items = d.items || [];
+    } catch (e) { /* 演示模式下走快照兜底 */ }
+    FX.loaded = true;
+  }
+  if (!FX.items.length) {
+    // 兜底：接口不在时至少把罗盘卡上的 3 条带进来（没有详情字段就只渲染列表）
+    FX.items = ((OV && OV.focus && OV.focus.items) || []).map((f, i) => ({ id: "F" + (i + 1), ...f }));
+  }
+  const hit = id && FX.items.find((x) => x.id === id || x.title === id);
+  FX.sel = hit ? hit.id : FX.items[0] && FX.items[0].id;
+  renderFxList();
+  renderFxDetail();
+}
+
+function fxRows() {
+  const rows = FX.items.slice().sort((a, b) => (b.people || 0) - (a.people || 0));
+  if (FX.filter === "全部") return rows;
+  return rows.filter((f) => f.tag === FX.filter);
+}
+
+function renderFxList() {
+  $("#fxFilters").innerHTML = FX_FILTERS.map((k) =>
+    `<button class="ov-chip ${FX.filter === k ? "on" : ""}" data-fxfilter="${esc(k)}">${esc(k)}<b>${fxCount(k)}</b></button>`).join("");
+  const rows = fxRows();
+  $("#fxList").innerHTML = rows.length ? rows.map((f) => `
+    <div class="ov-card ${FX.sel === f.id ? "on" : ""}" data-fxsel="${esc(f.id)}" title="${esc(f.detail || f.meta)}">
+      <div class="ov-card-top">
+        <span class="ov-dot ${esc(f.tone)}"></span>
+        <b style="margin:0;display:inline">${esc(f.title)}</b>
+      </div>
+      <span class="ov-sub">${esc(f.type || "")}${f.region ? " · " + esc(f.region) : ""}</span>
+      <span class="ov-sub"><b style="display:inline;color:var(--ink-2)">${f.people || 0}</b> 人反馈 · ${esc(f.meta || "")}</span>
+    </div>`).join("") : `<div class="mt-empty">这个分类下没有焦点。</div>`;
+}
+
+function fxCount(k) {
+  if (k === "全部") return FX.items.length;
+  return FX.items.filter((f) => f.tag === k).length;
+}
+
+/* 舆论走势：14 天反馈量折线 + 面积，末点高亮今天的量 */
+function fxTrendSvg(trend) {
+  const pts = trend || [];
+  if (pts.length < 2) return "";
+  const W = 300, H = 96, P = 8;
+  const max = Math.max(...pts, 1);
+  const xs = pts.map((_, i) => P + (i * (W - P * 2)) / (pts.length - 1));
+  const ys = pts.map((v) => H - P - (v / max) * (H - P * 2.2));
+  let d = `M ${xs[0].toFixed(1)} ${ys[0].toFixed(1)}`;
+  for (let i = 1; i < xs.length; i++) {
+    const cx = (xs[i - 1] + xs[i]) / 2;
+    d += ` C ${cx.toFixed(1)} ${ys[i - 1].toFixed(1)}, ${cx.toFixed(1)} ${ys[i].toFixed(1)}, ${xs[i].toFixed(1)} ${ys[i].toFixed(1)}`;
+  }
+  const last = pts.length - 1;
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="color:var(--warn)">
+    <path d="${d} L ${xs[last].toFixed(1)} ${H - P} L ${xs[0].toFixed(1)} ${H - P} Z"
+      fill="currentColor" opacity=".12"/>
+    <path d="${d}" fill="none" stroke="currentColor" stroke-width="2" vector-effect="non-scaling-stroke"
+      stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="${xs[last].toFixed(1)}" cy="${ys[last].toFixed(1)}" r="3.2" fill="currentColor"/>
+  </svg>`;
+}
+
+function renderFxDetail() {
+  const f = FX.items.find((x) => x.id === FX.sel);
+  const main = $("#fxMain");
+  if (!f) { main.innerHTML = `<div class="mt-empty">没有焦点数据。</div>`; return; }
+
+  const totalCh = (f.channels || []).reduce((a, c) => a + (c[1] || 0), 0);
+  const chans = (f.channels || []).map(([nm, n]) => {
+    const pct = totalCh ? Math.round((n / totalCh) * 100) : 0;
+    return `<div class="fx-ch"><span class="nm" title="${esc(nm)}">${esc(nm)}</span>
+      <span class="bar"><i style="width:${pct}%"></i></span><b>${n}</b></div>`;
+  }).join("");
+
+  const top = (f.keywords || [])[0];
+  const kws = (f.keywords || []).map(([w, n], i) =>
+    `<span class="fx-kw ${i === 0 ? "top" : ""}" title="出现 ${n} 次">${esc(w)}<b>${n}</b></span>`).join("");
+
+  const tks = (f.tickets || []).map(([no, tt, st]) => `
+    <div class="fx-tk"><code>${esc(no)}</code><span class="tt">${esc(tt)}</span><span class="st">${esc(st)}</span></div>`).join("");
+
+  main.innerHTML = `
+    <div class="ov-h"><h4>${esc(f.title)}</h4><span class="ov-id">${esc(f.id)} · 首次出现 ${esc(f.first_seen || "—")}</span></div>
+    <div class="ov-tags">
+      <span class="ov-tag ${esc(f.tone)}">${esc(f.tag)}</span>
+      <span class="ov-tag">${esc(f.type || "诉求分类待定")}</span>
+      <span class="ov-tag ${esc(f.state_tone || "")}">${esc(f.state || "关注中")}</span>
+    </div>
+    <div class="fx-grid">
+      <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+        <div class="fx-panel">
+          <h5>诉求详情</h5>
+          <p class="fx-detail">${esc(f.detail || "暂无详情。")}</p>
+        </div>
+        <div class="fx-panel">
+          <h5>关联工单<span class="num">${(f.tickets || []).length} 件</span></h5>
+          <div class="fx-tickets">${tks || `<span class="hint" style="margin:0">暂无关联工单。</span>`}</div>
+        </div>
+        <div class="fx-panel">
+          <h5>焦点来源 · 渠道分布<span class="num">合计 ${totalCh} 件</span></h5>
+          ${chans || `<span class="hint" style="margin:0">暂无渠道数据。</span>`}
+          <div class="fx-cap">来源：${esc(f.source)}。同一人多渠道反映已按联系人去重，件数为聚类后的工单数。</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+        <div class="fx-panel">
+          <h5>多少人反馈</h5>
+          <div class="fx-big">${f.people || 0}<small>人</small></div>
+          <div class="fx-delta">${esc(f.people_delta || "")}</div>
+          <div class="fx-cap">按联系人去重：一人多次来电只计 1 人，和上面的工单件数不是同一个口径。</div>
+        </div>
+        <div class="fx-panel">
+          <h5>最多的焦点词</h5>
+          <div class="fx-kws">${kws || `<span class="hint" style="margin:0">暂无焦点词。</span>`}</div>
+          ${top ? `<div class="fx-cap">「${esc(top[0])}」在 ${f.people || 0} 名反映人中出现 ${top[1]} 次，是本焦点最高频诉求词。</div>` : ""}
+        </div>
+        <div class="fx-panel">
+          <h5>舆论走势<span class="num">近 14 天</span></h5>
+          <div class="fx-trend">${fxTrendSvg(f.trend)}</div>
+          <div class="fx-cap">每日新增反馈件数。今天 ${((f.trend || []).slice(-1)[0]) || 0} 件；走势连续 3 日上升时在罗盘卡上标「集中」。</div>
+        </div>
+      </div>
+    </div>
+    <div class="fx-note">数据口径：民情焦点为 ${esc("12345 热线、市长信箱、「我的溧阳」APP、网格员上报")}四渠道聚类结果，演示数据不含真实个人信息。转办与办理状态以 12345 平台工单为准。</div>`;
 }
 
 /* ---------- 问答 ---------- */
-function plannerLabel(info) {
-  if (info && info.available) return `AI参谋 · ${info.model || "大模型"}`;
-  return "AI参谋 · 规则解析";
+/* 气泡顶部的身份标签跟随当前对话的参谋：没选人是「AI参谋」，
+   选了某位就是「AI经济运行参谋」这种叫法，参谋团则是「AI参谋团」。
+   不再拼模型名 —— 用户关心的是谁在答，不是哪个引擎在跑。 */
+function plannerLabel() {
+  if (EXP.cur === "__all") return "AI秘书团";
+  const cur = EXP.list.find((e) => e.id === EXP.cur);
+  return cur ? `AI${cur.name}` : "AI参谋";
 }
 /* 知识库条目：每块都带出处，能点的跳回台账或会议记录。
    这里不折叠、不截断——用户问「依据是什么」，就是要看原文。 */
@@ -1907,6 +2482,95 @@ function kbBlock(items) {
 /* 收藏的问答：当前身份收藏了哪几条。ids 用消息 id，星号据此点亮。
    数据来源是 /api/workspace 的 saved（登录态不在这一版，所以按演示身份各存各的）。 */
 const SAVED = { items: [], ids: new Set(), max: 24 };
+
+/* ---------- V3 多工作台 ----------
+   每个页签是一份「关注指标 + 收藏问答」的编排，全部存本机（按身份分开）：
+   - 默认工作台：显示身份下全部关注指标 + 全部收藏问答，删不掉；
+   - 自建工作台：在「管理关注」里挑指标子集（存在 codes），收藏问答由
+     关注弹窗指定归属；同一份服务端关注，多个工作台只是不同的视图编排。 */
+let DESKS = null;        // [{ id, name, codes:null|[] }]，第一个固定默认
+let DESK_ITEMS = {};     // { 收藏消息id: deskId }
+let DESK_CUR = "default";
+let DESK_EDIT = null;    // 正在重命名的工作台 id
+
+function loadDesks() {
+  try { DESKS = JSON.parse(localStorage.getItem("ocgov.desks." + PID.get())) || null; } catch (e) { DESKS = null; }
+  if (!Array.isArray(DESKS) || !DESKS.length) DESKS = [{ id: "default", name: "默认工作台", codes: null }];
+  if (!DESKS.some((d) => d.id === "default")) DESKS.unshift({ id: "default", name: "默认工作台", codes: null });
+  try { DESK_ITEMS = JSON.parse(localStorage.getItem("ocgov.deskItems." + PID.get())) || {}; } catch (e) { DESK_ITEMS = {}; }
+  if (!DESKS.some((d) => d.id === DESK_CUR)) DESK_CUR = "default";
+}
+
+function saveDesks() {
+  try {
+    localStorage.setItem("ocgov.desks." + PID.get(), JSON.stringify(DESKS));
+    localStorage.setItem("ocgov.deskItems." + PID.get(), JSON.stringify(DESK_ITEMS));
+  } catch (e) { /* 隐私模式下存不了就退化为会话内有效 */ }
+}
+
+function deskName(id) {
+  const d = (DESKS || []).find((x) => x.id === id);
+  return d ? d.name : "默认工作台";
+}
+
+function renderDeskTabs() {
+  const el = $("#deskTabs");
+  if (!el) return;
+  el.innerHTML = DESKS.map((d) => `
+    <span class="desk-tab ${d.id === DESK_CUR ? "on" : ""}" data-desk="${esc(d.id)}"
+      title="${d.id === "default" ? "默认工作台：显示全部关注" : "单击切换 · 双击重命名"}">${esc(d.name)}${d.id !== "default" ? `<i class="dt-x" data-deskdel="${esc(d.id)}" title="删除这个工作台">×</i>` : ""}</span>`).join("") +
+    `<button class="desk-tab-add" id="deskAdd" title="再建一个工作台">＋ 新建工作台</button>`;
+}
+
+function switchDesk(id) {
+  DESK_CUR = id;
+  renderDeskTabs();
+  renderWatch();
+  // 页签现在长在顶栏（与「城市罗盘」并列），点页签要顺手把视图切到工作台
+  switchView("desk");
+}
+
+function openDeskModal(editId) {
+  DESK_EDIT = editId || null;
+  $("#dmTitle").textContent = editId ? "重命名工作台" : "新建工作台";
+  const d = editId ? DESKS.find((x) => x.id === editId) : null;
+  $("#dmName").value = d ? d.name : "";
+  $("#deskModal").classList.add("on");
+  setTimeout(() => $("#dmName").focus(), 30);
+}
+
+function closeDeskModal() { $("#deskModal").classList.remove("on"); DESK_EDIT = null; }
+
+function commitDesk() {
+  const name = $("#dmName").value.trim();
+  if (!name) return toast("先给工作台起个名字");
+  if (DESK_EDIT) {
+    const d = DESKS.find((x) => x.id === DESK_EDIT);
+    if (d) d.name = name;
+  } else {
+    const id = "desk_" + Date.now().toString(36);
+    DESKS.push({ id, name, codes: [] });
+    DESK_CUR = id;
+  }
+  saveDesks();
+  closeDeskModal();
+  renderDeskTabs();
+  renderWatch();
+  toast(DESK_EDIT ? "已重命名" : `已创建「${name}」，去「管理关注」挑几项指标放进来`);
+}
+
+function deleteDesk(id) {
+  const d = DESKS.find((x) => x.id === id);
+  if (!d) return;
+  if (!confirm(`删除工作台「${d.name}」？\n里面的指标和收藏不会被删掉，只是回到「默认工作台」的视野。`)) return;
+  DESKS = DESKS.filter((x) => x.id !== id);
+  Object.keys(DESK_ITEMS).forEach((k) => { if (DESK_ITEMS[k] === id) delete DESK_ITEMS[k]; });
+  if (DESK_CUR === id) DESK_CUR = "default";
+  saveDesks();
+  renderDeskTabs();
+  renderWatch();
+  toast(`已删除「${d.name}」`);
+}
 
 /* ---------- 对话里约会议：一张待确认的草稿卡 ----------
    为什么不「说一句就直接建会」：这个系统没有登录态（身份在右上角随时能切），
@@ -2022,10 +2686,11 @@ function aiBubble(r, ref) {
   const mid = (ref && ref.messageId) || "";
   const tid = (ref && ref.threadId) || "";
   const on = mid && SAVED.ids.has(mid);
+  // V3：星标 + 「关注」文字。点亮后金底金框；点击弹出「添加到哪个工作台」。
   const star = mid
     ? `<button class="star-btn ${on ? "on" : ""}" data-star="${esc(mid)}" data-tid="${esc(tid)}"
-         title="${on ? "已收藏，点击取消" : "收藏到「我的关注」"}" aria-pressed="${on ? "true" : "false"}"
-         aria-label="收藏这条回答">${on ? "★" : "☆"}</button>`
+         title="${on ? "已关注，点击取消" : "关注这条回答，收进某个工作台"}" aria-pressed="${on ? "true" : "false"}"
+         aria-label="关注这条回答"><span class="sb-ic">${on ? "★" : "☆"}</span><span class="sb-tx">${on ? "已关注" : "关注"}</span></button>`
     : "";
 
   const srcs = (r.sources || []).map((s) => [
@@ -2053,7 +2718,7 @@ function aiBubble(r, ref) {
     : "";
 
   return `
-    <div class="ai-tag"><i>AI</i>${esc(plannerLabel(r.planner_info))}${star}</div>
+    <div class="ai-tag"><i>AI</i>${esc(plannerLabel())}${star}</div>
     <div class="ai-body">
       <div>${r.headline_html || esc(r.headline)}</div>
       ${r.detail ? `<div style="margin-top:6px;color:var(--muted);font-size:12px">${esc(r.detail)}</div>` : ""}
@@ -2074,14 +2739,27 @@ const EXP = { list: [], cur: null, max: 3, ready: false };
 // cur：null = 没选人（什么都不显示）；"__all" = 参谋团；否则是某位专家的 id。
 // 一次只可能有一位「对话中」—— 专家是对话角色，不是一排筛选项。
 
+/* V3：参谋名单按板块固定为六位（一期五大板块 + 总参谋），
+   不再跟随后端 /api/experts 的演示名单走 —— 接口只用来判断模型是否就绪。
+   参谋团仍在菜单最后一项，全组一起看。 */
+const EXP_FIX = [
+  { id: "chief", name: "总参谋", avatar: "总", brief: "统筹五大板块，把握全局", focus: "统筹五大板块，先定看什么、再看怎么看" },
+  { id: "economy", name: "经济运行参谋", avatar: "经", brief: "精通全市经济数值与局势", focus: "工业、投资、财政、市场主体" },
+  { id: "investment", name: "招商引资参谋", avatar: "商", brief: "熟悉在谈项目与签约落地", focus: "在谈项目、签约落地、开工转化" },
+  { id: "project", name: "重大项目参谋", avatar: "项", brief: "掌握项目进度与要素保障", focus: "重点项目进度、投资完成、要素保障" },
+  { id: "society", name: "社会治理参谋", avatar: "治", brief: "紧盯12345诉求与公共安全", focus: "12345 诉求、矛盾纠纷、公共安全" },
+  { id: "livelihood", name: "民生保障参谋", avatar: "民", brief: "关注就业教育与民生实事", focus: "就业、教育、医疗、民生实事" },
+];
+
 async function loadExperts() {
   try {
     const d = await (await fetch("/api/experts")).json();
-    EXP.list = d.experts || [];
-    EXP.max = d.max || 3;
+    EXP.list = EXP_FIX.slice();
+    EXP.max = 6;
     EXP.ready = !!d.model_ready;
   } catch {
-    EXP.list = [];
+    EXP.list = EXP_FIX.slice();
+    EXP.max = 6;
   }
   // 名单变了而当前这位不在了（后端删了角色），退回没人，别留个空名字
   if (EXP.cur && EXP.cur !== "__all" && !EXP.list.some((e) => e.id === EXP.cur)) EXP.cur = null;
@@ -2103,32 +2781,34 @@ function renderExpertSelect() {
   if (!name || !menu) return;
 
   const cur = EXP.list.find((e) => e.id === EXP.cur);
+  state.classList.toggle("on", !!cur);
   if (EXP.cur === "__all") {
-    name.textContent = "参谋团";
+    name.textContent = "AI秘书团";
     state.textContent = `（${Math.min(EXP.list.length, EXP.max)} 位）`;
   } else if (cur) {
     name.textContent = cur.name;
     state.textContent = "（对话中）";
+    state.classList.add("on");
   } else {
     // 没选人就空着。写「不召唤」等于给「不需要」起了个名字，还得配一句解释
     name.textContent = "";
     state.textContent = EXP.list.length ? "" : "（名单未加载）";
   }
 
-  const item = (eid, avatar, label, hint, on, cls = "") =>
+  const item = (eid, avatar, label, hint, on, cls = "", brief = "") =>
     `<div class="es-item ${cls} ${on ? "on" : ""}" data-eid="${esc(eid)}" title="${esc(hint)}">` +
-    `<i>${esc(avatar)}</i>${esc(label)}${on ? "<em>已选</em>" : ""}</div>`;
+    `<i>${esc(avatar)}</i>${esc(label)}${brief ? `<span class="es-brief">（${esc(brief)}）</span>` : ""}${on ? "<em>已选</em>" : ""}</div>`;
 
   // 没有「不召唤」这一项：空就是空。取消的办法是再点一次已选中的那位，
   // 这条在 title 里写着 —— 与其多一个把「无」变成选项的菜单行，不如少一行。
   const hintOf = (id2, text) => (EXP.cur === id2 ? "已选，再点一次取消" : text);
   menu.innerHTML =
     EXP.list
-      .map((e) => item(e.id, e.avatar, e.name, hintOf(e.id, e.focus), EXP.cur === e.id))
+      .map((e) => item(e.id, e.avatar, e.name, hintOf(e.id, e.focus), EXP.cur === e.id, "", e.brief || ""))
       .join("") +
     // 参谋团只在真能一次叫上时才出现：否则点下去会静默漏人，用户以为叫了全组
     (EXP.list.length > 1 && EXP.list.length <= EXP.max
-      ? item("__all", "团", "参谋团", hintOf("__all", `${EXP.list.length} 位一起看，角度更多`), EXP.cur === "__all", "sep")
+      ? item("__all", "团", "AI秘书团", hintOf("__all", `${EXP.list.length} 位参谋一起看，并邀请政府办公室协助`), EXP.cur === "__all", "sep", "邀请政府办公室进一步协助")
       : "");
 }
 
@@ -2176,7 +2856,7 @@ function slashItems() {
   }));
   // 参谋团跟下拉保持同一条闸：叫不全的时候不列，免得点下去静默漏人
   if (EXP.list.length > 1 && EXP.list.length <= EXP.max) {
-    all.push({ id: "__all", avatar: "团", name: "参谋团", hint: `${EXP.list.length} 位一起看，角度更多` });
+    all.push({ id: "__all", avatar: "团", name: "AI秘书团", hint: `${EXP.list.length} 位参谋一起看，并邀请政府办公室协助` });
   }
   if (!q) return all;
   // id 也参与匹配：打 /eco 就能命中，不必背中文全名
@@ -2270,7 +2950,7 @@ async function ask(question) {
   box.insertAdjacentHTML("beforeend", `<div class="bub-user">${esc(question)}</div>`);
   const holder = document.createElement("div");
   holder.className = "bub-ai";
-  holder.innerHTML = `<div class="ai-tag"><i>AI</i>AI参谋</div>
+  holder.innerHTML = `<div class="ai-tag"><i>AI</i>${esc(plannerLabel())}</div>
     <div class="ai-body"><div class="stage-hint">正在调用模型解析意图…</div></div>`;
   box.appendChild(holder);
   box.scrollTop = box.scrollHeight;
@@ -2281,7 +2961,7 @@ async function ask(question) {
     if (el) el.innerHTML = `<div class="stage-hint">${esc(text)}</div>`;
   };
   const fail = (msg) => {
-    holder.innerHTML = `<div class="ai-tag"><i>AI</i>AI参谋</div>
+    holder.innerHTML = `<div class="ai-tag"><i>AI</i>${esc(plannerLabel())}</div>
       <div class="ai-body"><div class="warnbox">${esc(msg)}</div></div>`;
   };
 
@@ -2352,7 +3032,7 @@ let MODELS = { providers: [], resolved: [], active: null, ready: false };
 const INTENT_CN = { value: "取值", trend: "走势", breakdown: "分解", compare: "对比", definition: "口径", knowledge: "依据", meet: "约会议" };
 function intentLabel(i) { return INTENT_CN[i] || i || "—"; }
 
-const EMPTY_HTML = `<div class="thread-empty" id="threadEmpty">还没有对话。上面挑一个问题，或直接输入。<br>数值全部来自指标接口，可点开卡片核对口径。</div>`;
+const EMPTY_HTML = `<div class="thread-empty" id="threadEmpty">今天能帮您做什么？选择AI参谋对专业领域提问。<br>可以查会议资料、查统计数据、查项目进展等。</div>`;
 
 function bubbleFromHistory(m, threadId) {
   const meta = m.meta || {};
@@ -3035,6 +3715,8 @@ async function switchPerson(pid) {
 }
 
 async function loadWorkspace() {
+  // V3：工作台页签按身份各存一份，先载入再渲染，页签才不会闪空
+  loadDesks();
   try {
     const res = await fetch("/api/workspace", { headers: { "X-Person-Id": PID.get() } });
     const d = await res.json();
@@ -3046,6 +3728,7 @@ async function loadWorkspace() {
     SAVED.items = (d.saved && d.saved.items) || [];
     SAVED.ids = new Set(SAVED.items.map((i) => i.id));
     SAVED.max = (d.saved && d.saved.max) || SAVED.max;
+    renderDeskTabs();
     // 先落 SAVED 再渲染：收藏卡就在这个网格里，顺序反了会先画一遍空网格
     renderWatch(d);
     renderFeed(d);
@@ -3152,23 +3835,83 @@ async function markSeen(keys) {
 // 关注卡片比罗盘多一件事：hover 出「取消关注」。
 // 不再挂那张虚线的「添加关注」卡：6 张卡是 3×2 正好铺满，多挂一张就独占第三行，
 // 右边两格空白一片；而且标题行右侧已经有「管理关注」，同一件事没必要两个入口。
-// 「我的关注」= 关注的指标卡 + 收藏的问答卡，**同一个网格**。
-// 收藏以前是卡片下面一段虚线清单，看着像另一个板块（「收藏的问答」），人不会认为
-// 那是自己的关注；并进网格之后它就是关注里的一条，只是标签写着「问答」。
+// 「关注指标」和「关注问题」分两个网格（V3.4 拆分）。指标卡比罗盘多一件事：
+// hover 出「取消关注」+ 底部一行关注时间/已关注天数。
+// 关注时间存本机（按身份分开）：演示数据没有这个字段，首次见到按 code 生成一个
+// 稳定的过去日期（同一台机器每次刷新一样）；真实后端给 followed_at 时以它为准。
+function watchAtStore() {
+  try { return JSON.parse(localStorage.getItem("lz_watch_at_" + PID.get()) || "{}"); } catch { return {}; }
+}
+function watchAtSave(o) {
+  try { localStorage.setItem("lz_watch_at_" + PID.get(), JSON.stringify(o)); } catch { /* 隐身模式等存不了就算了，下次重算 */ }
+}
+function watchAt(code) {
+  const o = watchAtStore();
+  if (!o[code]) {
+    let h = 0;
+    for (const ch of String(code)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    const days = 8 + (h % 60);
+    o[code] = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+    watchAtSave(o);
+  }
+  return o[code];
+}
+function watchAtMarkToday(codes) {
+  if (!codes || !codes.length) return;
+  const o = watchAtStore();
+  const today = new Date().toISOString().slice(0, 10);
+  let changed = false;
+  codes.forEach((c) => { if (o[c] !== today) { o[c] = today; changed = true; } });
+  if (changed) watchAtSave(o);
+}
+function daysSince(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  if (isNaN(d)) return null;
+  return Math.max(0, Math.floor((Date.now() - d.getTime()) / 864e5));
+}
+
 function renderWatch(d) {
   d = d || WS || {};
-  const cards = d.watch || [];
-  const saved = SAVED.items || [];
-  const empty = `<div class="watch-empty">还没有关注任何指标。点右上角「管理关注」，从 ${(d.catalog || []).length} 个已注册指标里挑几项 —— 不选也能用，只是这一栏会空着。</div>`;
+  // V3：按当前工作台页签过滤。默认页签 = 全部；自建页签看 codes 子集，
+  // 收藏问答再看归属（DESK_ITEMS），没归属的老收藏只在默认页签出现。
+  const desk = DESKS && DESKS.length ? DESKS.find((x) => x.id === DESK_CUR) || DESKS[0] : { id: "default", codes: null };
+  const isDefault = desk.id === "default" || !desk.codes;
+  const cards = isDefault ? (d.watch || []).slice() : (d.watch || []).filter((k) => (desk.codes || []).includes(k.code));
+  const saved = (SAVED.items || []).filter((it) => isDefault || DESK_ITEMS[it.id] === desk.id);
+  const empty = isDefault
+    ? `<div class="watch-empty">还没有关注任何指标。点右上角「管理关注」，从 ${(d.catalog || []).length} 个已注册指标里挑几项 —— 不选也能用，只是这一栏会空着。</div>`
+    : `<div class="watch-empty">「${esc(desk.name)}」还是空的。点右上角「管理关注」挑几项指标，或在对话里点「关注」把回答收进来。</div>`;
   const nameOf = (code) => {
     const hit = ((WS && WS.watch) || []).find((k) => k.code === code) ||
       ((WS && WS.catalog) || []).find((m) => m.code === code);
     return hit ? hit.name : code;
   };
+  // 自建页签里、不在服务端关注名单里的指标：用目录数据画简卡（没有走势，只有当期值）
+  const extraCodes = isDefault ? [] : (desk.codes || []).filter((c) => !cards.some((k) => k.code === c));
+  const extraCards = extraCodes.map((c) => {
+    const m = ((d.catalog) || []).find((x) => x.code === c) || {};
+    const at = watchAt(c);
+    const n = daysSince(at);
+    return `<div class="kpi" data-metric="${esc(c)}" title="点开看口径与详情">
+      <span class="rm" data-deskunwatch="${esc(c)}" title="从这个工作台移除">✕</span>
+      <div class="k">${esc(m.name || nameOf(c))}</div>
+      <div class="v">${esc(m.display || "—")}<small>${esc(m.unit || "")}</small></div>
+      <div class="f"><span>已加入本工作台</span></div>
+      <div class="wf"><span>关注于 ${esc(at)}</span><span>${n === 0 ? "今天关注" : `已关注 ${n} 天`}</span></div>
+    </div>`;
+  }).join("");
   $("#watchGrid").innerHTML =
-    (cards.length || saved.length ? "" : empty) +
-    cards.map((k) => kpiCard(k, { cls: "watch", extra: `<span class="rm" data-unwatch="${esc(k.code)}" title="取消关注">✕</span>` })).join("") +
-    saved.map((it) => `
+    (cards.length || extraCards ? "" : empty) +
+    cards.map((k) => {
+      const at = watchAt(k.code);
+      const n = daysSince(at);
+      const foot = `<div class="wf"><span>关注于 ${esc(at)}</span><span>${n === 0 ? "今天关注" : `已关注 ${n} 天`}</span></div>`;
+      return kpiCard(k, { cls: "watch", footer: foot, extra: `<span class="rm" data-unwatch="${esc(k.code)}" title="取消关注">✕</span>` });
+    }).join("") +
+    extraCards;
+  // 关注问题：三张并排（同一 cols-3 网格），样式就是原来的问答收藏卡
+  $("#watchQGrid").innerHTML = saved.length
+    ? saved.map((it) => `
       <div class="kpi sv" data-svthread="${esc(it.thread_id)}" data-svmid="${esc(it.id)}" title="点开回到那条回答">
         <span class="rm" data-unsave="${esc(it.id)}" data-tid="${esc(it.thread_id)}" title="取消收藏">✕</span>
         <div class="k"><span class="sv-tag">问答</span></div>
@@ -3178,17 +3921,22 @@ function renderWatch(d) {
           ${(it.codes || []).map((c) => `<span class="sv-code" title="${esc(c)}">${esc(nameOf(c))}</span>`).join("")}
           <span class="at">收藏于 ${esc(it.at || "")}</span>
         </div>
-      </div>`).join("");
+      </div>`).join("")
+    : `<div class="watch-empty">还没有收藏的问题。在对话里点回答右上角的「★ 关注」，选一个工作台收进来。</div>`;
   // 指标和收藏的**上限不是一回事**（指标 8 个、收藏 24 条），所以不并成一个「7 / 8」：
   // 那会让第 9 个指标被一条收藏挡住，看着像名额满了。
   const max = (d.person && d.person.max_watch) || PP.max || 8;
-  $("#watchCount").textContent = saved.length
-    ? `${cards.length} / ${max} 指标 · ${saved.length} 收藏`
-    : `${cards.length} / ${max} 指标`;
+  const total = isDefault ? cards.length : (desk.codes || []).length;
+  $("#watchCount").textContent = `${total} / ${max} 项`;
+  $("#watchQCount").textContent = `${saved.length} 个`;
 }
 
 async function saveWatch(codes, msg) {
   try {
+    // 新加入的指标记一个今天的关注时间（取消再关注会刷新计时）
+    const oldCodes = new Set(((WS && WS.watch) || []).map((c) => c.code));
+    const added = (codes || []).filter((c) => !oldCodes.has(c));
+    if (added.length) watchAtMarkToday(added);
     const res = await fetch("/api/workspace/watch", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
@@ -3207,6 +3955,21 @@ async function saveWatch(codes, msg) {
 }
 
 function removeWatch(code) {
+  // 取消关注就清掉关注时间：下次再关注从今天重新计
+  const o = watchAtStore();
+  if (o[code]) { delete o[code]; watchAtSave(o); }
+  // V3：在自建工作台里点 ✕ 只把它从这个页签移除，不动服务端的关注名单
+  if (DESK_CUR !== "default") {
+    const desk = DESKS.find((x) => x.id === DESK_CUR);
+    if (desk) {
+      desk.codes = (desk.codes || []).filter((c) => c !== code);
+      saveDesks();
+      renderWatch();
+      if ($("#watchModal").classList.contains("on")) renderWatchPicker();
+      toast(`已从「${desk.name}」移除`);
+      return;
+    }
+  }
   const codes = (WS && WS.watch ? WS.watch : []).map((c) => c.code).filter((c) => c !== code);
   return saveWatch(codes, "已取消关注");
 }
@@ -3219,37 +3982,76 @@ function syncStars() {
   document.querySelectorAll("[data-star]").forEach((b) => {
     const on = SAVED.ids.has(b.dataset.star);
     b.classList.toggle("on", on);
-    b.textContent = on ? "★" : "☆";
-    b.title = on ? "已收藏，点击取消" : "收藏到「我的关注」";
+    const ic = b.querySelector(".sb-ic"), tx = b.querySelector(".sb-tx");
+    if (ic) ic.textContent = on ? "★" : "☆";
+    if (tx) tx.textContent = on ? "已关注" : "关注";
+    b.title = on ? "已关注，点击取消" : "关注这条回答，收进某个工作台";
     b.setAttribute("aria-pressed", on ? "true" : "false");
   });
 }
 
-async function setSaved(mid, tid, want) {
+/* V3：关注状态本机为准（静态演示也保持一致），接口只是顺手通知。
+   want=true 时由 starModal 带上归属工作台 deskId，问答卡跟着页签走。 */
+async function setSaved(mid, tid, want, deskId) {
   if (!mid) return;
+  if (want) {
+    if (!SAVED.items.some((i) => i.id === mid)) {
+      const bub = document.querySelector(`#thread .bub-ai[data-mid="${mid}"]`);
+      const qEl = document.querySelectorAll("#thread .bub-user");
+      const head = bub ? bub.querySelector(".ai-body > div") : null;
+      SAVED.items = [{
+        id: mid, thread_id: tid,
+        question: (qEl.length ? qEl[qEl.length - 1].textContent : "").trim().slice(0, 80) || "（没有提问）",
+        headline: (head ? head.textContent : "").trim().slice(0, 90),
+        at: new Date().toISOString().slice(0, 10),
+      }, ...SAVED.items];
+    }
+    if (deskId) { DESK_ITEMS[mid] = deskId; saveDesks(); }
+    SAVED.ids = new Set(SAVED.items.map((i) => i.id));
+    syncStars();
+    renderWatch();
+    toast(`已关注，收进「${deskName(deskId)}」`);
+  } else {
+    SAVED.items = SAVED.items.filter((i) => i.id !== mid);
+    delete DESK_ITEMS[mid];
+    saveDesks();
+    SAVED.ids = new Set(SAVED.items.map((i) => i.id));
+    syncStars();
+    renderWatch();
+    toast("已取消关注");
+  }
   try {
-    const res = await fetch("/api/saved", {
+    await fetch("/api/saved", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
       body: JSON.stringify(want ? { thread_id: tid, message_id: mid } : { action: "remove", message_id: mid }),
     });
-    const d = await res.json();
-    if (!res.ok || !d.ok) throw new Error(d.error || "操作失败");
-    SAVED.items = d.items || [];
-    SAVED.ids = new Set(SAVED.items.map((i) => i.id));
-    SAVED.max = d.max || SAVED.max;
-    syncStars();
-    renderWatch();
-    toast(want ? "已收藏到「我的关注」" : "已取消收藏");
-  } catch (e) {
-    toast(e.message);
-  }
+  } catch (e) { /* 静态快照/离线不影响本机状态 */ }
 }
 
 function toggleSaved(btn) {
   const mid = btn.dataset.star;
-  return setSaved(mid, btn.dataset.tid, !SAVED.ids.has(mid));
+  if (SAVED.ids.has(mid)) return setSaved(mid, btn.dataset.tid, false);
+  openStarModal(mid, btn.dataset.tid);
 }
+
+/* 关注 → 选工作台弹窗：一行一个工作台，点行即加入；当前打开的页签排最前 */
+let STAR_PEND = null;
+function openStarModal(mid, tid) {
+  if (!DESKS || !DESKS.length) return toast("工作台还没准备好，稍后再试");
+  STAR_PEND = { mid, tid };
+  const cur = (typeof DESK_CUR !== "undefined" && DESK_CUR) || "default";
+  const rows = DESKS.slice().sort((a, b) => (a.id === cur ? -1 : 0) - (b.id === cur ? -1 : 0))
+    .map((d) => `
+      <div class="sm-row ${d.id === cur ? "cur" : ""}" data-smadd="${esc(d.id)}">
+        <span class="nm">${esc(d.name)}</span>
+        <span class="ct">${d.id === "default" ? "全部关注都在这里" : d.id === cur ? "当前正在看" : ""}</span>
+        <span class="fdot info" style="width:6px;height:6px;border-radius:50%;background:var(--brand);opacity:0"></span>
+      </div>`).join("");
+  $("#smBody").innerHTML = `<p class="sm-tip">回答会以「问答」卡片出现在该工作台的「我的关注」里。</p>${rows}`;
+  $("#starModal").classList.add("on");
+}
+function closeStarModal() { $("#starModal").classList.remove("on"); STAR_PEND = null; }
 
 async function jumpToSaved(tid, mid) {
   if (!tid) return;
@@ -3273,25 +4075,44 @@ function openWatchPicker() {
 }
 
 function renderWatchPicker() {
-  const cur = ((WS && WS.watch) || []).map((c) => c.code);
+  const catalog = (WS && WS.catalog) || [];
   const max = (WS && WS.person && WS.person.max_watch) || 8;
-  const cat = (WS && WS.catalog) || [];
+  const deskMode = DESK_CUR !== "default";
+  const desk = deskMode ? DESKS.find((x) => x.id === DESK_CUR) : null;
+  const cur = deskMode
+    ? (desk.codes || [])
+    : ((WS && WS.watch) || []).map((c) => c.code);
+  const watched = (code) => (deskMode ? cur.includes(code) : cur.includes(code));
   $("#wmBody").innerHTML = `
-    <div class="wm-tip">已关注 <b>${cur.length}</b> / ${max}，点一行即可加入或移除，工作台立刻刷新。数值是当前期，和罗盘同源。</div>
-    <div class="wm-list">${cat
+    <div class="wm-tip">${deskMode
+      ? `正在编辑工作台「${esc(desk.name)}」：点一行即可加入或移除，只影响这个页签的视野，不动身份的关注名单。`
+      : `已关注 <b>${cur.length}</b> / ${max}，点一行即可加入或移除，工作台立刻刷新。数值是当前期，和罗盘同源。`}</div>
+    <div class="wm-list">${catalog
       .map(
         (m) => `
       <div class="wm-row" data-wcode="${esc(m.code)}">
         <div class="nm"><b>${esc(m.name)}</b><span>${esc(m.code)}</span></div>
         <div class="val">${esc(m.display)}<small>${esc(m.unit)}</small></div>
-        <span class="st ${m.watched ? "on" : "off"}">${m.watched ? "已关注" : "添加"}</span>
+        <span class="st ${watched(m.code) ? "on" : "off"}">${watched(m.code) ? "已加入" : "添加"}</span>
       </div>`
       )
       .join("")}</div>
-    <div class="wm-foot"><span id="wmReset" title="删掉这个人的自定义关注，回到该身份的默认表">恢复默认关注</span></div>`;
+    ${deskMode ? "" : `<div class="wm-foot"><span id="wmReset" title="删掉这个人的自定义关注，回到该身份的默认表">恢复默认关注</span></div>`}`;
 }
 
 async function toggleWatch(code) {
+  // V3：自建工作台里勾选/取消，写的是本页签的 codes，不动服务端
+  if (DESK_CUR !== "default") {
+    const desk = DESKS.find((x) => x.id === DESK_CUR);
+    if (!desk) return;
+    const has = (desk.codes || []).includes(code);
+    if (!has && (desk.codes || []).length >= 8) return toast("一个工作台最多放 8 项指标");
+    desk.codes = has ? (desk.codes || []).filter((c) => c !== code) : [...(desk.codes || []), code];
+    saveDesks();
+    renderWatch();
+    renderWatchPicker();
+    return toast(has ? "已从本工作台移除" : "已加入本工作台");
+  }
   const cur = ((WS && WS.watch) || []).map((c) => c.code);
   const has = cur.includes(code);
   const max = (WS && WS.person && WS.person.max_watch) || 8;
@@ -3775,7 +4596,20 @@ function closeCalModal() { $("#calModal").classList.remove("on"); }
 /* ---------------- 材料助手 ----------------
    两段式生成：先用规则版秒出纸面，模型版到了再替换「下一步」一节。
    材料本身是确定的（数字和事项都来自服务端），只有那一节会变，所以不需要转圈等模型。 */
-const DC = { opt: null, cfg: null, doc: null, seq: 0, busy: false, pid: null };
+const DC = { opt: null, cfg: null, doc: null, seq: 0, busy: false, pid: null,
+  tab: "report",          // V3 写作助手当前栏位：report / minutes / bulletin
+  upload: null,           // 会议材料上传：{ files:[{name,text}] }
+  upText: "",             // 粘贴的补充材料
+  bulletin: { task: "", unit: "", owner: "", due: "" },
+  gov: null, govNo: 1 };  // 红头公文结果与文号流水
+
+/* V3 三个写作助手：每个栏位各管各的要素，不再共享一张表单 ——
+   工作汇报看期次、会议落实看会议与材料、督办通报填四要素套红头。 */
+const DC_TABS = [
+  { id: "report", name: "工作汇报", hint: "选指标期次，按期生成运行汇报" },
+  { id: "minutes", name: "会议落实", hint: "选会议主题、上传会议材料" },
+  { id: "bulletin", name: "督办通报", hint: "填要素，套红头生成公文" },
+];
 
 function dcDefaults(opt) {
   const preset = opt.presets[0];
@@ -3796,36 +4630,84 @@ function dcRenderSide() {
   const o = DC.opt, c = DC.cfg;
   const preset = dcPreset();
   const secs = c.sections || preset.sections;
-  const max = o.max_metrics || 12;
 
-  const kinds = o.presets.map((p) => `
-    <button class="dc-kind ${p.id === c.kind ? "on" : ""}" data-dckind="${esc(p.id)}">
-      <b>${esc(p.label)}</b><span>${esc(p.hint)}</span>
+  const tabs = DC_TABS.map((t) => `
+    <button class="dc-tab ${DC.tab === t.id ? "on" : ""}" data-dctab="${esc(t.id)}">
+      <b>${esc(t.name)}</b><span>${esc(t.hint)}</span>
     </button>`).join("");
 
-  const periods = o.periods.map((p) => `<option value="${esc(p.value)}" ${p.value === c.period ? "selected" : ""}>${esc(p.label)}</option>`).join("");
-
-  const checks = o.sections.map((s) => `
-    <label><input type="checkbox" data-dcsec="${esc(s.id)}" ${secs.includes(s.id) ? "checked" : ""}>${esc(s.name)}</label>`).join("");
-
-  const eff = new Set(dcEffectiveCodes());
-  const pills = o.metrics.map((m) => `
-    <button class="dc-pill ${eff.has(m.code) ? "on" : ""}" data-dcmet="${esc(m.code)}" title="${esc(m.department)}·${esc(m.definition)}">${esc(m.name)}</button>`).join("");
-
-  const meeting = o.meetings.length
-    ? `<select class="dc-sel" id="dcMeet">${o.meetings.map((m) => `<option value="${esc(m.id)}" ${m.id === c.meeting_id ? "selected" : ""}>${esc(m.title)}（${esc(m.held_at || "时间待定")}）</option>`).join("")}</select>`
-    : `<div class="dc-tip">还没有会议记录，这类材料会退化为工作汇报。</div>`;
+  let form = "";
+  if (DC.tab === "report") {
+    const periods = o.periods.map((p) => `<option value="${esc(p.value)}" ${p.value === c.period ? "selected" : ""}>${esc(p.label)}</option>`).join("");
+    const checks = o.sections.map((s) => `
+      <label><input type="checkbox" data-dcsec="${esc(s.id)}" ${secs.includes(s.id) ? "checked" : ""}>${esc(s.name)}</label>`).join("");
+    const eff = new Set(dcEffectiveCodes());
+    const pills = o.metrics.map((m) => `
+      <button class="dc-pill ${eff.has(m.code) ? "on" : ""}" data-dcmet="${esc(m.code)}" title="${esc(m.department)}·${esc(m.definition)}">${esc(m.name)}</button>`).join("");
+    form = `
+      <div><div class="dc-lab"><b>指标期次</b><span>只列已披露</span></div><select class="dc-sel" id="dcPeriod">${periods}</select></div>
+      <div><div class="dc-lab"><b>章节</b><span id="dcSecCount"></span></div><div class="dc-checks">${checks}</div></div>
+      <div><div class="dc-lab"><b>指标</b><span id="dcMetCount"></span></div><div class="dc-pills">${pills}</div></div>
+      <button class="mini dc-go" id="dcGo">重新生成</button>`;
+  } else if (DC.tab === "minutes") {
+    const meeting = o.meetings.length
+      ? `<select class="dc-sel" id="dcMeet">${o.meetings.map((m) => `<option value="${esc(m.id)}" ${m.id === c.meeting_id ? "selected" : ""}>${esc(m.title)}（${esc(m.held_at || "时间待定")}）</option>`).join("")}</select>`
+      : `<div class="dc-tip">还没有会议记录。可以先到「会议助手」新建一场会。</div>`;
+    form = `
+      <div><div class="dc-lab"><b>会议主题</b><span>以一场会为单位汇总落实情况</span></div>${meeting}</div>
+      <div><div class="dc-lab"><b>会议材料上传</b><span>纯文本 · .txt / .md</span></div>
+        <label class="dc-up" for="dcFile">${DC.upload ? "＋ 继续添加文件" : "＋ 选择文件（纪要、录音转写稿…）"}</label>
+        <input type="file" id="dcFile" accept=".txt,.md,.csv" multiple hidden>
+        ${DC.upload ? `<div class="dc-upfiles">${DC.upload.files.map((f, i) => `<span data-dcuprm="${i}" title="移除这个文件">${esc(f.name)} ✕</span>`).join("")}</div>` : ""}
+        <textarea class="dc-up-text" id="dcUpText" rows="3" placeholder="或直接粘贴补充材料（可选）">${esc(DC.upText || "")}</textarea>
+      </div>
+      <button class="mini dc-go" id="dcGo">生成落实材料</button>`;
+  } else {
+    const b = DC.bulletin;
+    form = `
+      <div><div class="dc-lab"><b>任务 / 事项</b></div><textarea class="dc-up-text" id="govTask" rows="3" placeholder="例：高铁东站周边路网配套工程管线迁改">${esc(b.task)}</textarea></div>
+      <div><div class="dc-lab"><b>责任落实部门 / 单位</b></div><input class="dm-input" id="govUnit" placeholder="例：市住建局" value="${esc(b.unit)}"></div>
+      <div><div class="dc-lab"><b>责任人</b></div><input class="dm-input" id="govOwner" placeholder="例：张三" value="${esc(b.owner)}"></div>
+      <div><div class="dc-lab"><b>时限</b></div><input class="dm-input" id="govDue" type="date" value="${esc(b.due)}"></div>
+      <button class="mini dc-go" id="dcGenGov">套用红头 · 生成公文</button>
+      <div class="dc-tip">按政府公文红头格式排版：红色机关名 + 文号 + 红色分隔线，正文仿宋风格，可直接打印。</div>`;
+  }
 
   $("#dcSide").innerHTML = `
-    <div><div class="dc-lab"><b>材料类型</b></div><div class="dc-kinds">${kinds}</div></div>
-    <div><div class="dc-lab"><b>指标期次</b><span>只列已披露</span></div><select class="dc-sel" id="dcPeriod">${periods}</select></div>
-    <div id="dcMeetWrap" ${c.kind === "minutes" ? "" : "hidden"}><div class="dc-lab"><b>会议</b></div>${meeting}</div>
-    <div><div class="dc-lab"><b>章节</b><span id="dcSecCount"></span></div><div class="dc-checks">${checks}</div></div>
-    <div><div class="dc-lab"><b>指标</b><span id="dcMetCount"></span></div><div class="dc-pills">${pills}</div></div>
-    <button class="mini dc-go" id="dcGo">重新生成</button>
-    <div class="dc-tip">材料不存档。要留存请「下载 .md」或「打印」，导出的文件里带着每处数字的部门与披露日。</div>
-  `;
+    <div><div class="dc-lab"><b>写作助手</b></div><div class="dc-tabs3">${tabs}</div></div>
+    <div class="dc-form">${form}</div>`;
+  dcBindSide();
   dcCounts();
+}
+
+/* 侧栏每次重画后都要把"输入即保存"接回去，否则切页签回来字就丢了 */
+function dcBindSide() {
+  const bind = (id, key) => {
+    const el = $(id);
+    if (el) el.oninput = () => { key.split(".").reduce((o, k, i, a) => (i === a.length - 1 ? (o[k] = el.value) : o[k]), DC); };
+  };
+  bind("#dcUpText", "upText");
+  bind("#govTask", "bulletin.task");
+  bind("#govUnit", "bulletin.unit");
+  bind("#govOwner", "bulletin.owner");
+  bind("#govDue", "bulletin.due");
+}
+
+/* 会议材料上传：只收纯文本，读进内存随生成请求一起带上去（后端可选用） */
+function dcReadFiles(files) {
+  const arr = Array.from(files || []);
+  if (!arr.length) return;
+  DC.upload = DC.upload || { files: [] };
+  let pending = arr.length;
+  arr.forEach((f) => {
+    const r = new FileReader();
+    r.onload = () => {
+      DC.upload.files.push({ name: f.name, text: String(r.result || "").slice(0, 20000) });
+      if (--pending === 0) { dcRenderSide(); toast("材料已就绪，生成时会一并参考"); }
+    };
+    r.onerror = () => { if (--pending === 0) dcRenderSide(); };
+    r.readAsText(f, "utf-8");
+  });
 }
 
 function dcEffectiveCodes() {
@@ -3854,19 +4736,32 @@ function dcCounts() {
 function dcTools() {
   const d = DC.doc;
   const badge = !d
-    ? ""
+    ? DC.gov
+      ? `<span class="mbadge ok">红头公文 · 已按公文格式排版</span>`
+      : ""
     : d.model && d.model.source === "model"
       ? `<span class="mbadge ok">「下一步」由模型撰写</span>`
       : `<span class="mbadge warn">按台账事实生成</span>`;
+  const state = d
+    ? `${d.blocks.length} 节 · ${esc(d.meta.period_label)} · ${esc(d.meta.generated_at)}`
+    : DC.gov
+      ? `督办通报 · ${esc(DC.gov.no)}`
+      : "尚未生成";
   $("#dcTools").innerHTML = `
-    <span class="dt-state">${d ? `${d.blocks.length} 节 · ${esc(d.meta.period_label)} · ${esc(d.meta.generated_at)}` : "尚未生成"}</span>
+    <span class="dt-state">${state}</span>
     ${badge}
     <span class="sp"></span>
-    <button class="mini" id="dcCopy" ${d ? "" : "disabled"}>复制 Markdown</button>
-    <button class="mini" id="dcDown" ${d ? "" : "disabled"}>下载 .md</button>
-    <button class="mini" id="dcPrint" ${d ? "" : "disabled"}>打印</button>
+    <button class="mini" id="dcCopy" ${(d || DC.gov) ? "" : "disabled"}>复制 Markdown</button>
+    <button class="mini" id="dcDown" ${(d || DC.gov) ? "" : "disabled"}>下载 .md</button>
+    <button class="mini" id="dcPrint" ${(d || DC.gov) ? "" : "disabled"}>打印</button>
     ${DC.busy ? `<span class="dt-state">生成中…</span>` : ""}
   `;
+}
+
+function dcActiveMarkdown() {
+  if (DC.doc && DC.doc.markdown) return DC.doc.markdown;
+  if (DC.gov) return DC.gov.md;
+  return "";
 }
 
 function dcTable(cols, rows, cell, widths) {
@@ -3938,7 +4833,7 @@ function dcRenderPaper() {
   const p = $("#dcPaper"), d = DC.doc;
   if (!d) {
     p.className = "doc-paper blank";
-    p.textContent = "左侧选好材料和期次，材料会自动生成。";
+    p.textContent = DC.gov ? "" : "左侧挑一个写作助手：工作汇报选期次、会议落实选会议、督办通报填要素套红头。";
     return;
   }
   p.className = "doc-paper";
@@ -3992,6 +4887,7 @@ async function dcGenerate() {
   try {
     const quick = await dcPost({ ...base, use_model: false });
     if (seq !== DC.seq) return;
+    if (!quick || !quick.blocks) throw new Error("静态快照模式下无法生成材料（需启动本地服务）");
     DC.doc = quick;
     dcRenderPaper();
     dcRefreshPills();
@@ -4048,7 +4944,7 @@ function closeDocModal() {
 }
 
 function dcCopyMarkdown() {
-  const text = DC.doc && DC.doc.markdown;
+  const text = dcActiveMarkdown();
   if (!text) return;
   const done = () => toast("Markdown 已复制");
   if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -4077,12 +4973,13 @@ function dcFallbackCopy(text, done) {
 
 function dcDownload() {
   const d = DC.doc;
-  if (!d) return;
-  const blob = new Blob([d.markdown], { type: "text/markdown;charset=utf-8" });
+  const md = dcActiveMarkdown();
+  if (!md) return;
+  const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
   const a = document.createElement("a");
-  const day = (d.meta.generated_at || "").slice(0, 10) || "draft";
+  const day = ((d && d.meta.generated_at) || (DC.gov && DC.gov.dateText) || "").slice(0, 10) || "draft";
   a.href = URL.createObjectURL(blob);
-  a.download = `${d.meta.title}-${day}.md`;
+  a.download = d ? `${d.meta.title}-${day}.md` : `督办通报-${day}.md`;
   document.body.appendChild(a);
   a.click();
   setTimeout(() => {
@@ -4092,16 +4989,31 @@ function dcDownload() {
 }
 
 $("#dcSide").onclick = (e) => {
-  if (e.target.id === "dcGo") return dcGenerate();
-  const kind = e.target.closest("[data-dckind]");
-  if (kind) {
-    const preset = DC.opt.presets.find((p) => p.id === kind.dataset.dckind);
-    if (!preset || preset.id === DC.cfg.kind) return;
-    DC.cfg.kind = preset.id;
-    DC.cfg.sections = preset.sections.slice(); // 换骨架就换章节默认值，不沿用上一份
-    DC.cfg.codes = null; // 指标也回到自动：两种材料该看的指标本来就不一样
+  // V3：三个写作助手栏位切换。report / minutes 共用服务器引擎，bulletin 走本地红头
+  const tab = e.target.closest("[data-dctab]");
+  if (tab) {
+    const id = tab.dataset.dctab;
+    if (id === DC.tab) return;
+    DC.tab = id;
+    if (id === "report") { DC.cfg.kind = "report"; dcRenderSide(); return dcGenerate(); }
+    if (id === "minutes") { DC.cfg.kind = "minutes"; dcRenderSide(); return dcGenerate(); }
+    // bulletin：不请求服务器，纸面停在红头公文或待填提示
     dcRenderSide();
-    return dcGenerate();
+    if (DC.gov) return dcRenderBulletinPaper();
+    $("#dcPaper").className = "doc-paper blank";
+    $("#dcPaper").textContent = "填好左侧四项要素，点「套用红头 · 生成公文」。";
+    return;
+  }
+  if (e.target.id === "dcGo") return dcGenerate();
+  if (e.target.id === "dcGenGov") return dcGenerateBulletin();
+  // 已上传材料上的 ✕：按索引移除
+  const uprm = e.target.closest("[data-dcuprm]");
+  if (uprm) {
+    if (DC.upload) {
+      DC.upload.files.splice(Number(uprm.dataset.dcuprm), 1);
+      if (!DC.upload.files.length) DC.upload = null;
+    }
+    return dcRenderSide();
   }
   const met = e.target.closest("[data-dcmet]");
   if (met) {
@@ -4126,6 +5038,11 @@ $("#dcSide").onchange = (e) => {
     DC.cfg.meeting_id = e.target.value;
     return dcGenerate();
   }
+  if (e.target.id === "dcFile") {
+    dcReadFiles(e.target.files);
+    e.target.value = ""; // 允许连续选同一文件
+    return;
+  }
   const sec = e.target.closest("[data-dcsec]");
   if (sec) {
     const id = sec.dataset.dcsec;
@@ -4146,6 +5063,68 @@ $("#dcTools").onclick = (e) => {
 };
 $("#dcClose").onclick = closeDocModal;
 $("#docModal").onclick = (e) => { if (e.target.id === "docModal") closeDocModal(); };
+
+/* ---------- V3 督办通报：红头公文 ----------
+   要素齐了就能排：红色机关名 + 文号 + 红色分隔线 + 仿宋正文 + 落款。
+   纯前端排版，不请求服务器 —— 通报的事实（任务、单位、责任人、时限）
+   全部来自用户刚填的表单，没有第二个数据源。 */
+function dcGenerateBulletin() {
+  const b = DC.bulletin;
+  b.task = ($("#govTask") && $("#govTask").value || "").trim();
+  b.unit = ($("#govUnit") && $("#govUnit").value || "").trim();
+  b.owner = ($("#govOwner") && $("#govOwner").value || "").trim();
+  b.due = ($("#govDue") && $("#govDue").value || "").trim();
+  if (!b.task) return toast("请填写任务 / 事项");
+  if (!b.unit) return toast("请填写责任落实部门 / 单位");
+  const taskTitle = b.task.replace(/\s+/g, " ").slice(0, 60);
+  const dueText = b.due
+    ? `${b.due.slice(0, 4)}年${Number(b.due.slice(5, 7))}月${Number(b.due.slice(8, 10))}日`
+    : "____年__月__日";
+  const t = new Date();
+  const dateText = `${t.getFullYear()}年${t.getMonth() + 1}月${t.getDate()}日`;
+  const no = `溧政办通〔${t.getFullYear()}〕${String(DC.govNo).padStart(2, "0")} 号`;
+  DC.govNo += 1;
+  DC.gov = { task: taskTitle, unit: b.unit, owner: b.owner, dueText, no, dateText,
+    md: [
+      "溧阳市人民政府办公室",
+      no,
+      "",
+      `关于${taskTitle}的督办通报`,
+      "",
+      "各镇（区）人民政府，市各委办局、市各直属单位：",
+      "",
+      `为推动重点工作落地见效，现将「${taskTitle}」督办事项及要求通报如下：`,
+      "",
+      `一、督办事项。${taskTitle}。`,
+      `二、责任与时限。责任落实部门（单位）：${b.unit}；责任人：${b.owner || "待明确"}；办结时限：${dueText}。`,
+      `三、工作要求。请${b.unit}高度重视，对照时限倒排工期、挂图作战，每周五前将进展情况报市政府办公室；对推进不力、进度滞后的，将予以通报批评。`,
+      "",
+      "溧阳市人民政府办公室",
+      dateText,
+    ].join("\n") };
+  DC.doc = null; // 红头版与服务器版互斥：纸面同一时间只显示一份
+  dcRenderBulletinPaper();
+  dcTools();
+  toast(`已按红头公文生成，文号 ${no}`);
+}
+
+function dcRenderBulletinPaper() {
+  const g = DC.gov;
+  if (!g) return;
+  const p = $("#dcPaper");
+  p.className = "doc-paper gov";
+  p.innerHTML = `
+    <div class="gov-org">溧阳市人民政府办公室</div>
+    <div class="gov-no">${esc(g.no)}</div>
+    <div class="gov-line"></div>
+    <h1 class="gov-title">关于${esc(g.task)}的督办通报</h1>
+    <p class="gov-p">各镇（区）人民政府，市各委办局、市各直属单位：</p>
+    <p class="gov-p">为推动重点工作落地见效，现将「${esc(g.task)}」督办事项及要求通报如下：</p>
+    <p class="gov-p"><b>一、督办事项。</b>${esc(g.task)}。</p>
+    <p class="gov-p"><b>二、责任与时限。</b>责任落实部门（单位）：${esc(g.unit)}；责任人：${esc(g.owner || "待明确")}；办结时限：${esc(g.dueText)}。</p>
+    <p class="gov-p"><b>三、工作要求。</b>请${esc(g.unit)}高度重视，对照时限倒排工期、挂图作战，每周五前将进展情况报市政府办公室；对推进不力、进度滞后的，将予以通报批评。</p>
+    <div class="gov-sign">溧阳市人民政府办公室<br>${esc(g.dateText)}</div>`;
+}
 
 
 async function refreshCal() {
@@ -4224,10 +5203,21 @@ function calRow(it) {
   </div>`;
 }
 
+/* V3：AI 日程改为月历视图 —— 一屏看清全月，日期格内直接摆事项；
+   点某天，下方列出当天清单（复用原来的时间线行）。‹ › 翻月，「回到本月」一键返回。
+   事项数据仍只来自 14 天窗口接口，窗外日期显示为空格，不编造。 */
 function renderAgenda() {
   const d = CAL.data;
   const s = d.summary || {};
-  const groups = d.groups || [];
+  if (!CAL.view) {
+    const t = String(d.today || "").split("-");
+    CAL.view = { y: Number(t[0]) || new Date().getFullYear(), m: (Number(t[1]) || new Date().getMonth() + 1) - 1, sel: d.today };
+  }
+  const { y, m } = CAL.view;
+  const byDate = {};
+  (d.groups || []).forEach((g) => { byDate[g.date] = g; });
+  const today = d.today;
+
   const parts = [calBriefHtml(CAL.brief || { source: "rule", brief: calRuleBrief(d), why: {} }, d, CAL.pending)];
   parts.push(`<div class="cal-sum">
     <span>未来 <b>${d.window.days}</b> 天</span>
@@ -4237,25 +5227,63 @@ function renderAgenda() {
     <span style="margin-left:auto"><button class="cal-refresh" id="calRefresh">刷新</button></span>
   </div>`);
 
-  if (!groups.length) {
-    parts.push(`<div class="cal-empty">未来 ${d.window.days} 天没有排期。<br>台账里没有落在窗口内的时限，也没有已定时间的会议。</div>`);
-  } else {
-    if (!groups.some((g) => g.is_today)) {
-      parts.push(`<div class="cal-quiet">今天没有排期。最近一件在 ${esc(groups[0].month_day)}。</div>`);
-    }
-    for (const g of groups) {
-      const head = g.weekday === g.label ? g.month_day : `${g.month_day} ${g.weekday}`;
-      parts.push(`<div class="cal-day ${g.is_today ? "today" : ""}">
-        <div class="cal-day-hd"><b>${esc(g.label)}</b><span class="d">${esc(head)}</span><span class="n">${g.items.length} 件</span></div>
-        ${g.items.map(calRow).join("")}
-      </div>`);
-    }
+  parts.push(`<div class="cal-nav">
+    <button class="cal-nav-btn" id="calPrev" title="上一月">‹</button>
+    <b>${y} 年 ${m + 1} 月</b>
+    <button class="cal-nav-btn" id="calNext" title="下一月">›</button>
+    <button class="cal-nav-btn ghost" id="calToday">回到本月</button>
+    <span class="cal-legend">点日期看当天清单 · 事项来自督办时限与会议安排</span>
+  </div>`);
+
+  // 月历网格：周一开头；只画本月日期，事件取窗口内的分组
+  const firstWd = (new Date(y, m, 1).getDay() + 6) % 7;
+  const dim = new Date(y, m + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < firstWd; i++) cells.push(`<div class="cal-cell out"></div>`);
+  for (let day = 1; day <= dim; day++) {
+    const ds = `${y}-${String(m + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    const g = byDate[ds];
+    const evs = g ? g.items.slice(0, 2) : [];
+    const more = g && g.items.length > 2 ? g.items.length - 2 : 0;
+    cells.push(`<div class="cal-cell ${ds === today ? "today" : ""} ${ds === CAL.view.sel ? "sel" : ""}" data-caldate="${ds}">
+      <span class="cal-d">${day}</span>
+      ${evs.map((it) => `<span class="cal-ev ${esc(it.tone)}" title="${esc(it.title)}">${esc(it.time ? it.time + " " : "")}${esc(it.title)}</span>`).join("")}
+      ${more ? `<span class="cal-more">还有 ${more} 件…</span>` : ""}
+    </div>`);
   }
+  parts.push(`<div class="cal-grid">
+    ${["一", "二", "三", "四", "五", "六", "日"].map((w) => `<div class="cal-wd">${w}</div>`).join("")}
+    ${cells.join("")}
+  </div>`);
+
+  parts.push(`<div class="cal-daylist" id="calDayList"></div>`);
 
   parts.push(`<div class="cal-foot"><b>口径</b> · ${esc(d.rule)}<br>
     ${esc(d.basis)}；生成于 ${esc(d.generated_at)}。切换身份后按各自分管范围重算，右上角可刷新。</div>`);
   $("#calBody").innerHTML = parts.join("");
   $("#calRefresh").onclick = () => refreshCal();
+  $("#calPrev").onclick = () => { const v = CAL.view; v.m--; if (v.m < 0) { v.m = 11; v.y--; } renderAgenda(); };
+  $("#calNext").onclick = () => { const v = CAL.view; v.m++; if (v.m > 11) { v.m = 0; v.y++; } renderAgenda(); };
+  $("#calToday").onclick = () => {
+    const t = String(d.today || "").split("-");
+    CAL.view = { y: Number(t[0]), m: Number(t[1]) - 1, sel: d.today };
+    renderAgenda();
+  };
+  renderCalDay();
+}
+
+/* 选中日期的当天清单：有排期按原时间线渲染，没有就说清楚 */
+function renderCalDay() {
+  const d = CAL.data;
+  const holder = $("#calDayList");
+  if (!holder || !d) return;
+  const g = (d.groups || []).find((x) => x.date === CAL.view.sel);
+  holder.innerHTML = g
+    ? `<div class="cal-day ${g.is_today ? "today" : ""}">
+        <div class="cal-day-hd"><b>${esc(g.label)}</b><span class="d">${esc(g.month_day)} ${esc(g.weekday)}</span><span class="n">${g.items.length} 件</span></div>
+        ${g.items.map(calRow).join("")}
+      </div>`
+    : `<div class="cal-quiet">${esc(CAL.view.sel || "")} 没有排期。督办时限和已定时间的会议才会出现在日历上。</div>`;
 }
 
 function applyBrief() {
@@ -4577,6 +5605,142 @@ const OVX = { items: [], stats: {}, scan: null, filter: "全部", sel: null };
 const OV_FILTERS = ["全部", "逾期", "今日到期", "临期", "签收超时", "停滞", "已办结"];
 const OV_TONE = { 逾期: "danger", 今日到期: "warn", 临期: "warn", 签收超时: "info", 停滞: "info", 正常: "muted" };
 
+/* V3.2 督办详情演示数据补充：责任人 / 交办时间 / 任务节点。
+   台账接口本身只到「单位 + 状态」，原型里为了把右侧详情填满，按每件事项
+   配一套合理的演示值；真实后端给出同名字段时以服务端为准（renderOvDetail 里合并）。 */
+const OV_ENRICH = {
+  "DB2026-0027": {
+    owner: "张伟（市住建局城市建设科）", issued_at: "2026-09-10",
+    nodes: [
+      { date: "09-10", label: "常务会议交办，明确牵头分工", state: "done" },
+      { date: "09-25", label: "完成管线迁改方案会审", state: "done" },
+      { date: "10-20", label: "路基与管网施工", state: "late" },
+      { date: "10-28", label: "竣工验收并申请办结", state: "todo" },
+    ],
+    events: [
+      { ts: "2026-09-10 10:00", type: "交办", text: "市政府第 12 次常务会议定事项，交市住建局牵头", actor: "市政府办" },
+      { ts: "2026-09-12 09:30", type: "签收", text: "签收，明确责任人为张伟", actor: "市住建局", from_status: "待签收", to_status: "办理中" },
+      { ts: "2026-09-25 16:20", type: "进展", text: "管线迁改方案通过会审", actor: "张伟", percent: 30 },
+      { ts: "2026-10-21 10:30", type: "进展", text: "路基完成 70%，雨污水管网推进中", actor: "张伟", percent: 72 },
+      { ts: "2026-10-27 09:00", type: "催办", text: "逾期 5 天，请倒排工期并反馈赶工安排", actor: "市政府办" },
+    ],
+  },
+  "DB2026-0030": {
+    owner: "李娜（市市场监管局食品科）", issued_at: "2026-10-08",
+    nodes: [
+      { date: "10-08", label: "专项检查方案下发", state: "done" },
+      { date: "10-22", label: "完成 62 所学校全覆盖检查", state: "done" },
+      { date: "10-30", label: "问题隐患整改复查", state: "done" },
+      { date: "11-01", label: "办结归档", state: "late" },
+    ],
+    events: [
+      { ts: "2026-10-08 09:00", type: "交办", text: "秋季校园食品安全专项检查任务下发", actor: "市政府办" },
+      { ts: "2026-10-09 11:00", type: "签收", text: "签收，明确责任人为李娜", actor: "市市场监管局", from_status: "待签收", to_status: "办理中" },
+      { ts: "2026-10-22 17:40", type: "进展", text: "62 所学校全覆盖检查，发现隐患 14 处", actor: "李娜", percent: 90 },
+      { ts: "2026-10-30 15:10", type: "进展", text: "隐患整改复查全部通过", actor: "李娜", percent: 96 },
+      { ts: "2026-11-01 09:00", type: "催办", text: "已到时限，请尽快提交办结", actor: "市政府办" },
+    ],
+  },
+  "DB2026-0029": {
+    owner: "王强（市城管局市政设施管理科）", issued_at: "2026-09-26",
+    nodes: [
+      { date: "09-26", label: "治理方案审定", state: "done" },
+      { date: "10-25", label: "新增泊位 1,200 个", state: "done" },
+      { date: "10-28", label: "38 个场库错时共享开放", state: "done" },
+      { date: "11-03", label: "办结审核（待市政府办确认）", state: "doing" },
+    ],
+    events: [
+      { ts: "2026-09-26 10:30", type: "交办", text: "12345 高频诉求「停车难」专项治理立项", actor: "市政府办" },
+      { ts: "2026-09-27 14:00", type: "签收", text: "签收，明确责任人为王强", actor: "市城管局", from_status: "待签收", to_status: "办理中" },
+      { ts: "2026-10-25 18:00", type: "进展", text: "新增泊位 1,200 个，38 个场库错时共享", actor: "王强", percent: 100 },
+      { ts: "2026-10-31 09:20", type: "提请办结", text: "提交办结材料，待市政府办审核", actor: "王强", from_status: "办理中", to_status: "待审核" },
+    ],
+  },
+  "DB2026-0035": {
+    owner: "刘洋（市城管局燃气供热科）", issued_at: "2026-10-20",
+    nodes: [
+      { date: "10-20", label: "预案编制任务交办", state: "done" },
+      { date: "10-23", label: "签收确认", state: "late" },
+      { date: "11-05", label: "预案编制完成", state: "todo" },
+      { date: "11-10", label: "报市应急管理局备案", state: "todo" },
+    ],
+    events: [
+      { ts: "2026-10-20 09:00", type: "交办", text: "冬季供暖保障预案编制与报备任务下发", actor: "市政府办" },
+      { ts: "2026-10-24 09:00", type: "提醒", text: "签收超时，系统自动提醒", actor: "系统" },
+      { ts: "2026-10-28 10:00", type: "催办", text: "请尽快签收并启动预案编制", actor: "市政府办" },
+    ],
+  },
+  "DB2026-0033": {
+    owner: "陈斌（市生态环境局水生态科）", issued_at: "2026-10-18",
+    nodes: [
+      { date: "10-18", label: "排查任务交办", state: "done" },
+      { date: "10-21", label: "签收确认", state: "late" },
+      { date: "11-08", label: "排查建库、一口一档", state: "todo" },
+      { date: "11-20", label: "分类整治销号", state: "todo" },
+    ],
+    events: [
+      { ts: "2026-10-18 15:00", type: "交办", text: "入河排污口排查整治任务交办（省交办件）", actor: "市政府办" },
+      { ts: "2026-10-22 09:00", type: "提醒", text: "签收超时，系统自动提醒", actor: "系统" },
+      { ts: "2026-10-29 11:30", type: "催办", text: "请先签收，再排排查计划", actor: "市政府办" },
+    ],
+  },
+  "DB2026-0025": {
+    owner: "周敏（市大数据局数据资源科）", issued_at: "2026-09-05",
+    nodes: [
+      { date: "09-05", label: "接入方案与接口规范确认", state: "done" },
+      { date: "09-28", label: "部门接口联调", state: "done" },
+      { date: "10-31", label: "数据归集（已停滞 12 天）", state: "doing" },
+      { date: "11-10", label: "平台试运行", state: "todo" },
+      { date: "11-15", label: "验收上线", state: "todo" },
+    ],
+    events: [
+      { ts: "2026-09-05 09:30", type: "交办", text: "城市运行管理服务平台数据接入任务交办", actor: "市政府办" },
+      { ts: "2026-09-06 10:00", type: "签收", text: "签收，明确责任人为周敏", actor: "市大数据局", from_status: "待签收", to_status: "办理中" },
+      { ts: "2026-09-28 16:00", type: "进展", text: "8 个部门接口联调完成", actor: "周敏", percent: 45 },
+      { ts: "2026-10-31 17:00", type: "提醒", text: "已 12 天无新进展，判定停滞", actor: "系统" },
+    ],
+  },
+  "DB2026-0018": {
+    owner: "赵磊（市住建局旧改办）", issued_at: "2026-08-15",
+    nodes: [
+      { date: "08-15", label: "年度改造计划下达", state: "done" },
+      { date: "08-30", label: "施工许可办理", state: "done" },
+      { date: "09-18", label: "21 个小区集中开工", state: "done" },
+      { date: "09-30", label: "办结归档", state: "done" },
+    ],
+    events: [
+      { ts: "2026-08-15 09:00", type: "交办", text: "第二批老旧小区改造年度任务下达", actor: "市政府办" },
+      { ts: "2026-08-16 10:30", type: "签收", text: "签收，明确责任人为赵磊", actor: "市住建局", from_status: "待签收", to_status: "办理中" },
+      { ts: "2026-09-18 09:18", type: "进展", text: "21 个小区集中开工仪式举行", actor: "赵磊", percent: 90 },
+      { ts: "2026-09-30 15:00", type: "办结", text: "全部小区开工，办结归档", actor: "赵磊", from_status: "办理中", to_status: "已办结" },
+    ],
+  },
+  "DB2026-0031": {
+    owner: "孙洁（市发改委审批服务科）", issued_at: "2026-10-15",
+    nodes: [
+      { date: "10-15", label: "容缺受理清单编制启动", state: "done" },
+      { date: "10-26", label: "清单初稿（28 项）", state: "done" },
+      { date: "11-12", label: "部门会签", state: "doing" },
+      { date: "11-30", label: "印发实施", state: "todo" },
+    ],
+    events: [
+      { ts: "2026-10-15 10:00", type: "交办", text: "重大项目「容缺受理」清单落地任务交办", actor: "市政府办" },
+      { ts: "2026-10-16 09:40", type: "签收", text: "签收，明确责任人为孙洁", actor: "市发改委", from_status: "待签收", to_status: "办理中" },
+      { ts: "2026-10-26 17:00", type: "进展", text: "清单初稿 28 项，征求部门意见中", actor: "孙洁", percent: 40 },
+    ],
+  },
+};
+
+/* 紧急度：由风险类别 + 是否重点督办推出三档。逾期一律「高」；
+   临期、停滞、签收超时看事项分量；办结回落「低」。 */
+function ovUrgency(it) {
+  if (it.status === "已办结") return ["ok", "低"];
+  if (it.risk === "逾期") return ["danger", "高"];
+  if (it.risk === "临期") return ["warn", it.priority === "重点" ? "高" : "中"];
+  if (it.risk === "签收超时" || it.risk === "停滞") return ["warn", it.priority === "重点" ? "高" : "中"];
+  return ["info", "低"];
+}
+
 async function openOversight(id, fromMeeting) {
   $("#ovModal").classList.add("on");
   const back = $("#ovBack");
@@ -4650,13 +5814,17 @@ function renderOvList() {
 
 async function showOvItem(id) {
   const d = await (await fetch(`/api/oversight/${encodeURIComponent(id)}`)).json();
-  if (!d.ok) return toast("没有这件事项");
+  // 后端把事项放在 item 里；演示拦截器是扁平结构，两者都兼容
+  const it = d.item || d;
+  if (!d.ok || !it || !it.id) return toast("没有这件事项");
   OVX.sel = id;
   renderOvList();
-  renderOvDetail(d.item);
+  renderOvDetail(it);
 }
 
-function renderOvDetail(it) {
+function renderOvDetail(raw) {
+  // 演示补充数据（责任人/交办时间/任务节点）先铺底，服务端同名字段优先
+  const it = Object.assign({}, OV_ENRICH[raw.id] || {}, raw);
   const days = it.days_left;
   const head = it.status === "已办结"
     ? ["ok", "已办结"]
@@ -4668,6 +5836,37 @@ function renderOvDetail(it) {
     .filter((r) => !(days === 0 && r.includes("到期")))
     .filter((r) => !(days > 0 && r.startsWith("距时限")))
     .map((r) => `<span class="ov-tag ${esc(OV_TONE[it.risk] || "")}">${esc(r)}</span>`).join("");
+
+  const urg = ovUrgency(it);
+  const co = it.co_assignees || [];
+
+  // 要素卡：督办事项的关键信息一眼一屏。full = 通栏。
+  const infoGrid = `
+    <div class="ov-grid">
+      <div class="ov-cell"><div class="k">责任人</div><div class="v">${esc(it.owner || "—")}</div></div>
+      <div class="ov-cell"><div class="k">紧急度</div><div class="v"><span class="u-badge ${urg[0]}">${esc(urg[1])}</span> <small>${esc(it.risk)}${it.priority === "重点" ? " · 重点督办" : ""}</small></div></div>
+      <div class="ov-cell full"><div class="k">责任部门 / 单位</div><div class="v">${esc(it.assignee)}（主办）${co.length ? ` <small>协办：${esc(co.join("、"))}</small>` : ""}</div></div>
+      <div class="ov-cell"><div class="k">时限</div><div class="v">${esc(it.deadline)} <small>${esc(head[1])}</small></div></div>
+      <div class="ov-cell"><div class="k">交办时间</div><div class="v">${esc(it.issued_at || "—")}</div></div>
+      <div class="ov-cell full"><div class="k">当前进度</div><div class="v">${it.progress}% <small>${it.idle_days ? ` · 已 ${it.idle_days} 天无新进展` : ""}${it.remind_count ? ` · 已催办 ${it.remind_count} 次` : ""}</small>
+        <div class="ov-prog"><i class="${days < 0 ? "late" : ""}" style="width:${Math.min(100, Math.max(0, it.progress))}%"></i></div></div></div>
+      <div class="ov-cell full"><div class="k">办结标准</div><div class="v">${esc(it.standard)}</div></div>
+      <div class="ov-cell full"><div class="k">来源</div><div class="v">${esc(it.source)}${it.source_ref ? ` <small>· ${esc(it.source_ref)}</small>` : ""}</div></div>
+    </div>`;
+
+  // 任务节点：竖排时间线。演示数据没有节点时不占位。
+  const ND_ST = { done: "已完成", doing: "进行中", todo: "未开始", late: "已逾期" };
+  const nodes = (it.nodes || []);
+  const nodeDone = nodes.filter((n) => n.state === "done").length;
+  const nodeHtml = nodes.length ? `
+    <div class="ov-nodes">
+      <div class="hd">任务节点<span class="nd-n">${nodeDone} / ${nodes.length} 完成</span></div>
+      ${nodes.map((n) => `
+        <div class="ov-node ${esc(n.state)}">
+          <span class="nd-date">${esc(n.date)}</span>${esc(n.label)}
+          <span class="nd-st ${esc(n.state)}">${esc(ND_ST[n.state] || "")}</span>
+        </div>`).join("")}
+    </div>` : "";
 
   const acts = (it.allowed_actions || []).map((a) => {
     const cls = ["签收", "提交办结", "确认办结"].includes(a) ? "primary" : a === "退回" ? "red" : "";
@@ -4702,21 +5901,14 @@ function renderOvDetail(it) {
     </div>` : `<div class="mt-warn info">这件事项已办结，没有可执行的操作。</div>`;
 
   $("#ovMain").innerHTML = `
-    <div class="ov-h"><h4>${esc(it.title)}</h4></div>
+    <div class="ov-h"><h4>${esc(it.title)}</h4><span class="ov-id">${esc(it.id)}</span></div>
     <div class="ov-tags">
       <span class="ov-tag ${esc(head[0])}">${esc(head[1])}</span>
       <span class="ov-tag">${esc(it.status)}</span>
-      <span class="ov-tag ${it.priority === "重点" ? "warn" : ""}">${esc(it.priority)}</span>
       ${riskTags}
     </div>
-    <dl class="ov-kv">
-      <dt>编号</dt><dd>${esc(it.id)}</dd>
-      <dt>责任单位</dt><dd>${esc(it.assignee)}${(it.co_assignees || []).length ? `（协办：${esc(it.co_assignees.join("、"))}）` : ""}</dd>
-      <dt>来源</dt><dd>${esc(it.source)}${it.source_ref ? ` · ${esc(it.source_ref)}` : ""}</dd>
-      <dt>交办 / 时限</dt><dd>${esc(it.issued_at)} → ${esc(it.deadline)}</dd>
-      <dt>办结标准</dt><dd>${esc(it.standard)}</dd>
-      <dt>当前进度</dt><dd>${it.progress}%${it.idle_days ? ` · 已 ${it.idle_days} 天无新进展` : ""}${it.remind_count ? ` · 已催办 ${it.remind_count} 次` : ""}</dd>
-    </dl>
+    ${infoGrid}
+    ${nodeHtml}
     ${form}
     <div class="ov-events">${events || `<div class="hint" style="margin:0">没有事件记录。</div>`}</div>`;
 }
@@ -4768,7 +5960,7 @@ async function refreshDash() {
   $("#periodText").textContent = OV.period;
   renderKpis(OV.kpis);
   renderBoards(OV.boards, OV.focus);
-  renderAlerts(OV.alerts, OV.oversight);
+  renderAlerts();
   await loadWorkspace();
 }
 
@@ -4782,7 +5974,7 @@ async function boot() {
   $("#periodText").textContent = OV.period;
   renderKpis(OV.kpis);
   renderBoards(OV.boards, OV.focus);
-  renderAlerts(OV.alerts, OV.oversight);
+  renderAlerts();
   await loadPeople();
   await loadExperts();
   await loadWorkspace();
@@ -4843,6 +6035,32 @@ document.addEventListener("click", (e) => {
   // 星号长在答案气泡里，后面「点来源胶囊看口径」那类委托会抢走同一次点击。
   const starBtn = e.target.closest("[data-star]");
   if (starBtn) return toggleSaved(starBtn);
+
+  // V3 多工作台：删除 → 切换（先查删除，× 在页签内部，否则会被切换接走）
+  const deskDel = e.target.closest("[data-deskdel]");
+  if (deskDel) return deleteDesk(deskDel.dataset.deskdel);
+  const deskTab = e.target.closest("[data-desk]");
+  if (deskTab) return switchDesk(deskTab.dataset.desk);
+  if (e.target.closest("#deskAdd")) return openDeskModal();
+  // 关注 → 选工作台：点一行即加入
+  const smAdd = e.target.closest("[data-smadd]");
+  if (smAdd) {
+    const pend = STAR_PEND || {};
+    closeStarModal();
+    return setSaved(pend.mid, pend.tid, true, smAdd.dataset.smadd);
+  }
+  // 自建页签里「不在服务端关注名单」的简卡 ✕：只从本页签移除
+  const dwx = e.target.closest("[data-deskunwatch]");
+  if (dwx) {
+    const desk = DESKS.find((x) => x.id === DESK_CUR);
+    if (desk) {
+      desk.codes = (desk.codes || []).filter((c) => c !== dwx.dataset.deskunwatch);
+      saveDesks();
+      renderWatch();
+      toast(`已从「${desk.name}」移除`);
+    }
+    return;
+  }
   // 建会草稿卡的按钮同理：卡在答案气泡里，别让别的委托接走
   const mpGo = e.target.closest("[data-mpgo]");
   if (mpGo) return commitMeet(mpGo.closest("[data-mp]"));
@@ -4932,7 +6150,7 @@ document.addEventListener("click", (e) => {
   if (metric) return showMetric(metric.dataset.metric);
 
   const f = e.target.closest("[data-focus]");
-  if (f) return toast("民情焦点：真实系统里点开是 12345 工单列表");
+  if (f) return openFocus(f.dataset.focus);
 
   // 督办台账的三种点击：切分类 / 选事项 / 执行流转。必须放在 [data-item] 之前，
   // 否则台账里的卡片会被预警条那条老规则接走。
@@ -4982,6 +6200,13 @@ document.addEventListener("click", (e) => {
 
   if (e.target.id === "goCoord") return openOversight();
 
+  // V3 月历：点日期格 = 选中那天，下方清单跟着换
+  const calCell = e.target.closest("[data-caldate]");
+  if (calCell) {
+    if (CAL.view) CAL.view.sel = calCell.dataset.caldate;
+    return renderAgenda();
+  }
+
   if (e.target.closest("[data-ask]")) {
     const q = e.target.closest("[data-ask]").dataset.ask;
     $("#q").value = q;
@@ -5010,7 +6235,7 @@ document.addEventListener("click", (e) => {
     return;
   }
   if (e.target.closest("#bellBtn")) return openOversight();
-  if (e.target.closest("#focusMore")) return toast("民情焦点：共 3 条，均来自 12345 热线聚类");
+  if (e.target.closest("#focusMore")) return openFocus();
 });
 
 /* ---------- 侧栏：历史对话 / 收起 ---------- */
@@ -5018,10 +6243,23 @@ $("#askChats").onclick = () => showChats(true);
 $("#chatsBack").onclick = () => showChats(false);
 $("#askFold").onclick = () => setAskFold(true);
 $("#askRail").onclick = () => setAskFold(false);
-$("#chatsNew").onclick = () => {
+$("#headNew").onclick = () => {
   newThread();
   toast("已开新会话，下一句提问会自动创建");
 };
+
+/* ---------- V3 工作台页签 / 关注弹窗 ---------- */
+$("#dmClose").onclick = closeDeskModal;
+$("#dmOk").onclick = commitDesk;
+$("#dmName").addEventListener("keydown", (e) => { if (e.key === "Enter") return commitDesk(); });
+$("#deskModal").onclick = (e) => { if (e.target.id === "deskModal") closeDeskModal(); };
+$("#smClose").onclick = closeStarModal;
+$("#starModal").onclick = (e) => { if (e.target.id === "starModal") closeStarModal(); };
+// 双击页签重命名（默认工作台不参与）
+$("#deskTabs").addEventListener("dblclick", (e) => {
+  const tab = e.target.closest("[data-desk]");
+  if (tab && tab.dataset.desk !== "default") openDeskModal(tab.dataset.desk);
+});
 // 列表项整行可点：点哪一条就切哪一条，切换完直接回对话屏
 $("#chatsList").onclick = (e) => {
   const it = e.target.closest(".chat-item");
@@ -5065,6 +6303,17 @@ $("#lmClose").onclick = () => $("#layoutModal").classList.remove("on");
 $("#layoutModal").onclick = (e) => { if (e.target.id === "layoutModal") $("#layoutModal").classList.remove("on"); };
 $("#watchModal").onclick = (e) => { if (e.target.id === "watchModal") $("#watchModal").classList.remove("on"); };
 $("#ovClose").onclick = () => $("#ovModal").classList.remove("on");
+
+/* 焦点弹窗自己的三个交互：关闭 / 分类筛选 / 选中焦点 */
+$("#focusClose").onclick = () => $("#focusModal").classList.remove("on");
+$("#fxFilters").onclick = (e) => {
+  const b = e.target.closest("[data-fxfilter]");
+  if (b) { FX.filter = b.dataset.fxfilter; renderFxList(); }
+};
+$("#fxList").onclick = (e) => {
+  const c = e.target.closest("[data-fxsel]");
+  if (c) { FX.sel = c.dataset.fxsel; renderFxList(); renderFxDetail(); }
+};
 $("#ovBack").onclick = () => { $("#ovModal").classList.remove("on"); openMeetModal(); };
 $("#ovUrge").onclick = ovUrgeBatch;
 $("#ovModal").onclick = (e) => { if (e.target.id === "ovModal") $("#ovModal").classList.remove("on"); };
@@ -5142,7 +6391,11 @@ $("#go").onclick = () => {
 };
 $("#q").addEventListener("keydown", (e) => {
   if (slashKeydown(e)) return e.preventDefault();  // 方向键/Enter 已经被菜单吃掉
-  if (e.key === "Enter") $("#go").click();
+  // 三行输入框：Enter 发送，Shift+Enter 换行（textarea 默认行为）
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    $("#go").click();
+  }
 });
 // 打 / 弹菜单、接着打字过滤。组词期间压着不重绘：中文候选还没上屏，
 // 这时候按 value 过滤必然匹配不到，列表会在眼前闪一下「没有这个参谋」。
