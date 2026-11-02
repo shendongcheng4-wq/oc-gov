@@ -1,0 +1,72 @@
+name: smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Python ${{ matrix.python }} · 冒烟测试
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: 版本确认
+        run: python -V
+
+      # 项目零第三方依赖，故意不装任何 pip 包：一旦有人偷偷加了依赖，
+      # 这里会立刻失败，比 README 里写「无需依赖」更可信。
+      - name: 起服务（后台监听 8090）
+        run: |
+          python -X utf8 app/main.py 8090 > /tmp/server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8090/api/health > /dev/null; then
+              echo "✅ 服务就绪（第 ${i} 秒）"
+              curl -s http://127.0.0.1:8090/api/health
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "❌ 服务 30 秒内未就绪，服务日志如下："
+          cat /tmp/server.log
+          exit 1
+
+      - name: 冒烟测试（含 HTTP 用例）
+        env:
+          OCGOV_PORT: '8090'
+        run: |
+          set -o pipefail
+          python -X utf8 tests/smoke.py 2>&1 | tee /tmp/smoke.log
+          # smoke.py 在服务不可用时会「跳过」而非失败，CI 里必须拦下这种静默通过
+          if grep -q "SKIP  服务未启动" /tmp/smoke.log; then
+            echo "❌ HTTP 用例被跳过：服务没有真正起来，测试不算通过"
+            exit 1
+          fi
+
+      - name: 失败时导出服务日志
+        if: failure()
+        run: cat /tmp/server.log || true
+
+      - name: 上传测试日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-log-py${{ matrix.python }}
+          path: |
+            /tmp/smoke.log
+            /tmp/server.log
+          if-no-files-found: ignore
