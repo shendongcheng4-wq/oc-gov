@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import experts as experts_mod  # noqa: E402
 import knowledge as knowledge_mod
 import llm
+import meetplan as meetplan_mod
 import mockdata as md
 import people as people_mod
 
@@ -278,6 +279,19 @@ def _ask_impl(
     today = today or date.today()
     trace: list[dict[str, Any]] = []
     question = question.strip()
+
+    # 约会议要抢在所有判断之前，包括模型规划。
+    #
+    # 两个原因：一是它既不是问数也不是查记录 —— 它要**写**；让模型先判意图，
+    # 大概率被判成「取值」或「依据」，然后答一段不相干的东西。二是这里不需要模型：
+    # 时间是规则算得出来的，让模型算日期反而是最不可靠的一环，还白花一次 token。
+    #
+    # 注意它排在拒答之前：这类问句在指标字典里一定匹配不到，不前置就会变成
+    # 「没有对应的指标」——用户提了个能办的需求，系统回一句它办不了。
+    if meetplan_mod.wants(question):
+        person = people_mod.meta(person_id)
+        draft = meetplan_mod.parse(question, today=today, person=person)
+        return meetplan_mod.as_result(draft, question)
 
     plan, planner = _plan_question(question, today, history, model_ref)
 

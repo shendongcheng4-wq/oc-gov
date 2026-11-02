@@ -981,9 +981,146 @@ def test_saved() -> None:
     html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
     check("答案上有收藏星号", 'class="star-btn' in html and "data-star=" in html, "")
     check("星号用落库 id 定位", "messageId: f.message_id" in html and "data-mid=" in html, "")
-    check("工作台有收藏区", 'id="savedBox"' in html and "function renderSaved" in html, "")
-    check("收藏能跳回原回答", "function jumpToSaved" in html and "data-svmid" in html, "")
-    check("空收藏不留占位", "savedBox" in html and "box.hidden = !items.length" in html, "")
+    # 收藏并进「我的关注」网格：以前是卡片下面一个虚线小块（savedBox），看着像另一个
+    # 板块，人不会认为那是自己关注的东西。现在和指标卡同在 #watchGrid 里，
+    # 卡片自己带 data-svthread（点开回原答案）。
+    check(
+        "收藏卡并进我的关注网格",
+        'class="kpi sv"' in html and "data-svthread=" in html and 'id="savedBox"' not in html,
+        "",
+    )
+    check("收藏卡上有取消收藏", 'class="rm" data-unsave=' in html, "")
+    check("收藏能跳回原回答", "function jumpToSaved" in html and "data-svmid=" in html, "")
+    # 跳转必须先把问数面板切出来。问数长在「城市罗盘」那一屏，从工作台点收藏卡
+    # 不切视图的话，答案确实渲染好了，但人还停在个人工作台上 —— 看着像点了没反应
+    jump = html.split("async function jumpToSaved")[1].split("async function")[0]
+    check("收藏跳转先切回问答视图", 'switchView("compass")' in jump, "")
+    # 计数并进区块头：`${cards.length} / ${max} 指标 · ${saved.length} 收藏`
+    # 不并成「7 / 8」—— 指标名额 8 个、收藏 24 条，混在一个分母里会让收藏占指标名额
+    check("收藏计入我的关注计数", "${saved.length} 收藏" in html, "")
+    check("空收藏不留占位", '(cards.length || saved.length ? "" : empty)' in html, "")
+
+
+def test_meetplan() -> None:
+    """对话里约会议：解析对、缺项说清、确认才落库、重复点只建一场。
+
+    这里大部分断言是在守「不确定要说出来」这件事：时间怎么算的、主持为什么是
+    这个人、哪个单位没对上清单，都得写在草稿上。悄悄按默认值走一遍，用户看到的
+    就是一场他自己没同意过的会。
+    """
+    print("\n[18] 对话里约会议")
+    import meetplan as mp
+    import schedule as cal
+    import notify as nt
+
+    # 意图：这两类句子长得像，一个是要建会，一个是查记录。判错的方向不对称 ——
+    # 把「查记录」判成建会，会凭空多出一场会；连卡都不用点，草稿就摆在那了。
+    for q in ("下周三下午三点约个会", "安排一场会讨论供暖", "开个会，议题是停车难"):
+        check(f"识别为约会议：{q}", mp.wants(q) is True, "")
+    for q in ("上次开会定了什么", "下周有什么会", "会议助手怎么用", "会议时间冲突怎么办"):
+        check(f"不误判：{q}", mp.wants(q) is False, "")
+
+    # 固定基准日：2026-11-02 是周一。用真实今天会让「下周三」随运行日期漂。
+    today = date(2026, 11, 2)
+    d = mp.parse(
+        "下周三下午三点约个会，议题是冬季供暖保障，市住建局和市城管局参加，地点在3号楼会议室",
+        today=today, person={"post": "市长"},
+    )
+    check("解析出时间", d["held_at"] == "2026-11-11 15:00", d["held_at"])
+    check("解析出议题", d["title"] == "冬季供暖保障", d["title"])
+    check("解析出地点", d["place"] == "3号楼会议室", d["place"])
+    check("单位别名对齐全称", d["attendees"] == ["市住建局", "市城管局"], str(d["attendees"]))
+    check("必填齐全才允许建会", d["ready"] is True, str(d["missing"]))
+    check("时间算法写出来", "2026-11-11" in (d["when_why"] or ""), d["when_why"])
+
+    d2 = mp.parse("明天下午四点开个会", today=today, person={"post": "市长"})
+    check("缺议题要标出来", "title" in d2["missing"], str(d2["missing"]))
+    check("缺参会单位要标出来", "attendees" in d2["missing"], str(d2["missing"]))
+    check("主持按当前身份并说明理由",
+          d2["host"] == "市长" and any("按当前身份" in a for a in d2["assumptions"]),
+          str(d2["assumptions"]))
+
+    d3 = mp.parse("三点开个会，讨论测试", today=today, person={"post": "市长"})
+    check("没说上下午按下午算且写明", d3["held_at"].endswith("15:00")
+          and any("按下午" in a for a in d3["assumptions"]), d3["held_at"])
+
+    # 单位不在台账里：原样留着并说明，不硬塞进清单 ——
+    # 系统不该假装认识一个它从来没有的单位
+    d4 = mp.parse("约个会，参会单位：市财政局", today=today, person={"post": "市长"})
+    check("台账没有的单位不硬塞", d4["unknown_units"] == ["市财政局"]
+          and "市财政局" not in d4["attendees"], str(d4["attendees"]) + str(d4["unknown_units"]))
+    check("没对上的单位要提示", any("台账里没出现过" in n for n in d4["notes"]), str(d4["notes"])[:80])
+
+    # ---- 落库 ----
+    from datetime import datetime as _dt, timedelta as _td
+    soon = (_dt.now() + _td(minutes=30)).strftime("%Y-%m-%d %H:%M")
+    good = {"title": "供暖保障专题会", "held_at": soon, "place": "3号楼会议室",
+            "host": "市长", "attendees": ["市住建局", "市城管局"], "topics": ["供暖保障"]}
+    r1 = mp.commit(good, thread_id="th_smoke", message_id="m_smoke", actor="市长")
+    mid = (r1.get("meeting") or {}).get("id") or ""
+    check("确认后落库", r1.get("ok") is True and bool(mid), str(r1)[:90])
+    one = mt_ledger.get(mid) or {}
+    check("预约的会是 plan 类型", one.get("kind") == "plan", str(one.get("kind")))
+    check("待召开的会状态是 planned", one.get("status") == "planned", str(one.get("status")))
+    check("待召开的会没有纪要正文", one.get("text") == "", repr(one.get("text"))[:40])
+    check("落库记下来源消息", one.get("from_message") == "th_smoke:m_smoke", str(one.get("from_message")))
+    check("落库记下地点与主持", one.get("place") == "3号楼会议室" and one.get("host") == "市长",
+          f"{one.get('place')} / {one.get('host')}")
+
+    r2 = mp.commit(good, thread_id="th_smoke", message_id="m_smoke", actor="市长")
+    check("同一条消息只建一场会",
+          r2.get("duplicate") is True and (r2.get("meeting") or {}).get("id") == mid, str(r2)[:90])
+
+    check("缺议题拒绝建会", mp.commit({"held_at": soon}, thread_id="a", message_id="b").get("ok") is False, "")
+    check("缺时间拒绝建会", mp.commit({"title": "x"}, thread_id="c", message_id="d").get("ok") is False, "")
+
+    # 没开过的会没有原文，这时候「解析」只能解析出模型编的东西
+    refused = mt_ledger.save_parse(mid, {"items": []})
+    check("待召开的会拒绝解析议定事项", refused.get("ok") is False, str(refused)[:90])
+
+    # ---- 自动进日程和提醒 ----
+    # 两场会：一场两天后（看日程文案），一场半小时后（看会前提醒）。
+    # 用同一场会同时验两件事验不了 —— 半小时内的会，日程文案一定是「N 分钟后开始」，
+    # 那不是 bug，是这件事本来的样子。
+    later = ((_dt.now() + _td(days=2)).replace(hour=15, minute=0, second=0, microsecond=0)
+             .strftime("%Y-%m-%d %H:%M"))
+    r3 = mp.commit({"title": "两天后的专题会", "held_at": later, "host": "市长",
+                    "attendees": ["市住建局"], "place": "常务会议室"},
+                   thread_id="th_smoke", message_id="m_later", actor="市长")
+    mid2 = (r3.get("meeting") or {}).get("id") or ""
+
+    evs = [e for g in cal.build("mayor")["groups"] for e in g["items"]
+           if e["kind"] == "meeting" and (e.get("ref") or {}).get("id") == mid2]
+    check("预约的会进日程", len(evs) == 1, str(len(evs)))
+    if evs:
+        check("日程里写「待召开」", "待召开" in (evs[0].get("why") or ""), evs[0].get("why"))
+        check("日程带上地点", "常务会议室" in (evs[0].get("sub") or ""), evs[0].get("sub"))
+
+    notes = [n for n in nt.build("mayor")["notes"] if n["rule"] == "meet_soon" and mid in n["id"]]
+    check("会前提醒自动挂上", len(notes) == 1, str([n["id"] for n in nt.build("mayor")["notes"]]))
+
+    # ---- 回放与会话 ----
+    meta = mp.to_meta(d) or {}
+    check("回放裁剪掉单位清单", "unit_options" not in meta, str(sorted(meta))[:80])
+    check("回放保留推定依据", bool(meta.get("assumptions")), str(meta.get("assumptions"))[:60])
+
+    msgs = [{"id": "m_smoke", "meta": {"meet_draft": dict(meta)}}]
+    mp.annotate("th_smoke", msgs)
+    check("回放补上「已建会」",
+          msgs[0]["meta"]["meet_draft"].get("meeting_id") == mid,
+          str(msgs[0]["meta"]["meet_draft"].get("meeting_id")))
+
+    import ask as ask_mod
+    res = ask_mod.ask("下周三下午三点约个会，议题是接口测试，住建局参加", person_id="mayor")
+    check("对话命中约会议意图", res.get("intent") == "meet" and bool(res.get("meet_draft")),
+          str(res.get("intent")))
+    check("约会议不调模型",
+          all(t["tool"] != "llm.plan" for t in (res.get("trace") or [])),
+          str([t["tool"] for t in (res.get("trace") or [])]))
+
+    mt_ledger.delete(mid)
+    if mid2:
+        mt_ledger.delete(mid2)
 
 
 def test_frontend_theme() -> None:
@@ -1172,6 +1309,90 @@ def test_http(port: int | None = None) -> None:
         )
     except urllib.error.HTTPError as e:
         check("/api/notify 可读", False, f"code={e.code}（服务跑的是旧代码？）")
+
+    # ---- 对话里约会议 ----
+    # 这是唯一一条会往真实台账里写东西的 HTTP 测试，所以建完必须删干净，
+    # 并把「删掉了」也断言一次 —— 否则跑几次测试，会议列表里就多几场不存在的会。
+    mtid, mttid = "", ""
+    before = len(get("/api/meetings").get("items") or [])
+    try:
+        req = urllib.request.Request(
+            base + "/api/ask",
+            data=json.dumps({"question": "下周三下午三点约个会，议题是接口冒烟，住建局参加"}).encode("utf-8"),
+            headers={"Content-Type": "application/json", "X-Person-Id": "mayor"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=90) as r:
+            mk = json.loads(r.read().decode("utf-8"))
+        mttid = mk.get("thread_id") or ""
+        check("POST /api/ask 命中约会议", mk.get("intent") == "meet", str(mk.get("intent")))
+        check("约会议只出草稿不建会",
+              len(get("/api/meetings").get("items") or []) == before,
+              f"{before} -> {len(get('/api/meetings').get('items') or [])}")
+
+        body = {
+            "thread_id": mttid,
+            "message_id": mk.get("message_id") or "",
+            "draft": {"title": "接口冒烟用会", "held_at": "2030-01-08 15:00",
+                      "place": "3号楼会议室", "host": "市长", "attendees": ["市住建局"]},
+        }
+        req = urllib.request.Request(
+            base + "/api/meetplan", data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json", "X-Person-Id": "mayor"}, method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            ok = json.loads(r.read().decode("utf-8"))
+        mtid = (ok.get("meeting") or {}).get("id") or ""
+        check("POST /api/meetplan 建会", ok.get("ok") is True and bool(mtid), str(ok)[:90])
+        check("建会后会议列表 +1", len(ok.get("items") or []) == before + 1, str(len(ok.get("items") or [])))
+
+        with urllib.request.urlopen(urllib.request.Request(
+            base + "/api/meetplan", data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json", "X-Person-Id": "mayor"}, method="POST",
+        ), timeout=15) as r:
+            dup = json.loads(r.read().decode("utf-8"))
+        check("重复确认不会建第二场",
+              dup.get("duplicate") is True and (dup.get("meeting") or {}).get("id") == mtid,
+              str(dup)[:90])
+
+        try:
+            req = urllib.request.Request(
+                base + "/api/meetplan",
+                data=json.dumps({"draft": {"held_at": "2030-01-09 09:00"}}).encode("utf-8"),
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as r:
+                r.read()
+            check("缺议题建会返回 400", False, "居然成功了")
+        except urllib.error.HTTPError as e:
+            check("缺议题建会返回 400", e.code == 400, f"code={e.code}")
+
+        th = get(f"/api/threads/{mttid}")
+        drafts = [(m.get("meta") or {}).get("meet_draft") for m in (th.get("thread") or {}).get("messages") or []]
+        drafts = [x for x in drafts if x]
+        check("回放带上已建会编号", bool(drafts) and drafts[0].get("meeting_id") == mtid,
+              str(drafts[:1])[:90])
+    except urllib.error.HTTPError as e:
+        check("/api/meetplan 可用", False, f"code={e.code}（服务跑的是旧代码？）")
+    finally:
+        if mtid:
+            try:
+                with urllib.request.urlopen(urllib.request.Request(
+                    f"{base}/api/meetings/{mtid}", method="DELETE"), timeout=10) as r:
+                    r.read()
+            except urllib.error.HTTPError:
+                pass
+        if mttid:
+            try:
+                with urllib.request.urlopen(urllib.request.Request(
+                    f"{base}/api/threads/{mttid}", method="DELETE"), timeout=10) as r:
+                    r.read()
+            except urllib.error.HTTPError:
+                pass
+        check("约会议测试自清（会 + 会话）",
+              len(get("/api/meetings").get("items") or []) == before
+              and all(t.get("id") != mttid for t in get("/api/threads").get("items") or []),
+              f"会议 {len(get('/api/meetings').get('items') or [])} vs {before}")
 
     models = get("/api/models")
     check("/api/models 有 resolved 列表", isinstance(models.get("resolved"), list), str(type(models.get("resolved"))))
@@ -1721,6 +1942,7 @@ def main() -> int:
     test_knowledge()
     test_notify()
     test_saved()
+    test_meetplan()
     test_frontend_theme()
     test_http()
     print()

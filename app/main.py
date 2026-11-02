@@ -78,6 +78,7 @@ import notify as notify_mod  # noqa: E402
 import briefdoc as brief_mod  # noqa: E402
 import knowledge as knowledge_mod  # noqa: E402
 import experts as expert_mod  # noqa: E402
+import meetplan as meetplan_mod  # noqa: E402
 
 
 EXAMPLES = [
@@ -344,6 +345,8 @@ class Handler(BaseHTTPRequestHandler):
                 thread = chat.get(tid)
                 if thread is None:
                     return self._json({"ok": False, "error": "thread_not_found"}, 404)
+                # 回放时补「这张草稿卡已经建过会」——否则刷新后又变成可点按钮
+                meetplan_mod.annotate(thread["id"], thread.get("messages") or [])
                 return self._json({"ok": True, "thread": thread})
 
             # ---- 会议助手 ----
@@ -533,6 +536,28 @@ class Handler(BaseHTTPRequestHandler):
             parts = _parts(path, "/api/oversight/")
             if len(parts) == 2 and parts[1] == "action":
                 return self._advance(parts[0], body)
+
+            # ---- 对话里约会议：确认草稿才落库 ----
+            # 单独一个写口，不并进 POST /api/meetings：那条是「粘纪要建记录」，
+            # 正文必填；这条是「确认草稿建待召开的会」，正文必须为空。
+            # 两个语义塞一个入口，将来谁看一眼都分不清哪个字段对哪种会有效。
+            if path == "/api/meetplan":
+                draft = body.get("draft") or {}
+                if not isinstance(draft, dict):
+                    return self._json({"ok": False, "error": "draft 必须是对象"}, 400)
+                res = meetplan_mod.commit(
+                    draft,
+                    thread_id=str(body.get("thread_id") or ""),
+                    message_id=str(body.get("message_id") or ""),
+                    # 谁约的记成身份职务（「市长」），不是 internal id：
+                    # 这条要显示在会议详情里给人看，myor/mayor 那种值没用
+                    actor=str(body.get("actor") or people.meta(self._person(body)).get("post") or ""),
+                )
+                if not res.get("ok"):
+                    return self._json(res, 400)
+                res["meeting"] = meetings.brief(res["meeting"])
+                res["items"] = meetings.list_meetings()
+                return self._json(res, 200)
 
             # ---- 会议助手 ----
             if path == "/api/meetings":
@@ -794,6 +819,9 @@ class Handler(BaseHTTPRequestHandler):
                 "facts": result.get("facts") or [],
                 "knowledge": knowledge_mod.to_meta(result.get("knowledge")),
                 "expert_views": views,
+                # 建会草稿要跟着落库：回放时要能重新画出那张卡（含当时的假设与缺项），
+                # 只留一句 headline 的话，用户回看时不知道自己当时确认了什么
+                "meet_draft": meetplan_mod.to_meta(result.get("meet_draft")),
             },
         )
 

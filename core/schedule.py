@@ -258,16 +258,21 @@ def _events(person: dict[str, Any], days: int) -> tuple[list[dict[str, Any]], li
             continue
         pending = m.get("needs_review_count") or 0
         bits = [f"主持 {m['host']}" if m.get("host") else ""]
+        if m.get("place"):
+            bits.append(m["place"])
         if m.get("attendees"):
             bits.append("参会 " + "、".join(m["attendees"][:4]) + ("等" if len(m["attendees"]) > 4 else ""))
         if m.get("item_count"):
             bits.append(f"{m['item_count']} 条议定事项" + (f"、{pending} 条待核实" if pending else ""))
         mins = int((start - now).total_seconds() // 60)
-        why = (
-            f"{mins} 分钟后开始"
-            if 0 <= mins <= 120
-            else ("正在进行" if mins < 0 else "会议时间已定，材料需提前准备")
-        )
+        # 预约中的会和开完的会，同一句话说不通：前者要人准备，后者已经发生。
+        planned = (m.get("kind") or "record") == "plan"
+        if 0 <= mins <= 120:
+            why = f"{mins} 分钟后开始"
+        elif mins < 0:
+            why = "正在进行"
+        else:
+            why = "待召开，材料需提前准备" if planned else "会议时间已定，材料需提前准备"
         out.append(
             _ev(
                 "meeting",

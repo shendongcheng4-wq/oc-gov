@@ -204,6 +204,12 @@ def _summary(meta: dict[str, Any] | None) -> str:
     if meta.get("refused"):
         return "上一轮我拒答了：问题对应的指标未注册。"
 
+    # 建会草稿不是一次问答：它没有数值也没有指标，硬套下面的模板会得到
+    # 「我meet，但没有命中任何已注册指标」——一句在中文里根本不成立的话。
+    if meta.get("meet_draft"):
+        d = meta["meet_draft"]
+        return f"上一轮我在约会议（{d.get('title') or '未定议题'}，{d.get('held_at') or '未定时间'}），只出了草稿，等用户确认。"
+
     names = meta.get("metric_names") or []
     intent = meta.get("intent") or "value"
     intent_cn = {

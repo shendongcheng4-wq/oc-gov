@@ -428,6 +428,40 @@ body{
 .ev.off{background:var(--surface-2);border-style:dashed}
 .ev.off p{color:var(--faint);font-size:11px}
 .ev.off .ev-head i{background:var(--chip-bg)}
+
+/* ---------- 建会草稿卡 ----------
+   白纸上要能一眼分出「这段是系统算的」和「这段是我要按下去的按钮」，
+   所以卡片用实底 + 一圈稍深的边框，和答案正文拉开；缺的字段单独标红，
+   不靠"没填"这种隐性提示 —— 看不出来就等于没提示。 */
+.mp-card{margin-top:10px;border:1px solid var(--line);border-radius:var(--r);
+  background:var(--surface-2);padding:10px 11px}
+.mp-card.done{background:var(--ok-bg);border-color:var(--ok-line)}
+.mp-head{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.mp-head b{font-size:12px;color:var(--ink)}
+.mp-tag{font-size:9.5px;padding:1px 6px;border-radius:9px;background:var(--warn-bg);
+  color:var(--warn-ink);border:1px solid var(--warn-line)}
+.mp-tag.ok{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-line)}
+.mp-src{margin-left:auto;font-size:10px;color:var(--faint);max-width:52%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mp-meta{margin-top:4px;font-size:11.5px;color:var(--ink-2)}
+.mp-note{margin-top:4px;font-size:10.5px;color:var(--muted);line-height:1.7}
+.mp-grid{margin-top:8px;display:grid;grid-template-columns:1fr;gap:7px 9px}
+/* 单列，不按视口做响应式：对话栏宽度是固定的窄栏，视口再宽它也宽不了。
+   两列会把 datetime-local 挤到看不清，而这里每个字段都要人核对一遍。 */
+.mp-f{display:flex;flex-direction:column;gap:3px;font-size:10.5px;color:var(--faint);min-width:0}
+.mp-f.full{grid-column:1/-1}
+.mp-f>span{display:flex;align-items:center;gap:5px}
+.mp-f input{font-family:inherit;font-size:12px;color:var(--ink);padding:5px 7px;
+  border:1px solid var(--line);border-radius:7px;background:var(--surface);min-width:0}
+.mp-f input:focus{outline:none;border-color:var(--brand)}
+.mp-f.miss input{border-color:var(--danger-line);background:var(--danger-bg)}
+.mp-miss{font-style:normal;margin-left:5px;font-size:9.5px;color:var(--danger);
+  background:var(--danger-bg);border:1px solid var(--danger-line);border-radius:8px;padding:0 5px}
+.mp-warns{margin-top:8px;display:flex;flex-direction:column;gap:4px}
+.mp-warn{font-size:10.5px;color:var(--warn-ink);background:var(--warn-bg);
+  border-left:2px solid var(--warn-line);padding:4px 8px;border-radius:0 6px 6px 0;line-height:1.65}
+.mp-acts{margin-top:9px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.mp-dropped{font-size:11px;color:var(--faint);font-style:italic}
 .note-row{font-size:10.5px;color:var(--warn-ink);background:var(--warn-bg);border-left:2px solid var(--warn-line);
   padding:4px 8px;border-radius:0 4px 4px 0;line-height:1.55}
 .warnbox{
@@ -743,6 +777,9 @@ html.embedded .drawer{top:0;height:100%}
 .mt-issues{margin-top:5px;display:flex;flex-wrap:wrap;gap:4px}
 .mt-iss{font-size:10px;padding:1px 6px;border-radius:20px;background:var(--warn-bg);color:var(--warn)}
 .mt-tag{font-size:10px;padding:1px 6px;border-radius:20px;flex:0 0 auto}
+/* 「待召开」和「已解析」在列表里长得一样的话，一眼分不出哪场会还没开 */
+.mt-plan{font-style:normal;font-size:9.5px;font-weight:400;color:var(--info);
+  background:var(--info-bg);border:1px solid var(--info-line);border-radius:8px;padding:0 5px;margin-left:5px}
 .mt-tag.ok{background:var(--ok-bg);color:var(--ok)}
 .mt-tag.bad{background:var(--warn-bg);color:var(--warn)}
 .mt-tag.done{background:var(--info-bg);color:var(--info)}
@@ -823,26 +860,22 @@ html.embedded .drawer{top:0;height:100%}
 .kpi.watch:hover .rm{opacity:1}
 .kpi .rm:hover{color:var(--danger);border-color:var(--danger-line);background:var(--danger-bg)}
 .watch-empty{grid-column:1/-1;font-size:12px;color:var(--faint);line-height:1.8;padding:6px 2px}
-/* 收藏的问答：挂在「我的关注」里指标卡下面。
-   刻意不做成卡片网格 —— 它不是指标（没有当期值、没有目标进度），混进 kpis 会让人
-   以为它也是一张点开能看口径的指标卡。这里只有「问过什么、答了什么、什么时候收的」。 */
-.saved-box{margin-top:12px;border-top:1px dashed var(--line-2);padding-top:10px}
-.saved-hd{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted);margin-bottom:6px}
-.saved-hd b{color:var(--ink);font-size:12px;font-weight:700}
-.sv-item{position:relative;padding:8px 30px 8px 10px;border-radius:8px;cursor:pointer;
-  background:var(--surface-2);border:1px solid var(--line-2);margin-bottom:6px}
-.sv-item:hover{background:var(--hover);border-color:var(--line-3)}
-.sv-q{font-size:12px;color:var(--ink);font-weight:600;line-height:1.55;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sv-a{font-size:11.5px;color:var(--muted);line-height:1.6;margin-top:2px;
+/* 收藏的问答：和指标卡**同一个网格、同一套卡片底子**（.kpi），是「我的关注」里的
+   一条，不再是挂在下面的一段清单 —— 虚线隔开的时候它看着像另一个板块，人不会认为
+   那是自己的关注。但仍然**不冒充指标**：没有当期值、没有目标进度、点开不是口径
+   抽屉，所以左上角挂一个「问答」标签，正文是「问过什么 / 答了什么」。 */
+.kpi.sv{cursor:pointer}
+.kpi.sv:hover .rm{opacity:1}
+.kpi.sv .k{margin-bottom:5px}
+.kpi.sv .sv-tag{font-size:10px;font-weight:600;color:var(--brand);background:var(--brand-soft);
+  border-radius:4px;padding:1px 6px}
+.kpi.sv .q{font-size:12.5px;font-weight:700;color:var(--ink);line-height:1.5;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.sv-meta{display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap}
-.sv-code{font-size:10px;color:var(--brand);background:var(--brand-soft);border-radius:4px;padding:1px 5px}
-.sv-at{font-size:10px;color:var(--faint);margin-left:auto}
-.sv-rm{position:absolute;top:6px;right:6px;width:18px;height:18px;display:grid;place-items:center;
-  border-radius:50%;font-size:10px;color:var(--faint);opacity:0;transition:.15s}
-.sv-item:hover .sv-rm{opacity:1}
-.sv-rm:hover{color:var(--danger);background:var(--danger-bg)}
+.kpi.sv .a{font-size:11.5px;color:var(--muted);line-height:1.6;margin-top:4px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.kpi.sv .f{margin-top:7px;flex-wrap:wrap;gap:5px}
+.kpi.sv .sv-code{font-size:10px;color:var(--brand);background:var(--brand-soft);border-radius:4px;padding:1px 5px}
+.kpi.sv .at{margin-left:auto;font-size:10px;color:var(--faint)}
 /* 星号：常驻可见。藏到 hover 才出现等于没有入口 —— 谁会去 hover 一段答案。
    点亮用 --warn，浅色深色都够读。 */
 .star-btn{margin-left:auto;background:none;border:none;padding:0 3px;font-size:13px;line-height:1;
@@ -1344,12 +1377,9 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
           <span class="sec-count" id="watchCount">—</span>
           <button class="mini sec-act" id="watchManage" title="从已注册指标里增删关注">管理关注</button>
         </div>
+        <!-- 收藏的问答不再单独占一块：它和指标卡渲染进同一个网格（renderWatch）。
+             空的时候自然什么都不画，不留「还没有收藏」的占位。 -->
         <div class="kpis cols-3" id="watchGrid"></div>
-        <!-- 收藏的问答。空的时候整块不显示（不留「还没有收藏」的占位） -->
-        <div class="saved-box" id="savedBox" hidden>
-          <div class="saved-hd"><b>收藏的问答</b><span id="savedCount"></span></div>
-          <div id="savedList"></div>
-        </div>
       </div>
       <div class="desk-sec desk-feed" data-block="feed">
         <div class="sec-head">
@@ -1725,6 +1755,114 @@ function kbBlock(items) {
    数据来源是 /api/workspace 的 saved（登录态不在这一版，所以按演示身份各存各的）。 */
 const SAVED = { items: [], ids: new Set(), max: 24 };
 
+/* ---------- 对话里约会议：一张待确认的草稿卡 ----------
+   为什么不「说一句就直接建会」：这个系统没有登录态（身份在右上角随时能切），
+   直接建会等于任何打开页面的人都能以「市政府办」名义造一场会 —— 而且这场会
+   会立刻进日程、进会前 60 分钟提醒。所以对话只出草稿，点「建会」才写库。
+   另一条更硬的理由：会议**没有改字段的接口**，建完只能删。所以能改的地方
+   必须在确认之前 —— 卡片里那几个输入框不是装饰，是唯一的修改机会。 */
+function mpTime(v) {
+  // "2026-11-11 15:00" → datetime-local 要的 "2026-11-11T15:00"
+  return String(v || "").replace(" ", "T").slice(0, 16);
+}
+
+function meetBlock(d, ref) {
+  if (!d) return "";
+  const mid = (ref && ref.messageId) || "";
+  const tid = (ref && ref.threadId) || "";
+
+  if (d.meeting_id) {
+    const who = (d.attendees || []).length ? ` · ${esc((d.attendees || []).join("、"))}` : "";
+    return `<div class="mp-card done">
+      <div class="mp-head"><b>${esc(d.title || "未定议题")}</b><span class="mp-tag ok">已建会</span></div>
+      <div class="mp-meta">${esc(d.held_at || "")}${d.place ? ` · ${esc(d.place)}` : ""}${who}</div>
+      <div class="mp-note">编号 ${esc(d.meeting_id)}，已进日程，会前 60 分钟会出现在提醒里。</div>
+    </div>`;
+  }
+
+  const miss = new Set(d.missing || []);
+  const cls = (k) => "mp-f" + (miss.has(k) ? " miss" : "");
+  const tag = (k) => (miss.has(k) ? `<em class="mp-miss">缺</em>` : "");
+  const warns = []
+    .concat((d.assumptions || []).map((x) => `<div class="mp-warn">推定 · ${esc(x)}</div>`))
+    .concat((d.notes || []).map((x) => `<div class="mp-warn">注意 · ${esc(x)}</div>`))
+    .join("");
+  const units = (d.unit_options || []).join("、");
+
+  return `<div class="mp-card" data-mp data-tid="${esc(tid)}" data-mid="${esc(mid)}">
+    <div class="mp-head"><b>建会草稿</b><span class="mp-tag">待确认</span>
+      ${d.when_text ? `<span class="mp-src">原话「${esc(d.when_text)}」</span>` : ""}</div>
+    <div class="mp-grid">
+      <label class="${cls("title")} full"><span>议题${tag("title")}</span>
+        <input data-mpf="title" value="${esc(d.title || "")}" placeholder="这场会研究什么"></label>
+      <label class="${cls("held_at")}"><span>时间${tag("held_at")}</span>
+        <input type="datetime-local" data-mpf="held_at" value="${mpTime(d.held_at)}"></label>
+      <label class="mp-f"><span>地点</span>
+        <input data-mpf="place" value="${esc(d.place || "")}" placeholder="会议室"></label>
+      <label class="mp-f"><span>主持</span>
+        <input data-mpf="host" value="${esc(d.host || "")}" placeholder="谁主持"></label>
+      <label class="${cls("attendees")} full"><span>参会单位${tag("attendees")}</span>
+        <input data-mpf="attendees" value="${esc((d.attendees || []).join("、"))}"
+          placeholder="市住建局、市城管局"${units ? ` title="台账里的单位：${esc(units)}"` : ""}></label>
+    </div>
+    ${warns ? `<div class="mp-warns">${warns}</div>` : ""}
+    <div class="mp-acts">
+      <button class="mini" data-mpgo>建会</button>
+      <button class="mini ghost" data-mpdrop>放弃</button>
+      <span class="hint">只解析了这句话，还没写任何文件</span>
+    </div>
+  </div>`;
+}
+
+async function commitMeet(card) {
+  const pick = (k) => {
+    const el = card.querySelector(`[data-mpf="${k}"]`);
+    return el ? String(el.value || "").trim() : "";
+  };
+  const draft = {
+    title: pick("title"),
+    held_at: pick("held_at").replace("T", " "),
+    place: pick("place"),
+    host: pick("host"),
+    attendees: pick("attendees").split(/[,，、/\s]+/).map((s) => s.trim()).filter(Boolean),
+  };
+  if (!draft.title) return toast("议题不能为空——没有议题的会议无法生成通知");
+  if (!draft.held_at) return toast("会议时间不能为空");
+
+  const btn = card.querySelector("[data-mpgo]");
+  btn.disabled = true;
+  btn.textContent = "建会中…";
+  try {
+    const r = await fetch("/api/meetplan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      body: JSON.stringify({
+        thread_id: card.dataset.tid,
+        message_id: card.dataset.mid,
+        draft,
+      }),
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.message || d.error || "建会失败");
+    const box = document.createElement("div");
+    box.innerHTML = meetBlock({
+      title: d.meeting.title,
+      held_at: d.meeting.held_at,
+      place: d.meeting.place,
+      attendees: d.meeting.attendees,
+      meeting_id: d.meeting.id,
+    });
+    card.replaceWith(box.firstElementChild);
+    // 会议助手列表同步：刚建的会要能立刻在里面看到
+    if (Array.isArray(d.items)) MT.list = d.items;
+    toast(d.duplicate ? `这场会已经建过了（${d.meeting.id}）` : `已建会 ${d.meeting.id}，可以用了`);
+  } catch (e) {
+    toast("建会失败：" + e.message);
+    btn.disabled = false;
+    btn.textContent = "建会";
+  }
+}
+
 function aiBubble(r, ref) {
   // 收藏星号。只认后端给的消息 id：拿不到 id 就不画 —— 点了收藏哪一条都说不清，
   // 而收藏夹里躺一条"不知道是什么"的条目比没有这个功能更糟。
@@ -1766,6 +1904,7 @@ function aiBubble(r, ref) {
     <div class="ai-body">
       <div>${r.headline_html || esc(r.headline)}</div>
       ${r.detail ? `<div style="margin-top:6px;color:var(--muted);font-size:12px">${esc(r.detail)}</div>` : ""}
+      ${meetBlock(r.meet_draft, ref)}
       ${kbBlock(r.knowledge)}
       ${notesBlock}
       ${evBlock}
@@ -1943,7 +2082,7 @@ async function ask(question) {
 let THREAD = null;   // 当前会话 id；null = 还没建（首次提问时后端建）
 let MODELS = { providers: [], resolved: [], active: null, ready: false };
 
-const INTENT_CN = { value: "取值", trend: "走势", breakdown: "分解", compare: "对比", definition: "口径", knowledge: "依据" };
+const INTENT_CN = { value: "取值", trend: "走势", breakdown: "分解", compare: "对比", definition: "口径", knowledge: "依据", meet: "约会议" };
 function intentLabel(i) { return INTENT_CN[i] || i || "—"; }
 
 const EMPTY_HTML = `<div class="thread-empty" id="threadEmpty">还没有对话。上面挑一个问题，或直接输入。<br>数值全部来自指标接口，可点开卡片核对口径。</div>`;
@@ -1959,6 +2098,9 @@ function bubbleFromHistory(m, threadId) {
     expert_views: meta.expert_views || [],
     // 知识库条目同理：切回历史对话时「依据」不能消失，否则答案就成了没出处的断言
     knowledge: meta.knowledge || [],
+    // 建会草稿同理：回放要能看出当时解析成了什么、哪些字段是推定的。
+    // 已经建过会的，后端 annotate 会补上 meeting_id，卡片自动变成「已建会」。
+    meet_draft: meta.meet_draft || null,
     planner: meta.planner,
     planner_info: { available: !!meta.model, model: meta.model },
     trace: [],
@@ -2571,17 +2713,15 @@ async function loadWorkspace() {
     if (!d.ok) throw new Error(d.error || "接口异常");
     WS = d;
     applyPerson(d.person);
-    const max = (d.person && d.person.max_watch) || PP.max || 8;
-    $("#watchCount").textContent = `${d.watch_count} / ${max} 指标`;
-    renderWatch(d);
-    renderFeed(d);
-    renderFollow(d);
-    // 收藏状态和关注列表同一个响应。星号点亮、工作台列表都从这里同步，
+    // 收藏状态和关注列表同一个响应。星号点亮、关注网格里的收藏卡都从这里同步，
     // 免得出现"工作台有、星号没亮"这种两套状态。
     SAVED.items = (d.saved && d.saved.items) || [];
     SAVED.ids = new Set(SAVED.items.map((i) => i.id));
     SAVED.max = (d.saved && d.saved.max) || SAVED.max;
-    renderSaved();
+    // 先落 SAVED 再渲染：收藏卡就在这个网格里，顺序反了会先画一遍空网格
+    renderWatch(d);
+    renderFeed(d);
+    renderFollow(d);
     syncStars();
   } catch (e) {
     $("#feedList").innerHTML = `<div class="feed-item"><span class="fd muted"></span>
@@ -2684,12 +2824,39 @@ async function markSeen(keys) {
 // 关注卡片比罗盘多一件事：hover 出「取消关注」。
 // 不再挂那张虚线的「添加关注」卡：6 张卡是 3×2 正好铺满，多挂一张就独占第三行，
 // 右边两格空白一片；而且标题行右侧已经有「管理关注」，同一件事没必要两个入口。
+// 「我的关注」= 关注的指标卡 + 收藏的问答卡，**同一个网格**。
+// 收藏以前是卡片下面一段虚线清单，看着像另一个板块（「收藏的问答」），人不会认为
+// 那是自己的关注；并进网格之后它就是关注里的一条，只是标签写着「问答」。
 function renderWatch(d) {
+  d = d || WS || {};
   const cards = d.watch || [];
+  const saved = SAVED.items || [];
   const empty = `<div class="watch-empty">还没有关注任何指标。点右上角「管理关注」，从 ${(d.catalog || []).length} 个已注册指标里挑几项 —— 不选也能用，只是这一栏会空着。</div>`;
-  $("#watchGrid").innerHTML = cards.length
-    ? cards.map((k) => kpiCard(k, { cls: "watch", extra: `<span class="rm" data-unwatch="${esc(k.code)}" title="取消关注">✕</span>` })).join("")
-    : empty;
+  const nameOf = (code) => {
+    const hit = ((WS && WS.watch) || []).find((k) => k.code === code) ||
+      ((WS && WS.catalog) || []).find((m) => m.code === code);
+    return hit ? hit.name : code;
+  };
+  $("#watchGrid").innerHTML =
+    (cards.length || saved.length ? "" : empty) +
+    cards.map((k) => kpiCard(k, { cls: "watch", extra: `<span class="rm" data-unwatch="${esc(k.code)}" title="取消关注">✕</span>` })).join("") +
+    saved.map((it) => `
+      <div class="kpi sv" data-svthread="${esc(it.thread_id)}" data-svmid="${esc(it.id)}" title="点开回到那条回答">
+        <span class="rm" data-unsave="${esc(it.id)}" data-tid="${esc(it.thread_id)}" title="取消收藏">✕</span>
+        <div class="k"><span class="sv-tag">问答</span></div>
+        <div class="q">${esc(it.question || it.thread_title || "（没有提问）")}</div>
+        <div class="a">${esc(it.headline || "")}</div>
+        <div class="f">
+          ${(it.codes || []).map((c) => `<span class="sv-code" title="${esc(c)}">${esc(nameOf(c))}</span>`).join("")}
+          <span class="at">收藏于 ${esc(it.at || "")}</span>
+        </div>
+      </div>`).join("");
+  // 指标和收藏的**上限不是一回事**（指标 8 个、收藏 24 条），所以不并成一个「7 / 8」：
+  // 那会让第 9 个指标被一条收藏挡住，看着像名额满了。
+  const max = (d.person && d.person.max_watch) || PP.max || 8;
+  $("#watchCount").textContent = saved.length
+    ? `${cards.length} / ${max} 指标 · ${saved.length} 收藏`
+    : `${cards.length} / ${max} 指标`;
 }
 
 async function saveWatch(codes, msg) {
@@ -2744,7 +2911,7 @@ async function setSaved(mid, tid, want) {
     SAVED.ids = new Set(SAVED.items.map((i) => i.id));
     SAVED.max = d.max || SAVED.max;
     syncStars();
-    renderSaved();
+    renderWatch();
     toast(want ? "已收藏到「我的关注」" : "已取消收藏");
   } catch (e) {
     toast(e.message);
@@ -2756,32 +2923,11 @@ function toggleSaved(btn) {
   return setSaved(mid, btn.dataset.tid, !SAVED.ids.has(mid));
 }
 
-function renderSaved() {
-  const box = $("#savedBox");
-  if (!box) return;
-  const items = SAVED.items || [];
-  // 空的时候整块隐藏：不留「还没有收藏」的占位，和专家选择器同一个口径
-  box.hidden = !items.length;
-  $("#savedCount").textContent = items.length ? `${items.length} / ${SAVED.max}` : "";
-  const nameOf = (code) => {
-    const hit = ((WS && WS.watch) || []).find((k) => k.code === code) ||
-      ((WS && WS.catalog) || []).find((m) => m.code === code);
-    return hit ? hit.name : code;
-  };
-  $("#savedList").innerHTML = items.map((it) => `
-    <div class="sv-item" data-svthread="${esc(it.thread_id)}" data-svmid="${esc(it.id)}" title="点开回到那条回答">
-      <div class="sv-q">${esc(it.question || it.thread_title || "（没有提问）")}</div>
-      <div class="sv-a">${esc(it.headline || "")}</div>
-      <div class="sv-meta">
-        ${(it.codes || []).map((c) => `<span class="sv-code" title="${esc(c)}">${esc(nameOf(c))}</span>`).join("")}
-        <span class="sv-at">收藏于 ${esc(it.at || "")}</span>
-      </div>
-      <span class="sv-rm" data-unsave="${esc(it.id)}" data-tid="${esc(it.thread_id)}" role="button" title="取消收藏">✕</span>
-    </div>`).join("");
-}
-
 async function jumpToSaved(tid, mid) {
   if (!tid) return;
+  // 先切回问答视图：问数面板长在城市罗盘那一屏里，不切的话答案确实渲染好了，
+  // 但人还停在「个人工作台」上，看起来像点了没反应。
+  switchView("compass");
   if (tid !== THREAD) await openThread(tid);
   const el = document.querySelector(`#thread .bub-ai[data-mid="${mid}"]`);
   if (!el) return toast("这条回答已经不在了");
@@ -3826,9 +3972,11 @@ async function refreshMeetList() {
   $("#mtList").innerHTML = MT.list.length
     ? MT.list.map((m) => `
       <div class="mt-item ${m.id === MT.current ? "on" : ""}" data-mt="${esc(m.id)}">
-        <b>${esc(m.title)}</b>
-        <span>${esc(m.held_at || "—")}</span>
-        <span>${m.item_count} 条事项 · ${m.committed_count} 条已落督办${m.needs_review_count ? ` · <b style="color:var(--warn)">${m.needs_review_count} 待核实</b>` : ""}</span>
+        <b>${esc(m.title)}${m.kind === "plan" ? ` <em class="mt-plan">待召开</em>` : ""}</b>
+        <span>${esc(m.held_at || "—")}${m.place ? ` · ${esc(m.place)}` : ""}</span>
+        <span>${m.kind === "plan"
+          ? `参会 ${(m.attendees || []).length} 家 · 还没开，没有议定事项`
+          : `${m.item_count} 条事项 · ${m.committed_count} 条已落督办${m.needs_review_count ? ` · <b style="color:var(--warn)">${m.needs_review_count} 待核实</b>` : ""}`}</span>
       </div>`).join("")
     : `<div class="mt-empty" style="padding:18px 6px">还没有会议记录</div>`;
 }
@@ -3894,19 +4042,28 @@ function renderMeetDetail(m) {
     </div>`;
   }).join("");
 
+  // 状态标签用中文。直接把 status 原样打出来（"planned"）等于让人读枚举值，
+  // 而「待召开」和「待解析」是两件完全不同的事，不能混成一个"草稿"。
+  const STATUS_CN = { planned: "待召开", draft: "待解析", parsed: "已解析", committed: "已交办" };
+  const planned = m.kind === "plan";
+  const where = [m.held_at || "—", m.place ? esc(m.place) : "", m.host ? `主持 ${esc(m.host)}` : "",
+    (m.attendees || []).length ? `参会 ${esc(m.attendees.join("、"))}` : ""].filter(Boolean).join(" · ");
   $("#mtDetail").innerHTML = `
     <div class="mt-head">
       <h4>${esc(m.title)}</h4>
-      <span class="mt-tag ${m.status === "draft" ? "" : "done"}">${esc(m.status)}</span>
+      <span class="mt-tag ${m.status === "draft" || m.status === "planned" ? "" : "done"}">${esc(STATUS_CN[m.status] || m.status)}</span>
     </div>
-    <p class="mt-meta">${esc(m.held_at || "—")}${m.host ? ` · 主持 ${esc(m.host)}` : ""}${(m.attendees || []).length ? ` · 参会 ${esc(m.attendees.join("、"))}` : ""}</p>
+    <p class="mt-meta">${where}</p>
     <div class="mt-acts">
-      <button class="mini" id="mtParse" ${committed ? "disabled" : ""}>${items.length ? "重新解析" : "解析议定事项"}</button>
+      ${planned
+        ? ""
+        : `<button class="mini" id="mtParse" ${committed ? "disabled" : ""}>${items.length ? "重新解析" : "解析议定事项"}</button>
+           <span class="hint" style="margin:6px 0 0">${MT.model_ready ? "模型就绪" : "未配置模型，无法解析"} · 事项 ${items.length} 条，已落督办 ${committed} 条</span>`}
       <button class="mini" id="mtDel">删除会议</button>
-      <span class="hint" style="margin:6px 0 0">${MT.model_ready ? "模型就绪" : "未配置模型，无法解析"} · 事项 ${items.length} 条，已落督办 ${committed} 条</span>
     </div>
+    ${planned ? `<div class="mt-warn info">这是一场还没召开的会，没有纪要原文。开完把纪要粘进正文再解析议定事项 —— 现在解析，抽出来的只会是模型编的东西。</div>` : ""}
     ${(m.warnings || []).map((w) => `<div class="mt-warn info">${esc(w)}</div>`).join("")}
-    ${items.length ? rows : `<div class="mt-empty">还没有解析。点「解析议定事项」让模型从原文里抽——原文没写的不会被补。</div>`}
+    ${planned ? "" : (items.length ? rows : `<div class="mt-empty">还没有解析。点「解析议定事项」让模型从原文里抽——原文没写的不会被补。</div>`)}
     ${items.length ? `<div class="mt-acts" style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
       <button class="mini" id="mtCommit" ${MT.sel.size ? "" : "disabled"}>落督办（已选 ${MT.sel.size} 条）</button>
       <button class="mini" id="mtSelOk">选中全部可落库</button>
@@ -4357,6 +4514,18 @@ document.addEventListener("click", (e) => {
   // 星号长在答案气泡里，后面「点来源胶囊看口径」那类委托会抢走同一次点击。
   const starBtn = e.target.closest("[data-star]");
   if (starBtn) return toggleSaved(starBtn);
+  // 建会草稿卡的按钮同理：卡在答案气泡里，别让别的委托接走
+  const mpGo = e.target.closest("[data-mpgo]");
+  if (mpGo) return commitMeet(mpGo.closest("[data-mp]"));
+  const mpDrop = e.target.closest("[data-mpdrop]");
+  if (mpDrop) {
+    const card = mpDrop.closest("[data-mp]");
+    const gone = document.createElement("div");
+    gone.className = "mp-dropped";
+    gone.textContent = "已放弃这次建会，什么都没有写入。";
+    card.replaceWith(gone);
+    return;
+  }
   const svRm = e.target.closest("[data-unsave]");
   if (svRm) return setSaved(svRm.dataset.unsave, svRm.dataset.tid, false);
   const svItem = e.target.closest("[data-svthread]");
@@ -4579,5 +4748,11 @@ document.addEventListener("keydown", (e) => {
 
 boot();
 </script>
+
+
+
+
+
+
 </body>
 </html>

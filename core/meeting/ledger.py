@@ -71,11 +71,16 @@ def brief(m: dict) -> dict[str, Any]:
     return {
         "id": m["id"],
         "title": m.get("title") or "",
+        "kind": m.get("kind") or "record",
         "held_at": m.get("held_at") or "",
         "host": m.get("host") or "",
         "attendees": m.get("attendees") or [],
+        "place": m.get("place") or "",
+        "topics": m.get("topics") or [],
         "source": m.get("source") or "manual",
         "status": m.get("status") or "draft",
+        # 哪一条问答产出这场会（幂等键，也用来在会话回放里标「已建会」）
+        "from_message": m.get("from_message") or "",
         "created_at": m.get("created_at"),
         "parsed_at": m.get("parsed_at"),
         "item_count": c["items"],
@@ -112,13 +117,37 @@ def create(
     host: str = "",
     attendees: list[str] | None = None,
     source: str = "manual",
+    kind: str = "record",
+    place: str = "",
+    topics: list[str] | None = None,
+    from_message: str = "",
+    planned_by: str = "",
 ) -> dict[str, Any]:
+    """建一场会。
+
+    两种 kind，语义完全不同，不能混：
+
+    - `record`（会后记录）：正文是纪要原文，必填。没有原文就无从核对引文，
+      后面「解析议定事项 → 落督办」整条链都挂在原文上。
+    - `plan`（待召开的会）：正文允许为空（还没开，哪来的纪要），但**必须有时间**
+      —— 没有时间的会议进不了日程，也提醒不了谁。
+
+    把预约的会也放这个文件里，是刻意的：日程、会前提醒读的都是 `list_meetings()`
+    的 `held_at`，只要进同一张表，那两处一行都不用改就能用。另起一个实体，
+    就得让日程和提醒各吃两套数据源，迟早对不上。
+    """
     title = (title or "").strip()
     text = (text or "").strip()
+    if kind not in ("record", "plan"):
+        raise ValueError(f"未知的会议类型：{kind}")
     if not title:
         raise ValueError("会议标题不能为空。")
-    if not text:
-        raise ValueError("会议记录正文不能为空——没有原文就无从核对引文。")
+    if kind == "record":
+        if not text:
+            raise ValueError("会议记录正文不能为空——没有原文就无从核对引文。")
+    else:
+        if not (held_at or "").strip():
+            raise ValueError("预约会议必须写明时间——没有时间进不了日程，也没法提醒。")
 
     box: dict[str, Any] = {}
 
@@ -134,17 +163,24 @@ def create(
         meeting = {
             "id": f"MT{year}-{doc['seq']:04d}",
             "title": title,
+            "kind": kind,
             "held_at": (held_at or _now()).strip(),
             "host": (host or "").strip(),
             "attendees": [a.strip() for a in (attendees or []) if str(a).strip()],
+            "place": (place or "").strip(),
+            "topics": [t.strip() for t in (topics or []) if str(t).strip()],
             "source": source,
             "text": text,
-            "status": "draft",
+            # 待召开的会不该有「待解析」这个状态：还没开，没有东西可解析
+            "status": "planned" if kind == "plan" else "draft",
             "created_at": _now(),
             "parsed_at": None,
             "model_ref": None,
             "warnings": [],
             "items": [],
+            # 幂等键：同一条问答里的同一张草稿卡，只能变成一场会
+            "from_message": from_message,
+            "planned_by": planned_by,
         }
         doc["meetings"].append(meeting)
         box["meeting"] = meeting
@@ -175,6 +211,10 @@ def save_parse(mid: str, parsed: dict[str, Any]) -> dict[str, Any]:
         m = _find(doc, mid)
         if m is None:
             box["error"] = "meeting_not_found"
+            return doc
+        if (m.get("kind") or "record") == "plan":
+            # 待召开的会没有纪要原文 —— 这时候「解析」只能解析出模型编的东西
+            box["error"] = "这是一场还没召开的会，没有原文可解析。开完把纪要粘进正文再来解析。"
             return doc
         if any(i.get("oversight_id") for i in (m.get("items") or [])):
             box["error"] = "已经落过督办，不能重新抽取——督办台账里的事件链会被打乱。"
