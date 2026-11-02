@@ -209,6 +209,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/overview":
                 return self._json({"ok": True, **wb.overview()})
 
+            if path == "/api/focus":
+                # 民情焦点明细：罗盘卡只给标题和标签，弹窗要详情/工单/渠道/焦点词/走势。
+                # 与 /api/overview 里的 focus 同源（都是 workbench.focus()），不会两处不一致。
+                return self._json({"ok": True, **wb.focus()})
+
             if path == "/api/workspace":
                 return self._json({"ok": True, **wb.workspace(self._person())})
 

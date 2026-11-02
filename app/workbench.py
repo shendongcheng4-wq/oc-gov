@@ -247,33 +247,13 @@ def boards() -> list[dict[str, Any]]:
 # 可核查的来源与工单号，避免"看起来像真的但查不到"。
 # --------------------------------------------------------------------------
 
-FOCUS_TODAY = [
-    {
-        "title": "小区停车位收费争议诉求集中",
-        "meta": "受理 128 件 · 环比 ↑42%",
-        "tag": "集中",
-        "tone": "warn",
-        "source": "12345 热线 · 市政务服务和数据管理局",
-    },
-    {
-        "title": "农贸市场周边流动摊贩占道反弹",
-        "meta": "涉及 6 个市场 · 连续 3 日",
-        "tag": "反弹",
-        "tone": "info",
-        "source": "12345 热线 · 市城管局巡查",
-    },
-    {
-        "title": "某企业欠薪线索涉 37 人",
-        "meta": "9月28日受理 · 已转人社局核查",
-        "tag": "转办",
-        "tone": "muted",
-        "source": "工单 TZ20260928147",
-    },
-]
-
-
 def focus() -> dict[str, Any]:
-    return {"count": len(FOCUS_TODAY), "items": FOCUS_TODAY}
+    """民情焦点。数据源在指标层（core/metrics/mockdata.py 的 FOCUS_TOPICS），
+    罗盘卡片和焦点弹窗用的是同一份，页面上的标题、标签、详情不会两处对不上。
+
+    这里只取不造：接真实的 12345 工单聚类时，改 mockdata 一处即可。"""
+    items = md.focus_items()
+    return {"count": len(items), "items": items}
 
 
 # --------------------------------------------------------------------------
