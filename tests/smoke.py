@@ -1995,6 +1995,32 @@ def test_schedule() -> None:
         cal.llmclient.chat_json, cal.llmclient.available = real_chat, real_avail
 
 
+def test_frontend_sidebar() -> None:
+    """左栏：会话列表 + 侧栏收起。
+
+    这一段全部是"重构后有没有留死东西"的静态检查 —— 会话切换从
+    `<select id="threadSel">` 换成列表之后，旧的 options.length 计数、
+    旧的事件绑定如果没清干净，浏览器里不会报错，只会默默少一个入口。
+    """
+    print("\n[19] 左栏会话列表与收起")
+    html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("会话列表屏在", 'id="chatsList"' in html and 'id="chatsNew"' in html, "")
+    check("列表项带会话 id", 'class="chat-item' in html and "data-tid=" in html, "")
+    check("下拉框已彻底移除", 'id="threadSel"' not in html, "")
+    check("会话计数只认 THREADS", "THREADS.length" in html and "options.length - 1" not in html, "")
+    check("模型药丸按属性刷（两处共用）", "data-model-pill" in html, "")
+    check("侧栏可收起", 'id="askFold"' in html and 'id="askRail"' in html and "html.ask-fold .ask{" in html, "")
+    # 收起必须是「除窄条外全隐藏」。点名 .ask-head/.ask-body/.ask-chats 那版特异性比
+    # .ask.show-chats .ask-chats 低，开着历史屏再收起会留下半截内容（截图上像"边上还有显示"）。
+    check("收起时历史屏也一起藏（不留残影）", "html.ask-fold .ask > *:not(.ask-rail)" in html, "")
+    check("新对话在列表里、不在标题行", 'class="chat-new"' in html and 'id="chatsNew"' in html, "")
+    # 位置比的是 </head>，不是 "<body>"：head 里的注释本身就有 "<body> 之前"这句话，会先命中
+    check("收起状态记在本机且首屏前生效",
+          "ocgov.askfold" in html and html.index("ocgov.askfold") < html.index("</head>"), "")
+    check("#chats 可直达历史对话", 'location.hash === "#chats"' in html, "")
+    check("旧「新对话」按钮不再残留", 'id="newChat"' not in html, "")
+
+
 def main() -> int:
     print(f"oc-gov 冒烟测试  测试数据目录 {TEST_DATA}")
     test_data_layer()
@@ -2015,6 +2041,7 @@ def main() -> int:
     test_meetplan()
     test_attach_entry()
     test_frontend_theme()
+    test_frontend_sidebar()
     test_http()
     print()
     if FAILS:
