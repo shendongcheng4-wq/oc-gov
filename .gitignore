@@ -12,3 +12,6 @@ __pycache__/
 
 # 生成物：内嵌 data/ 快照的单文件工作台，数据一变整文件重写，不入库
 docs/workbench.html
+
+# 本地助手的工作区（记忆与临时文件），不属于项目代码
+.workbuddy/
