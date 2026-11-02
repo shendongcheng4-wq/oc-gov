@@ -1535,6 +1535,30 @@ def test_http(port: int | None = None) -> None:
     empty = get("/api/knowledge?q=%E7%81%AB%E6%98%9F%E5%9F%BA%E5%9C%B0%E5%BB%BA%E8%AE%BE")
     check("/api/knowledge 无命中返回空而不是硬凑", empty.get("ok") is True and not empty.get("hits"), str(empty.get("total")))
 
+    # 下面这条断言依赖「库里至少有一条会议记录」。但 data/ 不入库，CI 和新人
+    # clone 下来都是空的 —— 以前它靠本机残留的演示数据才通过，一旦换到干净环境
+    # 就红。测试要什么数据就自己造，测完自己清，别指望种子。
+    fixture_mid = ""
+    try:
+        with urllib.request.urlopen(
+            urllib.request.Request(
+                base + "/api/meetings",
+                data=json.dumps(
+                    {
+                        "title": "冒烟测试临时会议",
+                        "text": "会议决定：建一条临时议题用于验证知识库分支，测试结束即删除。",
+                        "held_at": "2026-11-02",
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            ),
+            timeout=30,
+        ) as r:
+            fixture_mid = ((json.loads(r.read().decode("utf-8")).get("meeting") or {}).get("id")) or ""
+    except (urllib.error.URLError, OSError):
+        fixture_mid = ""
+
     # 问数接口：事项类问题由知识库接住，且不掺数值
     req = urllib.request.Request(
         base + "/api/ask",
@@ -1559,6 +1583,18 @@ def test_http(port: int | None = None) -> None:
             check("问数测试自清会话", not left, f"仍在：{ktid}")
         except urllib.error.HTTPError as e:
             check("问数测试自清会话", False, f"code={e.code}")
+
+    # 清掉为这条断言造的临时会议：会议有删除接口，能干净收场
+    if fixture_mid:
+        try:
+            with urllib.request.urlopen(
+                urllib.request.Request(f"{base}/api/meetings/{fixture_mid}", method="DELETE"), timeout=10
+            ) as r:
+                r.read()
+            still = [m for m in (get("/api/meetings").get("items") or []) if m.get("id") == fixture_mid]
+            check("问数测试自清临时会议", not still, f"仍在：{fixture_mid}")
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError) as e:
+            check("问数测试自清临时会议", False, f"{e}")
 
     # ---- 督办台账 ----
     # 这里只测「读」和「被拒绝的写」：真正的流转会往真实台账里追加事件，而事项
