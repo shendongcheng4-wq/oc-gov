@@ -1303,7 +1303,12 @@ def test_http(port: int | None = None) -> None:
         # （那条早就是已读了），会变成一个只能在新环境通过的假测试。
         # 但这是打真实服务，写的是真实已读状态 —— 跑完必须还原，否则每跑一次
         # 提醒就多一层「读过」的假象，用户打开面板发现该看的都灰了。
-        ws_file = ROOT / "data" / "workspaces.json"
+        # HTTP 这半段打的是**另一个进程**，备份和还原必须落在那个进程的数据目录上。
+        # 默认 ROOT/data（服务从仓库根起时就是这里）；服务是用 OCGOV_DATA 起的
+        # 别的目录，就用 OCGOV_SERVER_DATA 指过来 —— 否则这两个操作打在另一个文件
+        # 上：既还原不了被测服务的状态（断言必挂），又会误改本机正在用的数据。
+        SERVER_DATA = Path(os.environ.get("OCGOV_SERVER_DATA") or (ROOT / "data"))
+        ws_file = SERVER_DATA / "workspaces.json"
         ws_before = ws_file.read_bytes() if ws_file.exists() else None
         if ntb.get("notes"):
             req = urllib.request.Request(
