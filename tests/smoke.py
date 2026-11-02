@@ -524,12 +524,13 @@ def test_experts() -> None:
     check("专家解读不进模型上下文", all("增速偏高" not in m.get("content", "") for m in ctx), str(ctx)[:90])
     chat.delete(th["id"])
 
-    # 前端静态约定：没选人就是空白，不给「不召唤」一个名字；全组叫参谋团。
+    # 前端静态约定：没选人就是空白，不给「不召唤」一个名字；全组在 V3 里叫「AI秘书团」
+    # （下拉菜单最后一项与该身份的标签必须同名，不然同一群人两个叫法）。
     # 这两条是产品口径，改坏了页面照样能跑，只能在这里卡住。
     html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
     check("默认态不留「不召唤」占位", '>不召唤</b>' not in html and '"不召唤"' not in html, "")
     check("空态不占位（:empty 隐藏）", ".es-name:empty" in html and ".es-state:empty" in html, "")
-    check("全组叫参谋团", 'name.textContent = "参谋团"' in html and 'item("__all", "团", "参谋团"' in html, "")
+    check("全组叫 AI秘书团", 'return "AI秘书团"' in html and 'item("__all", "团", "AI秘书团"' in html, "")
     check("再点一次可取消", "EXP.cur = !eid || EXP.cur === eid ? null : eid" in html, "")
 
     # 斜杠唤起（输入框里打 / 选参谋）。这几条都是「写错了页面照跑、但用起来是坏的」
@@ -1010,10 +1011,10 @@ def test_saved() -> None:
     # 不切视图的话，答案确实渲染好了，但人还停在个人工作台上 —— 看着像点了没反应
     jump = html.split("async function jumpToSaved")[1].split("async function")[0]
     check("收藏跳转先切回问答视图", 'switchView("compass")' in jump, "")
-    # 计数并进区块头：`${cards.length} / ${max} 指标 · ${saved.length} 收藏`
+    # 指标与收藏各自一个计数（`${total} / ${max} 项` 和 `${saved.length} 个`），
     # 不并成「7 / 8」—— 指标名额 8 个、收藏 24 条，混在一个分母里会让收藏占指标名额
-    check("收藏计入我的关注计数", "${saved.length} 收藏" in html, "")
-    check("空收藏不留占位", '(cards.length || saved.length ? "" : empty)' in html, "")
+    check("收藏单独计数", '`${saved.length} 个`' in html and 'id="watchQCount"' in html, "")
+    check("空收藏给提示、不画卡", "还没有收藏的问题" in html and "innerHTML = saved.length" in html, "")
 
 
 def test_meetplan() -> None:
@@ -1226,6 +1227,18 @@ def test_http(port: int | None = None) -> None:
 
     ov = get("/api/overview")
     check("/api/overview", ov.get("ok") is True and len(ov.get("kpis") or []) == 4, "")
+
+    # 民情焦点明细：罗盘卡只给标题/标签，焦点弹窗还要详情、工单、渠道、焦点词、走势。
+    # 两个接口必须同源 —— 卡片上写的和点开看到的不是一件事，比没有这个弹窗更糟。
+    fx = get("/api/focus")
+    fitems = fx.get("items") or []
+    card_items = (ov.get("focus") or {}).get("items") or []
+    check("/api/focus", fx.get("ok") is True and len(fitems) == (ov.get("focus") or {}).get("count"), str(len(fitems)))
+    check("焦点与罗盘同源", [i["title"] for i in fitems] == [i["title"] for i in card_items], "")
+    need = ("id", "title", "tag", "tone", "detail", "tickets", "channels", "source", "people", "keywords", "trend")
+    check("焦点带弹窗所需字段", all(all(k in i for k in need) for i in fitems), "")
+    check("焦点走势是 14 天", all(len(i["trend"]) == 14 for i in fitems), "")
+    check("焦点渠道有件数", all(i["channels"] and sum(n for _, n in i["channels"]) > 0 for i in fitems), "")
 
     ws = get("/api/workspace")
     check(
@@ -2004,7 +2017,7 @@ def test_frontend_sidebar() -> None:
     """
     print("\n[19] 左栏会话列表与收起")
     html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
-    check("会话列表屏在", 'id="chatsList"' in html and 'id="chatsNew"' in html, "")
+    check("会话列表屏在", 'id="askChatsPane"' in html and 'id="chatsList"' in html and 'id="chatsCount"' in html, "")
     check("列表项带会话 id", 'class="chat-item' in html and "data-tid=" in html, "")
     check("下拉框已彻底移除", 'id="threadSel"' not in html, "")
     check("会话计数只认 THREADS", "THREADS.length" in html and "options.length - 1" not in html, "")
@@ -2013,7 +2026,10 @@ def test_frontend_sidebar() -> None:
     # 收起必须是「除窄条外全隐藏」。点名 .ask-head/.ask-body/.ask-chats 那版特异性比
     # .ask.show-chats .ask-chats 低，开着历史屏再收起会留下半截内容（截图上像"边上还有显示"）。
     check("收起时历史屏也一起藏（不留残影）", "html.ask-fold .ask > *:not(.ask-rail)" in html, "")
-    check("新对话在列表里、不在标题行", 'class="chat-new"' in html and 'id="chatsNew"' in html, "")
+    # V3 把「＋新对话」从会话列表第一行提到头部（见 .new-chat-head 的注释），
+    # 列表里不再有 class="chat-new" 的按钮 —— 两边同时存在会出现两个入口。
+    check("新对话在头部、不在列表里",
+          'class="new-chat-head"' in html and 'id="headNew"' in html and '"chat-new"' not in html, "")
     # 位置比的是 </head>，不是 "<body>"：head 里的注释本身就有 "<body> 之前"这句话，会先命中
     check("收起状态记在本机且首屏前生效",
           "ocgov.askfold" in html and html.index("ocgov.askfold") < html.index("</head>"), "")
