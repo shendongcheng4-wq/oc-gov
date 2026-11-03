@@ -86,6 +86,7 @@ import extract as meeting_extract  # noqa: E402
 import ledger as meetings  # noqa: E402
 import llm  # noqa: E402
 import llmclient  # noqa: E402
+import memory as memory_mod  # noqa: E402
 import modelcfg  # noqa: E402
 import oversight as ov  # noqa: E402
 import people  # noqa: E402
@@ -1170,6 +1171,15 @@ class Handler(BaseHTTPRequestHandler):
                 history = history[:-1]
         else:
             chat.append(thread["id"], "user", question)
+
+        # 跨会话记忆：新会话（或隔了很久）开问时，把长期关注背景拼在历史前面，
+        # 让模型规划查询时知道领导平时盯哪些指标/维度/主题。只含名称不含数值，
+        # 与 chat.context 的边界一致；没装记忆库时返回空列表，不改变原行为。
+        # 放在 retry/append 之后拼，是为了不干扰上面的重试裁剪逻辑。
+        mem_bg = memory_mod.background(question)
+        if mem_bg:
+            history = mem_bg + history
+
         return thread, history, question, ctx, atts
 
     def _persist_answer(self, thread_id: str, result: dict) -> dict | None:
@@ -1258,6 +1268,9 @@ class Handler(BaseHTTPRequestHandler):
             for a in atts
         ]
         msg = self._persist_answer(thread["id"], result)
+        # 跨会话记忆：一轮结束就把「关注了什么」沉淀进去（指标/维度/主题），
+        # 只记名称不记数值。失败静默，绝不影响这轮回答的返回。
+        memory_mod.record(thread["id"], question, result)
         self._json(
             {
                 "ok": True,
@@ -1339,6 +1352,7 @@ class Handler(BaseHTTPRequestHandler):
                 for a in atts
             ]
             msg = self._persist_answer(thread["id"], result)
+            memory_mod.record(thread["id"], question, result)
             push(
                 {
                     "type": "done",
