@@ -723,6 +723,28 @@ html.ask-fold .ask-rail{display:flex}
   border:1px dashed var(--line);border-radius:8px;padding:8px 10px
 }
 /* 单轮用量：比正文小一号、贴在答案最下面。它是账目，不能抢答案的位置 */
+/* 材料值 vs 指标库值（B 档）。这一块是「用户拿着月报来问」的落点：
+   两个数各自带出处并排，谁都不许冒充谁。左边竖线用品牌色而非警示色 ——
+   它不是在报错，是在交代差异；只有真不一致时数字本身变色。 */
+.mat-cmp{
+  margin-top:8px;padding:7px 9px;font-size:12px;
+  border:1px solid var(--line);border-left:3px solid var(--brand);
+  border-radius:6px;background:var(--surface-2)
+}
+.mc-hd{color:var(--muted);font-size:11px;margin-bottom:4px}
+.mc-row{display:flex;align-items:baseline;gap:7px;padding:2px 0;min-width:0}
+.mc-tag{flex:0 0 auto;min-width:38px;font-size:11px;color:var(--muted)}
+.mc-val{font-weight:600;font-variant-numeric:tabular-nums;flex:0 0 auto}
+.mc-val.diff{color:var(--warn)}
+.mc-val.ok{color:var(--ok)}
+.mc-src{
+  flex:1 1 auto;min-width:0;color:var(--faint);font-size:11px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+}
+.mc-ft{
+  margin-top:5px;padding-top:5px;border-top:1px dashed var(--line);
+  color:var(--muted);font-size:11px;line-height:1.55
+}
 .ai-usage{
   margin-top:9px;padding-top:7px;border-top:1px dashed var(--line);
   display:flex;flex-wrap:wrap;gap:4px 10px;font-size:10px;color:var(--faint)
@@ -2842,6 +2864,32 @@ function aiBubble(r, ref) {
     <div class="fact"><u>${esc(f.label || "")}</u><b>${esc(f.value || "")}</b></div>`).join("");
   const factsBlock = facts ? `<div class="facts">${facts}</div>` : "";
 
+  /* 材料里的数 × 指标库的数，并排。
+     只显示后端核回原文的那些（material_compare 里每一行都对应材料原文里真实
+     存在的一个 token），所以这里不做二次判断，只负责把两边摆清楚：
+     材料那行带文件名和摘录，库那行带部门/报告/期次。
+     一致时也显示 —— 用户来问，本来就是因为怀疑，告诉他"对得上"同样是答案。 */
+  const mcs = (r.material_compare || []).filter((m) => m && m.material_value);
+  const matBlock = mcs.length
+    ? `<div class="mat-cmp">
+         <div class="mc-hd">${mcs.every((m) => m.same) ? "材料里的数与本轮取值一致" : "材料里也提到了这些数，并列对照"}</div>
+         ${mcs.map((m) => `
+           <div class="mc-row">
+             <span class="mc-tag">材料</span>
+             <span class="mc-val ${m.same ? "ok" : "diff"}">${esc(m.material_value)}</span>
+             <span class="mc-src" title="${esc((m.file || "") + (m.excerpt ? " · " + m.excerpt : ""))}">${esc(m.file || "")}${m.excerpt ? ` · 「${esc(m.excerpt)}」` : ""}</span>
+           </div>
+           <div class="mc-row">
+             <span class="mc-tag">指标库</span>
+             <span class="mc-val">${esc(m.library_value || "")}</span>
+             <span class="mc-src" title="${esc([m.library_department, m.library_report, m.library_label].filter(Boolean).join(" · "))}">${esc([m.library_department, m.library_report, m.library_label].filter(Boolean).join(" · "))}</span>
+           </div>`).join("")}
+         ${mcs.some((m) => !m.same)
+           ? `<div class="mc-ft">两个数的统计口径可能不同（累计 / 当月、全市 / 规上等）。答复里的数字一律以指标库为准。</div>`
+           : ""}
+       </div>`
+    : "";
+
   // 趋势题后端多给一条序列。以前只有抽屉里画，答案气泡里反倒没图 ——
   // 问「最近三个月什么走势」得到一行字，等于让人自己脑补。
   const series = r.series || [];
@@ -2953,6 +3001,7 @@ function aiBubble(r, ref) {
       ${r.detail ? `<div style="margin-top:6px;color:var(--muted);font-size:12px">${esc(r.detail)}</div>` : ""}
       ${degBlock}
       ${factsBlock}
+      ${matBlock}
       ${chartBlock}
       ${meetBlock(r.meet_draft, ref)}
       ${kbBlock(r.knowledge)}
@@ -3732,6 +3781,25 @@ function answerMd(r, question, stamp) {
     if (lines.length) L.push("**出处**", "", ...lines, "");
   }
 
+  // 材料里的数 × 指标库的数。导出件比界面更需要它：落到纸上之后，读者点不开
+  // 界面，也看不到材料原件，只能靠这两行自带的出处判断该信谁。
+  const mcs = (r.material_compare || []).filter((m) => m && m.material_value);
+  if (mcs.length) {
+    L.push("**材料对照**", "");
+    mcs.forEach((m) => {
+      const cell = (s) => String(s ?? "").replace(/\|/g, "\\|");
+      const matSrc = [m.file, m.excerpt ? `「${m.excerpt}」` : ""].filter(Boolean).join(" · ");
+      const libSrc = [m.library_department, m.library_report, m.library_label].filter(Boolean).join(" · ");
+      L.push(`**${m.name || "指标"}**`, "", "| 来源 | 数值 | 依据 |", "| --- | --- | --- |");
+      L.push(`| 材料 | ${cell(m.material_value)} | ${cell(matSrc || "上传材料")} |`);
+      L.push(`| 指标库 | ${cell(m.library_value)} | ${cell(libSrc || "指标库")} |`);
+      L.push("");
+    });
+    if (mcs.some((m) => !m.same)) {
+      L.push("> 两个数的统计口径可能不同（累计 / 当月、全市 / 规上等），答复以指标库为准。", "");
+    }
+  }
+
   // 参考材料。只列名字和字数，不贴正文：一份一万多字的材料贴进去，
   // 导出件就没法读了，而用户手里本来就有原件。
   // 那句"数字以上方出处为准"不是客套 —— 材料里也有数字，混起来没法判断
@@ -3799,12 +3867,11 @@ function downloadText(text, name) {
 
 /* 导出这一轮。数据来源两选一：
    - 刚跑完的：holder.__r 是后端返回的完整 result（含 trace、usage）
-   - 历史回放：holder.__m 是落库的消息，meta 里有回放需要的字段 */
+   - 历史回放：holder.__m 是 historyView 的产物，已经是导出现在要的形状 */
 function exportAnswer(btn) {
   const holder = btn.closest(".bub-ai");
   if (!holder) return;
-  const m = holder.__m || null;
-  const r = holder.__r || (m ? { ...(m.meta || {}), headline: m.content } : null);
+  const r = holder.__r || holder.__m || null;
   if (!r) return toast("这一条还没有可导出的内容");
 
   // 问题在上一屏：往上找最近的一条用户气泡。找不到就只导答案，不编一个假的问句
@@ -3813,7 +3880,7 @@ function exportAnswer(btn) {
   while (prev && !prev.classList.contains("bub-user")) prev = prev.previousElementSibling;
   if (prev) q = (prev.textContent || "").trim();
 
-  const stamp = (m && m.ts) || new Date().toLocaleString("zh-CN");
+  const stamp = r.ts || new Date().toLocaleString("zh-CN");
   const md = answerMd(r, q, stamp);
   const slug = (q || "问答").replace(/[\\/:*?"<>|\s]+/g, "-").slice(0, 30) || "问答";
   downloadText(md, `${slug}-${String(stamp).slice(0, 10)}.md`);
@@ -3990,9 +4057,14 @@ function emptyHtml() {
   return `<div class="thread-empty" id="threadEmpty">${EMPTY_TXT}${exampleChips()}</div>`;
 }
 
-function bubbleFromHistory(m, threadId) {
+/* 落库消息 → 气泡数据。单独抽出来是因为它有两个消费者：
+   一是渲染（bubbleFromHistory），二是导出 / 复制（挂在节点上的 __m）。
+   之前只有渲染用它，__m 挂的是原始消息对象 —— 原始对象上是 role/content/meta，
+   没有 facts/sources，于是刷新之后导出的历史轮次只剩标题和提问，正文、出处、
+   对照全丢，而且看不出丢了（导出的文件是完整的 Markdown，只是内容空）。 */
+function historyView(m, threadId) {
   const meta = m.meta || {};
-  return aiBubble({
+  return {
     headline: m.content,
     // detail 是补充说明（为什么没答、这个数怎么读）。不传的话刷新后这段就没了
     detail: meta.detail || "",
@@ -4020,13 +4092,22 @@ function bubbleFromHistory(m, threadId) {
     // 附件清单同理：这条结论参考过材料，刷新后这句话不能说没就没 ——
     // 少了它，同一轮答案在实时视图里"有依据"、在历史里"凭空来的"
     attachments: meta.attachments || [],
+    // 材料对照也是同一轮结论的一部分：刷新后只剩单边数字，用户会以为当初
+    // 系统根本没看到材料，或者更糟——以为那两行是同时给的
+    material_compare: meta.material_compare || [],
     planner_info: { available: !!meta.model, model: meta.model },
     // 用量与「已停止」都要回放。用量是账，停止是事实陈述，两者丢了都会让
     // 历史看起来像另一轮对话。
     usage: meta.usage || {},
     cancelled: !!meta.cancelled,
     trace: [],
-  }, { threadId, messageId: m.id });
+    // 时间戳给导出抬头用。原来靠 __m.ts，而原始消息上是 m.ts —— 也一并在这收口
+    ts: m.ts || meta.ts || "",
+  };
+}
+
+function bubbleFromHistory(m, threadId) {
+  return aiBubble(historyView(m, threadId), { threadId, messageId: m.id });
 }
 
 function renderThread(thread) {
@@ -4040,11 +4121,13 @@ function renderThread(thread) {
     ? `<div class="bub-user">${esc(m.content)}</div>`
     : `<div class="bub-ai" data-mid="${esc(m.id || "")}">${bubbleFromHistory(m, thread.id)}</div>`
   ).join("");
-  // 把消息对象挂到节点上，供导出取数。挂引用而不是存全局下标：
-  // 过滤/重排之后下标会错位，引用不会。
+  // 把气泡数据挂到节点上，供复制/导出取数。必须挂 historyView 的产物，
+  // 不能挂原始消息 —— 原始消息上是 role/content/meta，没有 facts/sources，
+  // 导出会得到一份"完整但空"的文档。挂引用而不是存全局下标：过滤重排后
+  // 下标会错位，引用不会。
   const aiMsgs = msgs.filter((m) => m.role === "assistant");
   box.querySelectorAll(".bub-ai").forEach((b, i) => {
-    b.__m = aiMsgs[i] || null;
+    b.__m = aiMsgs[i] ? historyView(aiMsgs[i], thread.id) : null;
     bindFold(b);
   });
   box.scrollTop = box.scrollHeight;

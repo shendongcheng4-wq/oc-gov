@@ -205,6 +205,63 @@ def _source_brief(source: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _same_number(a: object, b: object) -> bool:
+    """两个数是不是同一个值（忽略 %, 千分位, 全角）。用于判断「材料与库一致」。"""
+
+    def key(s: object) -> float | None:
+        t = str(s or "").replace("％", "%").replace(",", "").replace(" ", "").rstrip("%")
+        try:
+            return float(t)
+        except ValueError:
+            return None
+
+    ka, kb = key(a), key(b)
+    return ka is not None and kb is not None and abs(ka - kb) < 1e-9
+
+
+def _material_compare(refs: list[dict[str, Any]], result: dict[str, Any]) -> list[dict[str, Any]]:
+    """把材料里的数值和本轮取的库值配成「对照」两行。
+
+    B 档（2026-11-03 定）的落点：材料数字**只**出现在这里，不进 headline、
+    不进 facts、不进专家解读。它解决的是用户拿着月报来问、发现跟系统说的不一样
+    那种场景 —— 两个数各自带出处并排放，用户自己判断，而不是系统替他选一个。
+
+    配不上就不配，理由是错配比不显示更糟：材料里的 7.2% 若是「1-9 月累计」，
+    而库里 5.6% 是「9 月当月」，两个数都对，硬摆成"对不上"会让人以为数据错。
+    所以只在单指标（value / trend）场景做，且材料指标必须是本轮的主指标。
+    """
+    if not refs or result.get("refused"):
+        return []
+    if result.get("intent") not in ("value", "trend"):
+        return []
+    codes = result.get("metric_codes") or []
+    facts = result.get("facts") or []
+    if not codes or not facts:
+        return []
+    lib_value = str(facts[0].get("value") or "")
+    if not lib_value:
+        return []
+    src = (result.get("sources") or [{}])[0]
+    out: list[dict[str, Any]] = []
+    for r in refs:
+        if r.get("code") != codes[0]:
+            continue                     # 材料说的是另一个指标，不能并到这一行
+        out.append(
+            {
+                "name": r.get("name"),
+                "file": r.get("file"),
+                "excerpt": r.get("excerpt"),
+                "material_value": r.get("written"),
+                "library_value": lib_value,
+                "library_label": str(facts[0].get("label") or result.get("period_label") or ""),
+                "library_department": str(src.get("department") or ""),
+                "library_report": str(src.get("report") or ""),
+                "same": _same_number(r.get("written"), lib_value),
+            }
+        )
+    return out[:3]
+
+
 def _plan_attempts(model_ref: str | None, limit: int = 3) -> list[str]:
     """这一轮可以试哪几个模型：先指定的（或全局默认），再其它可用模型。
 
@@ -417,6 +474,13 @@ def ask(
             result["metric_codes"] = codes
             result["metric_names"] = [md.METRICS[c]["name"] for c in codes]
 
+            # 材料值 × 库值并列。只在这里赋值 —— headline / facts 已经生成完了，
+            # 材料数字没有路径能进答案正文（B 档的边界靠这个结构保证，不靠自觉）。
+            if extra.get("material_refs"):
+                cmp_rows = _material_compare(extra["material_refs"], result)
+                if cmp_rows:
+                    result["material_compare"] = cmp_rows
+
             # 专家解读放在最后：答案已经是成品，专家只能补「怎么看」，改不了任何数值。
             # 任何一位专家失败都只影响他自己那一段，不牵连答案。
             check()
@@ -474,6 +538,10 @@ def _ask_impl(
     )
     if out is not None and degraded:
         out["degraded"] = degraded
+    # 材料里核出来过的数值。装配留在外层：这个函数有十来个提前返回，
+    # 逐个加字段迟早漏一个，而漏掉的那次恰好就是用户最想核对的那次。
+    if out is not None and plan and plan.get("material_refs"):
+        out["material_refs"] = plan["material_refs"]
 
     if plan is not None:
         hits = [

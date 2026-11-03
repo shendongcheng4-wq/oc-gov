@@ -1229,6 +1229,7 @@ def test_attach_entry() -> None:
 
     # 材料到底有没有进 planner 的 prompt —— 上面全是"存下来了"，
     # 这一条才是"模型看得见"。少了它，附件就只是一串躺在 body 里的字。
+    import ask as ask_mod  # noqa: E402
     import llm as metrics_llm  # noqa: E402
 
     mp = metrics_llm._materials_prompt([{"name": "月报.csv", "text": "固投 7.2%", "truncated": True}])
@@ -1240,19 +1241,27 @@ def test_attach_entry() -> None:
     src_llm = (ROOT / "core" / "metrics" / "llm.py").read_text(encoding="utf-8")
     check("材料拼在 user 消息里而不是 system 里", "_materials_prompt(attachments or [])" in src_llm, "")
 
-    # ---- A 档边界（2026-11-03 定）----
-    # 产品决策：材料只帮「看懂问题、选对指标」，材料里的数字永远不进答案。
-    # 每次想「让材料数字也能当答案」都会顺手删掉下面那条 prompt 约束，或者把
-    # 材料往 experts 里一传 —— 两种改法都能跑通、都不报错，只是溯源链静默断掉。
-    # 所以钉在这：这道闸一旦被拆，测试必须红。
+    # ---- B 档边界（2026-11-03 定）----
+    # 决策：材料的数字**不进答案正文**，只在对照区和指标库的值并排，各自带出处。
+    # 最早选的是 A（完全不碰材料数字），后来改成 B，理由是用户拿月报来问时
+    # 「系统答 5.6%、他手上 7.2%」需要一个解释，而不是让他以为系统错了。
+    #
+    # B 比 A 危险的地方在于：A 根本不会显示材料数字，所以不可能错；
+    # B 会显示，而一旦模型编一个"材料值"，界面就成了「材料里写的是 7.2%」——
+    # 用户以为系统替他核对过。所以下面第一条是这套断言里最要紧的。
     check(
-        "prompt 里禁止把材料数字当答案",
+        "prompt 里仍禁止把材料数字当答案",
         "材料里的数字**不是答案**" in mp,
         "删了这句，planner 就会拿材料里的数当指标值",
     )
+    check(
+        "prompt 要求 material_refs 原样照抄",
+        "material_refs" in mp and "原样照抄" in mp,
+        "",
+    )
     src_exp = (ROOT / "core" / "experts.py").read_text(encoding="utf-8")
     check(
-        "专家解读拿不到材料（A 档：不进解读）",
+        "专家解读拿不到材料（B 档也不进解读）",
         "attachment" not in src_exp and "material" not in src_exp.lower(),
         "",
     )
@@ -1261,6 +1270,59 @@ def test_attach_entry() -> None:
         "专家调用不传 attachments",
         "experts_mod.interpret(" in src_ask and "attachments" not in src_ask.split("experts_mod.interpret(")[1][:120],
         "",
+    )
+
+    # 校验函数本身：这才是 B 档的安全阀，全部离线可测，不花 token
+    MAT = [{"name": "月报.csv", "text": "指标,值\n固投增速,7.2%\n工业增速,8.9%\n房地产,12.35%", "truncated": False}]
+
+    def refs(value, code="FAI_GROWTH"):
+        return metrics_llm._verify_material_refs([{"metric_code": code, "value": value}], MAT)
+
+    got = refs("7.2")
+    check("材料里真有的数被收下", len(got) == 1 and got[0]["written"] == "7.2%", str(got)[:70])
+    check("收下时带出处文件与原文摘录", got and got[0]["file"] == "月报.csv" and "固投增速" in got[0]["excerpt"], "")
+    check("★材料里没有的数被丢弃（防模型编）", refs("9.9") == [], "编一个 9.9 就能伪造『材料里写的』")
+    check("★7.25 不能命中 7.2（不做子串匹配）", refs("7.25") == [], "子串匹配会让 7.2 命中 7.25")
+    check("数值相等就算命中（7.20 vs 7.2）", len(refs("7.2")) == 1 and len(refs("7.20")) == 1, "")
+    check("目录外的 code 丢弃", refs("7.2", code="NOT_A_METRIC") == [], "")
+    check("单数字（易误命中）丢弃", refs("9") == [], "")
+    check("written 用材料原文写法", (refs("7.20") or [{}])[0].get("written") == "7.2%", "模型抄成 7.20，展示的应是材料的 7.2%")
+
+    # 对照组装：配不上宁可不配
+    base = {
+        "refused": False, "intent": "value", "metric_codes": ["FAI_GROWTH"],
+        "facts": [{"label": "2026年1—9月累计", "value": "5.6%"}],
+        "period_label": "2026年1—9月累计",
+        "sources": [{"department": "市统计局", "report": "《固定资产投资统计月报》2026年9月"}],
+    }
+    rows = ask_mod._material_compare(got, base)
+    check("对照配出两行所需字段", len(rows) == 1 and rows[0]["library_value"] == "5.6%" and rows[0]["same"] is False, str(rows)[:80])
+    check("对照带库值口径与部门", rows and rows[0]["library_label"] and rows[0]["library_department"] == "市统计局", "")
+    check("同值判 same=True", ask_mod._material_compare(got, dict(base, facts=[{"label": "x", "value": "7.2%"}]))[0]["same"] is True, "")
+    check(
+        "★另一个指标的数值不并入本行",
+        ask_mod._material_compare([dict(got[0], code="OTHER")], base) == [],
+        "错配比不显示更糟",
+    )
+    for it in ("compare", "breakdown", "definition"):
+        check(f"{it} 场景不做对照（口径对不齐）", ask_mod._material_compare(got, dict(base, intent=it)) == [], "")
+    check("拒答不做对照", ask_mod._material_compare(got, dict(base, refused=True)) == [], "")
+
+    # 结构保证：材料数字没有路径进入结论正文
+    check(
+        "对照只在 ask() 里赋值，_ask_impl 的 headline 不碰它",
+        'result["material_compare"] = cmp_rows' in src_ask
+        and "material_compare" not in src_ask.split("def _ask_impl(")[1].split("def ask(")[0],
+        "一旦在 _ask_impl 里拼进 headline，材料数字就进了答案正文",
+    )
+
+    html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("气泡渲染对照块", 'class="mat-cmp"' in html and "mc-row" in html, "")
+    check("导出带材料对照段", '"**材料对照**"' in html, "")
+    check(
+        "★历史回放与导出共用同一份字段映射（historyView）",
+        "function historyView(" in html and "b.__m = aiMsgs[i] ? historyView(" in html,
+        "挂原始消息会让刷新后的导出变成『完整但空』",
     )
 
 

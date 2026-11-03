@@ -1113,6 +1113,9 @@ class Handler(BaseHTTPRequestHandler):
                 # 附件清单（只有名字和字数，正文不进历史）：回看时说得清
                 # "这条结论当时参考了什么"，而不用把一万字材料存两遍
                 "attachments": result.get("attachments") or [],
+                # 材料值 × 库值的对照（B 档）。必须落库：用户拿材料来核对的
+                # 那次，往往就是他最想回头再看一眼的一次
+                "material_compare": result.get("material_compare") or [],
                 "usage": result.get("usage") or {},
             },
         )
