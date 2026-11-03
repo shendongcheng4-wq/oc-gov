@@ -1477,6 +1477,104 @@ def test_http(port: int | None = None) -> None:
             deleted = json.loads(r.read().decode("utf-8"))
         check("DELETE /api/threads 删除", deleted.get("ok") is True, str(deleted))
 
+    # ---- 会话管理：改名 / 搜索 / 身份隔离 / 停止与续流 ----
+    #
+    # 这一组的重点不是"功能能用"，而是**串台不许发生**。演示身份是谁都能声称的
+    # （见 main._person 的注释），所以会话列表一旦不按 owner 过滤，切到副市长就能
+    # 看到市长的原话。这里把「看不到 / 改不了 / 删不了」都钉成断言：这三条任何一条
+    # 回退，都是数据串台，不是体验问题。
+    #
+    # 全程零模型调用：只建空会话、改名、删除。跑测试不该产生 token 账单。
+    def call(path: str, method: str = "GET", payload: dict | None = None, person: str | None = None):
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        hdrs = {"Content-Type": "application/json"}
+        if person:
+            hdrs["X-Person-Id"] = person
+        r = urllib.request.Request(base + path, data=data, headers=hdrs, method=method)
+        try:
+            with urllib.request.urlopen(r, timeout=10) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read().decode("utf-8"))
+
+    code, made = call("/api/threads", "POST", {}, person="mayor")
+    own_tid = (made.get("thread") or {}).get("id")
+    check("会话管理测试建会话", code == 200 and bool(own_tid), f"{code} {str(made)[:80]}")
+
+    if own_tid:
+        code, d = call(f"/api/threads/{own_tid}", "PATCH", {"title": ""}, person="mayor")
+        check("改名空标题返回 400", code == 400 and d.get("error") == "empty_title", f"{code} {str(d)[:60]}")
+
+        code, d = call("/api/threads/no-such-thread-9999", "PATCH", {"title": "x"}, person="mayor")
+        check("改名不存在的会话返回 404", code == 404, f"{code}")
+
+        # 回显必须是截断后的值。前端拿它直接改 DOM —— 回显全文会让标题先长后短，
+        # 用户看到的是"刚改完，刷新一下又变了"。
+        long_title = "一二三四五六七八九十" * 4
+        code, d = call(f"/api/threads/{own_tid}", "PATCH", {"title": long_title}, person="mayor")
+        check(
+            "改名回显的是截断后的标题",
+            code == 200 and d.get("title") == long_title[:chat.MAX_TITLE],
+            f"{code} {str(d.get('title'))[:40]}",
+        )
+
+        # 搜索按标题命中。带 snippet 键（标题命中时值为 None），前端靠"有没有这个键"
+        # 区分标题命中与正文命中两种展示。
+        keyword = "冒烟搜索锚点"
+        call(f"/api/threads/{own_tid}", "PATCH", {"title": keyword}, person="mayor")
+        _, hits = call(f"/api/threads?q={urllib.parse.quote(keyword)}", person="mayor")
+        hit_ids = [i.get("id") for i in hits.get("items") or []]
+        check("搜索能按标题命中", own_tid in hit_ids, f"命中 {len(hit_ids)} 条")
+        check(
+            "标题命中带 snippet 键但不含正文片段",
+            all("snippet" in i for i in (hits.get("items") or [])),
+            str((hits.get("items") or [{}])[0].keys())[:60],
+        )
+        # 探针也必须编码：中文直接拼进请求行会让 http.client 在 encode('ascii') 上炸，
+        # 报出来的是 UnicodeEncodeError，跟"搜索没结果"完全无关，极难认。
+        _, blank = call(f"/api/threads?q={urllib.parse.quote('zzz绝不存在zzz')}", person="mayor")
+        check("搜索无命中返回空列表", blank.get("items") == [], str(blank.get("items"))[:60])
+
+        # ---- 跨身份 ----
+        other = "vmayor"
+        _, other_list = call("/api/threads", person=other)
+        check(
+            "别人的会话不出现在自己列表里",
+            all(i.get("id") != own_tid for i in other_list.get("items") or []),
+            f"{len(other_list.get('items') or [])} 条",
+        )
+        # 越权一律 404 而不是 403：403 等于承认"这个 id 存在"，
+        # 换个 id 挨个试就能数出别人有几个会话。
+        code, _ = call(f"/api/threads/{own_tid}", person=other)
+        check("读别人的会话返回 404", code == 404, f"code={code}")
+        code, _ = call(f"/api/threads/{own_tid}", "PATCH", {"title": "劫持"}, person=other)
+        check("改不了别人的会话标题", code == 404, f"code={code}")
+        code, _ = call(f"/api/threads/{own_tid}", "DELETE", person=other)
+        check("删不了别人的会话", code == 404, f"code={code}")
+
+        code, d = call(f"/api/threads/{own_tid}", "DELETE", person="mayor")
+        check("会话管理测试自清", code == 200 and d.get("ok") is True, str(d)[:60])
+
+    # ---- 停止与续流 ----
+    # 只有错误分支卡得住契约，成功分支要真跑一轮模型（留给人点测，见 README）。
+    code, d = call("/api/ask/cancel", "POST", {}, person="mayor")
+    check("停止缺 turn_id 返回 400", code == 400 and d.get("error") == "turn_id_required", f"{code} {str(d)[:60]}")
+    code, d = call("/api/ask/cancel", "POST", {"turn_id": "deadbeefdeadbeef"}, person="mayor")
+    check("停止不存在的轮次返回 404", code == 404 and d.get("error") == "turn_not_found", f"{code} {str(d)[:60]}")
+    code, d = call("/api/ask/turn/deadbeefdeadbeef", person="mayor")
+    check("续流不存在的轮次返回 404", code == 404 and d.get("error") == "turn_not_found", f"{code} {str(d)[:60]}")
+    # 带 Last-Event-ID 走标准头这条路：过期轮次也应干净 404，而不是解析炸成 500。
+    req2 = urllib.request.Request(
+        base + "/api/ask/turn/deadbeef?after=abc",
+        headers={"Last-Event-ID": "deadbeef-7", "X-Person-Id": "mayor"},
+    )
+    try:
+        with urllib.request.urlopen(req2, timeout=10) as r:
+            ev = json.loads(r.read().decode("utf-8"))
+        check("续流的错误参数不炸成 500", ev.get("ok") is not True, str(ev)[:60])
+    except urllib.error.HTTPError as e:
+        check("续流的错误参数不炸成 500", e.code == 404, f"code={e.code}")
+
     # ---- AI 日程 ----
     # 只测读 + 降级简报：brief 传 use_model=false，跑测试不该消耗一次模型调用。
     sched = get("/api/schedule?days=14")
