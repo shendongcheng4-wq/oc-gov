@@ -396,6 +396,27 @@ def test_chat() -> None:
     check("上下文条数一致", len(ctx) == 3, str(len(ctx)))
     check("上下文只有 user/assistant", all(c["role"] in ("user", "assistant") for c in ctx), str(ctx))
 
+    # 出参统计：界面要据此告诉用户「哪几轮已经不在上下文里」。
+    # 少这两行，用户唯一能感知到的就是「它怎么把刚才说的忘了」。
+    stats: dict = {}
+    chat.context(t["id"], out=stats)
+    check(
+        "上下文统计回传总轮数与使用轮数",
+        stats.get("turns_total") == 2 and stats.get("turns_used") == 2 and stats.get("dropped") == 0,
+        str(stats),
+    )
+
+    # 预算压到极小：至少保最近一轮，并把裁掉的轮数如实报出来
+    tight: dict = {}
+    chat.context(t["id"], token_budget=1, out=tight)
+    check(
+        "预算不够时只保最近一轮且报出裁掉数",
+        tight.get("turns_used") == 1 and tight.get("dropped") == tight.get("turns_total") - 1,
+        str(tight),
+    )
+    # 不传 out 时不能炸（老调用方还在用两参数形式）
+    check("不传出参时不报错", isinstance(chat.context(t["id"], token_budget=1), list), "")
+
     # 安全边界：回灌给模型的历史不能带数值，否则模型下一轮更可能复述数字
     assistant_ctx = ctx[1]["content"]
     check("摘要不含百分比/小数", not re.search(r"\d+\.\d+|\d+\s*%", assistant_ctx), assistant_ctx)
@@ -2211,6 +2232,24 @@ def test_frontend_live() -> None:
     # 一轮几小时前的旧轮次
     check("正常结束才清掉待接记录", "if (!keepPending) pendingClear()" in html, "")
     check("启动时接回未完成的轮次", "if (pendingRead()) resumePending()" in html, "")
+
+    # 回答导出 / 会话内查找 / 上下文透明。三样都是"界面上的入口一旦被重构删掉，
+    # 没有任何报错"的东西 —— 恰恰最需要静态断言兜住。
+    check("回答带导出按钮", 'data-exp="1"' in html, "")
+    check("导出走结构化数据而不是扒 DOM", "function answerMd(" in html and "function mdFromHtml(" in html, "")
+    check("导出里带出处与降级提示", "**出处**" in html and "答案质量可能受影响" in html, "")
+    check("历史消息也挂了数据（走 meta 导出）", "b.__m = aiMsgs[i]" in html, "")
+    check("会话内查找条存在", 'id="findBar"' in html and 'id="findInput"' in html, "")
+    check("查找抢了 Ctrl+F", 'toLowerCase() === "f"' in html, "")
+    # 只描边不改 DOM：改写文本节点会拆断复制/折叠/收藏的事件绑定。
+    # 所以这里查"有没有真去造 <mark>"，而不是查字符串——注释里提到这个词不算。
+    check(
+        "查找只描边、不改写 DOM",
+        "find-hit{outline" in html and 'createElement("mark")' not in html,
+        "",
+    )
+    check("每条回答显示上下文轮数", 'class="ai-ctx' in html, "")
+    check("上下文统计随历史回放", "context: meta.context || {}" in html, "")
 
 
 def main() -> int:

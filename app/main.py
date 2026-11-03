@@ -955,8 +955,12 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     # ---------------- 问数 ----------------
-    def _prepare(self, body: dict) -> tuple[dict, list, str]:
-        """建/取会话、取历史、落用户消息。返回 (thread, history, question)。"""
+    def _prepare(self, body: dict) -> tuple[dict, list, str, dict]:
+        """建/取会话、取历史、落用户消息。返回 (thread, history, question, ctx)。
+
+        `ctx` 是本轮上下文的裁剪统计（总几轮、带了几轮、裁掉几轮）。它会一路
+        传到回答的 meta 里 —— 界面必须把「哪几轮已经不在上下文」说出来。
+        """
         question = str(body.get("question") or "").strip()
         if not question:
             raise ValueError("empty_question")
@@ -975,7 +979,8 @@ class Handler(BaseHTTPRequestHandler):
             thread = chat.get(thread["id"]) or thread
 
         # 先取历史再落本条，否则当前问题会在 history 和 messages 里各出现一次
-        history = chat.context(thread["id"])
+        ctx: dict = {}
+        history = chat.context(thread["id"], out=ctx)
 
         # 重试：可能停在两种状态上，都要认成"同一轮重来"而不是新的一问：
         #   1) 上一轮失败：只落了 user 消息，最后一条就是这次的问题；
@@ -999,12 +1004,13 @@ class Handler(BaseHTTPRequestHandler):
             if last.get("role") == "assistant":
                 # 「已停止」占位让位给这次真正的答案
                 chat.drop_last(thread["id"])
-                history = chat.context(thread["id"])
+                # 重取一次：上一条已经撤了，统计要跟着变，否则会多算一整轮
+                history = chat.context(thread["id"], out=ctx)
             if history and history[-1].get("role") == "user":
                 history = history[:-1]
         else:
             chat.append(thread["id"], "user", question)
-        return thread, history, question
+        return thread, history, question, ctx
 
     def _persist_answer(self, thread_id: str, result: dict) -> dict | None:
         """落一轮回答。
@@ -1055,13 +1061,15 @@ class Handler(BaseHTTPRequestHandler):
                 "meet_draft": meetplan_mod.to_meta(result.get("meet_draft")),
                 # 用量：调用链（trace）不落库，如果这里也不存，本轮花掉多少 token
                 # 就永久丢失了 —— 回看历史、做预算都无从统计。几十字节，值得存。
+                # 上下文统计跟着落库：刷新后用量行还在，说明也该还在
+                "context": result.get("context") or {},
                 "usage": result.get("usage") or {},
             },
         )
 
     def _ask(self, body: dict) -> None:
         try:
-            thread, history, question = self._prepare(body)
+            thread, history, question, ctx = self._prepare(body)
         except ValueError as exc:
             return self._json({"ok": False, "error": str(exc)}, 400)
 
@@ -1074,6 +1082,9 @@ class Handler(BaseHTTPRequestHandler):
             known_metrics=chat.known_metrics(thread["id"]),
         )
         result["planner_info"] = llm.llm_info()
+        # 本轮上下文的裁剪统计。前端在用量行里写出来，让「它怎么把刚才的忘了」
+        # 有一个可核对的解释，而不是让人怀疑系统不稳定。
+        result["context"] = ctx
         msg = self._persist_answer(thread["id"], result)
         self._json(
             {
@@ -1087,7 +1098,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _ask_stream(self, body: dict) -> None:
         try:
-            thread, history, question = self._prepare(body)
+            thread, history, question, ctx = self._prepare(body)
         except ValueError as exc:
             return self._json({"ok": False, "error": str(exc)}, 400)
 
@@ -1146,6 +1157,9 @@ class Handler(BaseHTTPRequestHandler):
                 should_stop=lambda: cancel_requested(turn_id),
             )
             result["planner_info"] = llm.llm_info()
+            # 本轮上下文的裁剪统计。前端在用量行里写出来，让「它怎么把刚才的忘了」
+            # 有一个可核对的解释，而不是让人怀疑系统不稳定。
+            result["context"] = ctx
             msg = self._persist_answer(thread["id"], result)
             push(
                 {

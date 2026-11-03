@@ -356,6 +356,7 @@ def context(
     thread_id: str | None,
     token_budget: int | None = None,
     max_turns: int = 10,
+    out: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     """取最近若干轮对话，转成 OpenAI messages 格式，供意图解析参考指代。
 
@@ -365,11 +366,22 @@ def context(
 
     预算按字符数粗估（中文约 0.6 token/字），宁可少带一轮，也不要让 prompt
     超长被服务端拒掉 —— 少一轮最多少理解一个指代，超长是整个问题都答不了。
+
+    `out` 给定时回填本轮裁剪的统计（总轮数 / 用了多少 / 裁掉多少）。界面要
+    把这件事说出来：上下文被裁而用户不知道，表现上就是「它怎么把刚才说的忘了」，
+    而用户唯一能做的判断是「系统不靠谱」。用出参而不是改返回值，是为了不动
+    已有的调用方（同 degraded 的出参风格）。
     """
+    def _report(**kw: Any) -> None:
+        if out is not None:
+            out.update(kw)
+
     if not thread_id:
+        _report(turns_total=0, turns_used=0, dropped=0, tokens=0, budget=0)
         return []
     thread = get(thread_id)
     if not thread:
+        _report(turns_total=0, turns_used=0, dropped=0, tokens=0, budget=0)
         return []
 
     entries: list[tuple[str, str]] = []
@@ -405,6 +417,14 @@ def context(
         picked.append(turn)
         used += cost
     picked.reverse()
+
+    _report(
+        turns_total=len(turns),
+        turns_used=len(picked),
+        dropped=len(turns) - len(picked),
+        tokens=used,
+        budget=budget,
+    )
 
     return [
         {"role": role, "content": text}
