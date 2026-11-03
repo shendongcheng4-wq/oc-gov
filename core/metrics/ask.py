@@ -248,6 +248,7 @@ def _plan_question(
     model_ref: str | None = None,
     known_metrics: list[str] | None = None,
     should_stop: Any = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
     """用模型做意图解析；失败按「同模型重试 → 换模型 → 退回规则」逐级降级。
 
@@ -285,6 +286,7 @@ def _plan_question(
                     history=history,
                     model_ref=ref,
                     known_metrics=known_metrics,
+                    attachments=attachments,
                     timeout=timeout,
                 )
             except llmclient.ModelUnavailable:
@@ -375,7 +377,14 @@ def ask(
     person_id: str | None = None,
     known_metrics: list[str] | None = None,
     should_stop: Any = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """`attachments` 是本轮用户上传的纯文本材料（已裁剪）。
+
+    它只喂意图解析，不进指标取值：材料里的数字不能变成答案里的数字，
+    否则「每个数都能追到出处」这条就断了。所以这个函数不把它塞进 question ——
+    规则兜底那条路要靠 question 做关键词匹配，混进材料正文会误命中指标。
+    """
     def check() -> None:
         # 停止信号只在这里判：分发阶段提示的那一处是整条流水线的唯一收窄口，
         # 模型/专家/取数都绕不过去，漏判的可能性最小。
@@ -392,7 +401,9 @@ def ask(
             extra: dict[str, Any] = {}
             result = _ask_impl(
                 question, today, history, model_ref, step, person_id, known_metrics,
-                should_stop, out=extra,
+                should_stop,
+                attachments=attachments,
+                out=extra,
             )
             # 降级信息要跟着答案一起走：落库、回放、界面上都得看得见。
             # 只在实时那一条路径上提示的话，刷新一下就好像什么都没发生过。
@@ -432,6 +443,7 @@ def _ask_impl(
     person_id: str | None = None,
     known_metrics: list[str] | None = None,
     should_stop: Any = None,
+    attachments: list[dict[str, Any]] | None = None,
     out: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """`out` 是给调用方传回附加信息的口子（目前只放 degraded）。
@@ -458,7 +470,7 @@ def _ask_impl(
         return meetplan_mod.as_result(draft, question)
 
     plan, planner, degraded = _plan_question(
-        question, today, history, model_ref, known_metrics, should_stop
+        question, today, history, model_ref, known_metrics, should_stop, attachments
     )
     if out is not None and degraded:
         out["degraded"] = degraded

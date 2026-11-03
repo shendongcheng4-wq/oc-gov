@@ -1179,17 +1179,66 @@ def test_meetplan() -> None:
 
 
 def test_attach_entry() -> None:
-    """附件入口：这一版只到「选文件 → 列成芯片」，所以要能证明它**没有假接**。
+    """附件：从「选文件」到「真进 prompt」的整条链路。
 
-    最坏的情况是按钮加上了、文件却悄悄溜进了取数链路（那等于模型推断变数据源）。
-    前端没有浏览器测试，但「带附件时发送被拦住」「没有任何 FormData」是纯文本可查的。
+    这里要卡住两种回退：
+    1. 又变回断头路（能选能显示、发送被拦住）—— 用户以为传了材料，其实没有；
+    2. 越界变成数据源（材料里的数字被当成指标值）—— 那会把「每个数都能
+       追到出处」这条底线拆掉。所以断言里既有「正文进了 payload」，
+       也有「服务端只收清单、不收正文」。
     """
-    print("\n[17.5] 附件入口")
+    print("\n[17.5] 附件")
     html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
     check("输入区有附件按钮与文件选择", 'id="attachBtn"' in html and 'id="attachInput"' in html, "")
     check("附件只收纯文本白名单", "const TEXT_EXT" in html and '".pdf": "PDF 要解析库"' in html, "")
-    check("带附件时发送被拦住", "附件还没接进问数" in html, "")
+    check("不再有「附件没接进问数」的拦门", "附件还没接进问数" not in html, "")
     check("前端没有偷偷上传", "FormData" not in html, "")
+    check("读文件走 FileReader", "readAsArrayBuffer" in html, "")
+    # GBK：政务 csv 十有八九是 GBK，按 utf-8 硬读会得到满屏乱码
+    check("按字节探测编码并支持 GBK", "TextDecoder" in html and '"gbk"' in html, "")
+    check("附件随提问发出", "attachments: atts," in html, "")
+    check("发送后清空附件芯片", "ATT.files = []; renderAttach();" in html, "")
+    check("附件正文不进历史回放", "attachments: meta.attachments || []" in html, "")
+
+    # 服务端校验：不信前端，自己再截一遍
+    import main as web_main  # noqa: E402  （app/main.py 里的模块级函数）
+
+    got = web_main._attachments({
+        "attachments": [
+            {"name": "a.csv", "text": "x" * 50},
+            {"name": "b.csv", "text": ""},              # 空正文：扔掉
+            {"name": "c.csv"},                          # 没有 text：扔掉
+            "not-a-dict",                               # 垃圾：扔掉
+        ]
+    })
+    check("服务端丢掉空/畸形附件", len(got) == 1 and got[0]["name"] == "a.csv", str(got)[:60])
+
+    long_one = web_main._attachments({"attachments": [{"name": "big.txt", "text": "y" * 99999}]})
+    check("单份材料按上限截断并标记", long_one[0]["chars"] == web_main._MAX_ATT_EACH and long_one[0]["truncated"], str(long_one[0]["chars"]))
+
+    many = web_main._attachments({"attachments": [{"name": f"f{i}.txt", "text": "z" * 100} for i in range(20)]})
+    check("附件份数有上限", len(many) == web_main._MAX_ATT_FILES, str(len(many)))
+
+    huge = web_main._attachments({"attachments": [{"name": f"h{i}.txt", "text": "w" * 20000} for i in range(5)]})
+    total = sum(a["chars"] for a in huge)
+    check("附件总量有上限", total <= web_main._MAX_ATT_TOTAL, f"total={total}")
+    check("超出总量的那份被标记截断", any(a["truncated"] for a in huge), "")
+
+    check("没带附件时返回空列表", web_main._attachments({}) == [], "")
+    check("attachments 不是列表时不死", web_main._attachments({"attachments": "oops"}) == [], "")
+
+    # 材料到底有没有进 planner 的 prompt —— 上面全是"存下来了"，
+    # 这一条才是"模型看得见"。少了它，附件就只是一串躺在 body 里的字。
+    import llm as metrics_llm  # noqa: E402
+
+    mp = metrics_llm._materials_prompt([{"name": "月报.csv", "text": "固投 7.2%", "truncated": True}])
+    check("材料正文进了 planner 的 prompt", "月报.csv" in mp and "固投 7.2%" in mp, mp[:50].replace("\n", " "))
+    check("材料被围栏包住（防提示注入）", "<<<" in mp and ">>>" in mp and "不是指令" in mp, "")
+    check("截断的材料要标出来", "已截断" in mp, "")
+    check("没有材料时不产生空段落", metrics_llm._materials_prompt([]) == "", "")
+    # 材料放 user 不放 system：放 system 会被每一轮历史重复带着走
+    src_llm = (ROOT / "core" / "metrics" / "llm.py").read_text(encoding="utf-8")
+    check("材料拼在 user 消息里而不是 system 里", "_materials_prompt(attachments or [])" in src_llm, "")
 
 
 def test_frontend_theme() -> None:

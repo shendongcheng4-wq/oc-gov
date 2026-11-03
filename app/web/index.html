@@ -732,6 +732,9 @@ html.ask-fold .ask-rail{display:flex}
    要能在扫一眼时被看见，所以给 warn 态上色 + 虚下划线表示「有说明可看」。 */
 .ai-usage .ai-ctx{cursor:help;border-bottom:1px dotted var(--line-3)}
 .ai-usage .ai-ctx.warn{color:var(--warn);border-bottom-color:var(--warn)}
+/* 附件：用品牌色而不是灰，因为它在语义上不是「消耗」而是「依据」——
+   和上下文、用量排在一起，但读起来要能分开 */
+.ai-usage .ai-att{color:var(--brand);border-bottom:1px dotted var(--brand);cursor:help}
 .trace-fold{margin-top:8px;font-size:11px;color:var(--muted);cursor:pointer;user-select:none}
 .trace-fold:hover{color:var(--brand)}
 .trace{margin-top:6px;border-left:2px solid var(--line-3);padding-left:9px;display:none}
@@ -779,6 +782,12 @@ html.ask-fold .ask-rail{display:flex}
 .att-chip .sz{font-size:10px;color:var(--faint);flex:0 0 auto}
 .att-chip .x{font-size:11px;line-height:1;color:var(--faint);cursor:pointer}
 .att-chip .x:hover{color:var(--danger)}
+/* 读取中 / 读失败：这两种状态必须一眼看出来。芯片上写着文件名的东西，
+   用户默认它已经进去了 —— 状态和结论不一致，就是静默错误 */
+.att-chip.wait{opacity:.75;border-style:dashed}
+.att-chip.wait .sz{color:var(--faint)}
+.att-chip.bad{border-color:var(--danger)}
+.att-chip.bad .sz{color:var(--danger)}
 
 /* 右：罗盘 */
 .compass{flex:1;display:flex;flex-direction:column;gap:10px;overflow:hidden;min-width:0}
@@ -2906,10 +2915,21 @@ function aiBubble(r, ref) {
     ? `<span class="ai-ctx${ctxWarn ? " warn" : ""}" title="${esc(ctxTip)}">上下文 ${c.turns_used}/${c.turns_total} 轮${ctxWarn ? ` · 前 ${c.dropped} 轮已裁掉` : ""}</span>`
     : "";
 
-  const usageBlock = u.calls || ctxSpan
+  // 参考材料：这一轮带了哪几个附件。名字必须能看见 —— 传了三份文件，
+  // 事后得说得清是哪一份起了作用，不然「参考了附件」等于没说
+  const atts = r.attachments || [];
+  const attTip = atts
+    .map((a) => `${a.name}（${charText(a.chars || 0)}${a.truncated ? "，已截断" : ""}）`)
+    .join("\n");
+  const attSpan = atts.length
+    ? `<span class="ai-att" title="${esc(attTip)}">参考 ${atts.length} 个附件</span>`
+    : "";
+
+  const usageBlock = u.calls || ctxSpan || attSpan
     ? `<div class="ai-usage">
          ${u.calls ? `<span>${u.calls} 次模型调用</span>${usageDetail}${u.ms ? `<span>${(u.ms / 1000).toFixed(1)}s</span>` : ""}${u.failed ? `<span class="bad">${u.failed} 次失败</span>` : ""}` : ""}
          ${ctxSpan}
+         ${attSpan}
        </div>`
     : "";
 
@@ -3300,6 +3320,9 @@ async function resumePending() {
 async function ask(question, opts = {}) {
   question = String(question || "");
   if (!question.trim() || RUN) return;
+  // 重试把这一轮原来的材料带回来：失败时附件芯片已经清掉了，
+  // 让用户重新选一遍文件太蛮
+  const atts = opts.attachments || attachPayload();
   const box = $("#thread");
   const empty = $("#threadEmpty");
   if (empty) empty.remove();
@@ -3318,10 +3341,15 @@ async function ask(question, opts = {}) {
   holder.className = "bub-ai";
   // 重试要拿到原问题。挂在 DOM 上而不是全局变量：多条失败并存时不会串。
   holder.dataset.retryq = question;
+  // 附件同样挂引用：重试按钮点下去时，要把这一轮的材料原样带上
+  holder.__atts = atts;
   holder.innerHTML = `<div class="ai-tag"><i>AI</i>${esc(plannerLabel())}</div>
     <div class="ai-body"><div class="stage-hint">正在调用模型解析意图…</div></div>`;
   box.appendChild(holder);
   box.scrollTop = box.scrollHeight;
+
+  // 发出去就清空：下一轮不该还带着上一轮的参考材料。重试不清，它还要接着用
+  if (!opts.retry) { ATT.files = []; renderAttach(); }
 
   RUN = { ac: new AbortController(), question, turnId: null, stopped: false };
   setRunning(true);
@@ -3435,6 +3463,9 @@ async function ask(question, opts = {}) {
         question,
         thread_id: THREAD,
         experts: currentExperts(),
+        // 参考材料。后端只把它当 planner 的背景，不进指标取值 ——
+        // 界面和导出都据此标注「参考了哪些附件」
+        attachments: atts,
         // 重试时后端认「上一条 user 正文相同」就跳过落库，否则会话里会出现
         // 同一条问题连问两遍
         retry: !!opts.retry,
@@ -3654,6 +3685,19 @@ function answerMd(r, question, stamp) {
       if (line && !seen.has(line)) { seen.add(line); lines.push(`- ${line}`); }
     });
     if (lines.length) L.push("**出处**", "", ...lines, "");
+  }
+
+  // 参考材料。只列名字和字数，不贴正文：一份一万多字的材料贴进去，
+  // 导出件就没法读了，而用户手里本来就有原件。
+  // 那句"数字以上方出处为准"不是客套 —— 材料里也有数字，混起来没法判断
+  // 哪个是系统给的、哪个是用户自己带来的
+  const atts = r.attachments || [];
+  if (atts.length) {
+    L.push("**参考材料**（仅作背景，数字以上方出处为准）", "");
+    atts.forEach((a) => {
+      L.push(`- ${a.name || ""}（${charText(a.chars || 0)}${a.truncated ? "，已截断" : ""}）`);
+    });
+    L.push("");
   }
 
   const notes = r.notes || [];
@@ -3928,6 +3972,9 @@ function bubbleFromHistory(m, threadId) {
     degraded: meta.degraded || null,
     // 上下文统计同理：刷新后用量行还在，说明也该还在，否则同一轮的账一处有一处没
     context: meta.context || {},
+    // 附件清单同理：这条结论参考过材料，刷新后这句话不能说没就没 ——
+    // 少了它，同一轮答案在实时视图里"有依据"、在历史里"凭空来的"
+    attachments: meta.attachments || [],
     planner_info: { available: !!meta.model, model: meta.model },
     // 用量与「已停止」都要回放。用量是账，停止是事实陈述，两者丢了都会让
     // 历史看起来像另一轮对话。
@@ -7245,8 +7292,10 @@ document.addEventListener("click", (e) => {
     const holder = rt.closest(".bub-ai");
     const q = (holder && holder.dataset.retryq) || "";
     if (!q) return toast("这次的问题已经取不到了，请在输入框里重新提问");
+    // 附件跟着一起回来：第一次就是因为某个原因失败，重发时不该少材料
+    const atts = (holder && holder.__atts) || [];
     if (holder) holder.remove();
-    return ask(q, { retry: true });
+    return ask(q, { retry: true, attachments: atts });
   }
 
   const nav = e.target.closest("[data-nav]");
@@ -7393,12 +7442,15 @@ $("#tmClose").onclick = () => $("#themeModal").classList.remove("on");
 $("#themeModal").onclick = (e) => { if (e.target.id === "themeModal") $("#themeModal").classList.remove("on"); };
 
 /* ---------- 附件入口 ----------
-   这一版只做到「选文件 → 列成芯片 → 可移除」，**文件没有进问数链路**：后端
-   `/api/ask` 只吃问题文本，自己写的 HTTP 层也只解 JSON，没有 multipart。
-   所以带附件时发送会被明确拦住并说清原因 —— 不静默丢掉附件，也不假装文件参与了
-   取数（那会让「数值来自指标接口」这条底线失效）。
-   格式先限纯文本：PDF/Word/Excel 要解析库，图片要 OCR，都不是加个按钮能解决的。 */
-const ATT = { files: [], MAX: 5 };
+   选纯文本 → 浏览器 `FileReader` 读成字符串 → 随提问塞进 JSON 发给后端。
+   不走上传接口：这个后端自己写的 HTTP 层只解 JSON、没有 multipart，而几万字
+   的文本直接进 body 完全扛得住，不必为此引一个上传服务。
+
+   **边界**：附件是「参考材料」，不是数据源。planner 靠它理解「按这份材料的
+   口径」「这里面说的那个」指什么；答案里的数字仍然只来自指标接口。材料里的
+   数字不进取数链路 —— 否则「每个数都能追到出处」这条底线就断了。
+   格式限纯文本：PDF/Word/Excel 要解析库，图片要 OCR，都不是加个按钮的事。 */
+const ATT = { files: [], MAX: 5, MAX_CHARS: 12000, MAX_TOTAL: 30000 };
 const TEXT_EXT = [".txt", ".md", ".csv", ".tsv", ".json", ".log", ".yaml", ".yml", ".xml"];
 const EXT_WHY = {
   ".pdf": "PDF 要解析库", ".doc": "Word 要解析库", ".docx": "Word 要解析库",
@@ -7409,17 +7461,74 @@ const EXT_WHY = {
 function sizeText(n) {
   return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 }
+function charText(n) {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k 字` : `${n} 字`;
+}
+function attUsed() {
+  return ATT.files.reduce((n, f) => n + (f.chars || 0), 0);
+}
+/* 附件实际要发出去的那些。只认读成功的：读取中的发出去是空文件，
+   读失败的更不行 —— 用户以为带了材料，模型却没看到，这比拒绝发送糟得多。 */
+function attachPayload() {
+  return ATT.files
+    .filter((f) => f.state === "ok" && (f.text || "").trim())
+    .map((f) => ({ name: f.name, text: f.text, chars: f.chars, truncated: !!f.cut }));
+}
 function renderAttach() {
   const box = $("#attachList");
   box.hidden = !ATT.files.length;
   $("#attachBtn").classList.toggle("on", ATT.files.length > 0);
-  box.innerHTML = ATT.files.map((f, i) => `
-    <span class="att-chip">
+  box.innerHTML = ATT.files.map((f, i) => {
+    let meta = sizeText(f.size);
+    let cls = "";
+    if (f.state === "reading") { meta = "读取中…"; cls = " wait"; }
+    else if (f.state === "ok") { meta = charText(f.chars) + (f.cut ? " · 已截断" : ""); }
+    else if (f.state === "empty") { meta = "没有文字"; cls = " bad"; }
+    else if (f.state === "error") { meta = f.err || "读取失败"; cls = " bad"; }
+    return `<span class="att-chip${cls}">
       <span class="nm" title="${esc(f.name)}">${esc(f.name)}</span>
-      <span class="sz">${sizeText(f.size)}</span>
+      <span class="sz">${esc(meta)}</span>
       <span class="x" data-attrm="${i}" role="button" title="移除">✕</span>
-    </span>`).join("");
+    </span>`;
+  }).join("");
 }
+
+/* 政务文件十有八九不是 UTF-8：Excel 导出的 csv、老系统导的 txt 多是 GBK。
+   直接 readAsText(f,"utf-8") 读到的是满屏 �，而用户看不出是编码问题，
+   只会觉得「这功能坏了」。所以先按 UTF-8 解，替换字符超标就试 GBK，
+   取坏的更少的那个。TextDecoder('gbk') 在 Edge/Chrome 里都有。 */
+function decodeBest(buf) {
+  const dec = (enc) => {
+    try { return new TextDecoder(enc, { fatal: false }).decode(buf); }
+    catch (e) { return null; }
+  };
+  const utf8 = dec("utf-8");
+  if (utf8 === null) return { text: "", enc: "?" };
+  const bad = (utf8.match(/\ufffd/g) || []).length;
+  if (bad <= Math.max(1, Math.floor(utf8.length * 0.002))) return { text: utf8, enc: "utf-8" };
+  const gbk = dec("gbk");
+  if (gbk && (gbk.match(/\ufffd/g) || []).length < bad) return { text: gbk, enc: "gbk" };
+  return { text: utf8, enc: "utf-8" };
+}
+
+function readOne(file, rec, cap) {
+  const r = new FileReader();
+  r.onload = () => {
+    const got = decodeBest(new Uint8Array(r.result || new ArrayBuffer(0)));
+    let t = String(got.text || "");
+    if (t.charCodeAt(0) === 0xfeff) t = t.slice(1);   // 带 BOM 的 csv/txt 很常见
+    t = t.replace(/\r\n?/g, "\n");                     // 统一换行，后端按 \n 排版
+    if (t.length > cap) { t = t.slice(0, cap); rec.cut = true; }
+    rec.text = t;
+    rec.chars = t.length;
+    rec.enc = got.enc;
+    rec.state = t.trim() ? "ok" : "empty";
+    renderAttach();
+  };
+  r.onerror = () => { rec.state = "error"; rec.err = "读取失败"; renderAttach(); };
+  r.readAsArrayBuffer(file);
+}
+
 function addAttach(list) {
   let refused = "";
   for (const f of list) {
@@ -7432,7 +7541,13 @@ function addAttach(list) {
       refused = EXT_WHY[ext] || "只支持纯文本类文件（txt / md / csv / json）";
       continue;
     }
-    ATT.files.push({ name: f.name, size: f.size });
+    // 总量配额按已读到的字算，所以多个文件时后面那个会被截得更短 ——
+    // 与其让第二个文件悄悄挤掉第一个，不如当场截断并在芯片上写明
+    const room = Math.max(0, ATT.MAX_TOTAL - attUsed());
+    if (!room) { refused = `附件合计最多 ${Math.round(ATT.MAX_TOTAL / 1000)}k 字`; break; }
+    const rec = { name: f.name, size: f.size, text: "", chars: 0, state: "reading", cut: false };
+    ATT.files.push(rec);
+    readOne(f, rec, Math.min(ATT.MAX_CHARS, room));
   }
   renderAttach();
   if (refused) toast(`没加进去：${refused}`);
@@ -7498,9 +7613,14 @@ $("#go").onclick = () => {
     if (SLASH.items.length) return pickSlash(SLASH.items[SLASH.idx].id);
     return toast("没有这个参谋：换一个，或按 Esc 清掉斜杠");
   }
-  if (ATT.files.length) {
-    toast("附件还没接进问数：先点芯片上的 ✕ 移除再发送。文件内容是文字的话，直接贴进输入框也认。");
-    return;
+  // 读取是异步的：文件大时几百毫秒才读完，这时发送会把空内容发出去
+  if (ATT.files.some((f) => f.state === "reading")) {
+    return toast("附件还在读取，稍等一下再发");
+  }
+  // 一个能用的都没有就拦下来。带着「读失败」的芯片发出去，用户以为材料进去了，
+  // 模型其实什么都没看到 —— 这比不让发糟得多
+  if (ATT.files.length && !ATT.files.some((f) => f.state === "ok")) {
+    return toast("附件里没有可用的文字：换一份纯文本，或先点芯片上的 ✕ 移除");
   }
   const v = $("#q").value;
   $("#q").value = "";

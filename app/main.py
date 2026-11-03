@@ -223,6 +223,51 @@ def _expert_ids(body: dict) -> list[str]:
     return ids[:3]
 
 
+_MAX_ATT_FILES = 5
+_MAX_ATT_EACH = 12000      # 单份材料最多带多少字
+_MAX_ATT_TOTAL = 30000     # 合计上限，超了就不再收
+
+
+def _attachments(body: dict) -> list[dict]:
+    """校验并裁剪前端送来的参考材料。
+
+    前端已经按同样的额度截过一遍，这里仍然要再截一次：`/api/ask/stream` 是
+    公开接口，curl 直接塞一个 200MB 的字符串进来，前端那层挡不住。
+
+    只留 name/text/chars/truncated。text 会进 planner 的 prompt，但**不进**
+    会话记录（落库只写清单）—— 否则一份一万多字的材料会被每一轮上下文重复
+    带一遍，几十轮之后光历史就能把 prompt 预算吃干净。
+    """
+    raw = body.get("attachments")
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    total = 0
+    for item in raw[:_MAX_ATT_FILES]:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        room = _MAX_ATT_TOTAL - total
+        if room <= 0:
+            break
+        cap = min(_MAX_ATT_EACH, room)
+        cut = len(text) > cap
+        text = text[:cap]
+        total += len(text)
+        name = str(item.get("name") or "未命名").strip()[:120] or "未命名"
+        out.append(
+            {
+                "name": name,
+                "text": text,
+                "chars": len(text),
+                "truncated": bool(cut or item.get("truncated")),
+            }
+        )
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "OcGovWorkbench/0.2"
     protocol_version = "HTTP/1.1"
@@ -955,15 +1000,17 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     # ---------------- 问数 ----------------
-    def _prepare(self, body: dict) -> tuple[dict, list, str, dict]:
-        """建/取会话、取历史、落用户消息。返回 (thread, history, question, ctx)。
+    def _prepare(self, body: dict) -> tuple[dict, list, str, dict, list]:
+        """建/取会话、取历史、落用户消息。返回 (thread, history, question, ctx, atts)。
 
         `ctx` 是本轮上下文的裁剪统计（总几轮、带了几轮、裁掉几轮）。它会一路
         传到回答的 meta 里 —— 界面必须把「哪几轮已经不在上下文」说出来。
+        `atts` 是本轮随问题带上来的参考材料（已裁剪），只喂 planner，不落库正文。
         """
         question = str(body.get("question") or "").strip()
         if not question:
             raise ValueError("empty_question")
+        atts = _attachments(body)
 
         thread = chat.ensure(
             body.get("thread_id"), model_ref=body.get("model_ref"), owner=self._person(body)
@@ -1010,7 +1057,7 @@ class Handler(BaseHTTPRequestHandler):
                 history = history[:-1]
         else:
             chat.append(thread["id"], "user", question)
-        return thread, history, question, ctx
+        return thread, history, question, ctx, atts
 
     def _persist_answer(self, thread_id: str, result: dict) -> dict | None:
         """落一轮回答。
@@ -1063,13 +1110,16 @@ class Handler(BaseHTTPRequestHandler):
                 # 就永久丢失了 —— 回看历史、做预算都无从统计。几十字节，值得存。
                 # 上下文统计跟着落库：刷新后用量行还在，说明也该还在
                 "context": result.get("context") or {},
+                # 附件清单（只有名字和字数，正文不进历史）：回看时说得清
+                # "这条结论当时参考了什么"，而不用把一万字材料存两遍
+                "attachments": result.get("attachments") or [],
                 "usage": result.get("usage") or {},
             },
         )
 
     def _ask(self, body: dict) -> None:
         try:
-            thread, history, question, ctx = self._prepare(body)
+            thread, history, question, ctx, atts = self._prepare(body)
         except ValueError as exc:
             return self._json({"ok": False, "error": str(exc)}, 400)
 
@@ -1080,11 +1130,17 @@ class Handler(BaseHTTPRequestHandler):
             expert_ids=_expert_ids(body),
             person_id=self._person(body),
             known_metrics=chat.known_metrics(thread["id"]),
+            attachments=atts,
         )
         result["planner_info"] = llm.llm_info()
         # 本轮上下文的裁剪统计。前端在用量行里写出来，让「它怎么把刚才的忘了」
         # 有一个可核对的解释，而不是让人怀疑系统不稳定。
         result["context"] = ctx
+        # 落库只留清单，不留全文：材料正文进 prompt 就够，进历史是纯占地
+        result["attachments"] = [
+            {"name": a["name"], "chars": a["chars"], "truncated": a["truncated"]}
+            for a in atts
+        ]
         msg = self._persist_answer(thread["id"], result)
         self._json(
             {
@@ -1098,7 +1154,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _ask_stream(self, body: dict) -> None:
         try:
-            thread, history, question, ctx = self._prepare(body)
+            thread, history, question, ctx, atts = self._prepare(body)
         except ValueError as exc:
             return self._json({"ok": False, "error": str(exc)}, 400)
 
@@ -1154,12 +1210,18 @@ class Handler(BaseHTTPRequestHandler):
                 expert_ids=_expert_ids(body),
                 person_id=self._person(body),
                 known_metrics=chat.known_metrics(thread["id"]),
+                attachments=atts,
                 should_stop=lambda: cancel_requested(turn_id),
             )
             result["planner_info"] = llm.llm_info()
             # 本轮上下文的裁剪统计。前端在用量行里写出来，让「它怎么把刚才的忘了」
             # 有一个可核对的解释，而不是让人怀疑系统不稳定。
             result["context"] = ctx
+            # 落库只留清单，不留全文：材料正文进 prompt 就够，进历史是纯占地
+            result["attachments"] = [
+                {"name": a["name"], "chars": a["chars"], "truncated": a["truncated"]}
+                for a in atts
+            ]
             msg = self._persist_answer(thread["id"], result)
             push(
                 {
