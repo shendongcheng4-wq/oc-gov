@@ -836,7 +836,7 @@ def test_notify() -> None:
         r = n["ref"]
         if r["type"] == "oversight" and ov.detail(r["id"]) is None:
             orphan.append(n["id"])
-        elif r["type"] == "meeting" and mt_ledger.meeting_get(r["id"]) is None:
+        elif r["type"] == "meeting" and mt_ledger.get(r["id"]) is None:
             orphan.append(n["id"])
         elif r["type"] == "metric" and r["id"] not in METRICS:
             orphan.append(n["id"])
