@@ -522,14 +522,14 @@ def test_experts() -> None:
     check("value 型仍从 facts 取信号", len(val_sig) == 2 and "上升" in val_sig[0] and "下降" in val_sig[1], str(val_sig))
 
     # 数字闸要端到端验：模型真吐了数字，那一段必须被整段丢掉，而不是「修正」后放行
-    old_chat = ex.llmclient.chat_json
+    old_chat = ex.llmclient.chat_text
     old_avail = ex.llmclient.available
     ex.llmclient.available = lambda: True
-    ex.llmclient.chat_json = lambda *a, **k: {"data": {"analysis": "增速上升 2 个百分点，压力仍在"}, "model": "stub"}
+    ex.llmclient.chat_text = lambda *a, **k: {"text": "增速上升 2 个百分点，压力仍在", "model": "stub"}
     try:
         dirty = ex.interpret({"question": "x", "metric_names": ["规模以上工业增加值增速"], "facts": []}, ["economy"])[0]
     finally:
-        ex.llmclient.chat_json = old_chat
+        ex.llmclient.chat_text = old_chat
         ex.llmclient.available = old_avail
     check("模型回了数字则整段丢弃", dirty["ok"] is False and not dirty["text"], str(dirty)[:90])
     check("丢弃时写明原因", "数字" in (dirty["why"] or ""), str(dirty.get("why")))

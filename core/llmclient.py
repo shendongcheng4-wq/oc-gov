@@ -226,3 +226,99 @@ def chat_json(
         "usage": body.get("usage") or {},
         "fell_back": bool(conn.get("fell_back")),
     }
+
+
+def chat_text(
+    system_prompt: str,
+    user_content: str,
+    *,
+    history: list[dict[str, str]] | None = None,
+    model_ref: str | None = None,
+    temperature: float = 0.0,
+    timeout: float = 60.0,
+    max_tokens: int | None = None,
+) -> dict[str, Any]:
+    """发一条**纯文本**请求，返回 {"text": str, "model": ..., "usage": ...}。
+
+    与 chat_json 的唯一区别：不设 `response_format`，也不解析 JSON，直接把模型的
+    文本吐回来。给那些「要模型说人话、不要结构化输出」的场景用（比如专家解读）。
+    避开 JSON 模式这个最脆弱的环节 —— 模型偶发输出前导语、或字符串被 max_tokens
+    截断，都不会再让整段报废。
+
+    抛 ModelUnavailable / ModelError，语义与 chat_json 一致。
+    """
+    conn = modelcfg.resolve(model_ref)
+    if conn is None:
+        raise ModelUnavailable("no_model_configured")
+
+    messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    for item in history or []:
+        if item.get("role") in ("user", "assistant") and item.get("content"):
+            messages.append({"role": item["role"], "content": item["content"]})
+    messages.append({"role": "user", "content": user_content})
+
+    payload: dict[str, Any] = {
+        "model": conn["model"],
+        "temperature": temperature,
+        "messages": messages,
+    }
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
+
+    req = urllib.request.Request(
+        f"{conn['base_url']}/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {conn['api_key']}",
+        },
+        method="POST",
+    )
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:300]
+        _record({"ok": False, "model": conn["model"], "ms": _ms(started)})
+        raise ModelError(
+            f"HTTP {exc.code}: {detail}", kind="http", status=int(exc.code)
+        ) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        _record({"ok": False, "model": conn["model"], "ms": _ms(started)})
+        raise ModelError(f"连接失败: {exc}", kind="network") from exc
+
+    _record(
+        {
+            "ok": True,
+            "model": body.get("model") or conn["model"],
+            "model_ref": conn["ref"],
+            "usage": body.get("usage") or {},
+            "ms": _ms(started),
+        }
+    )
+
+    try:
+        msg = body["choices"][0]["message"]
+        text = msg.get("content")
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ModelError(f"返回没有内容: {str(exc)[:200]}", kind="json") from exc
+
+    # 推理模型（deepseek-v4-pro 等）偶发把 max_tokens 全花在 thinking 上，
+    # 导致 content 为空、finish_reason=length。此时 reasoning_content 里往往有
+    # 已经想好的结论，取它尾部兜底，别让一次正常的调用变成「空回答」。
+    text = str(text or "").strip()
+    if not text:
+        reasoning = str((body["choices"][0]["message"].get("reasoning_content")) or "").strip()
+        if reasoning:
+            # thinking 是流水账，取最后一句作结论（去掉可能残留的思考痕迹）
+            tail = reasoning.split("\n")[-1].strip().lstrip("。-–—").strip()
+            text = tail[:500]
+
+    return {
+        "text": text,
+        "model": body.get("model") or conn["model"],
+        "model_ref": conn["ref"],
+        "usage": body.get("usage") or {},
+        "fell_back": bool(conn.get("fell_back")),
+    }

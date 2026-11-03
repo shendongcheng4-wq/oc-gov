@@ -96,8 +96,8 @@ _SYSTEM = """你是{name}（{brief}），在市政府常务会上旁听，被市
 硬性要求：
 1. **不得出现任何阿拉伯数字或百分号**（不要写"8.9%""3 个百分点""前三季度"这类）。要表达程度就用「偏高/偏低/明显/略有」。
 2. 只能基于下面给出的指标名称和方向信号判断，不得引用没列出的指标，不得推测具体数值。
-3. 三句话以内，直接给结论和风险提示，不要客套话、不要复述问题。
-4. 只输出 JSON：{{"analysis": "..."}}。如果给定信息不足以判断，analysis 写「信息不足，需要补充哪一类口径」。
+3. 三句话以内，直接给结论和风险提示，不要客套话、不要复述问题，不要用任何格式标记或引号包裹。
+4. 如果给定信息不足以判断，就写「信息不足，需要补充哪一类口径」。
 """
 
 
@@ -257,12 +257,14 @@ def _interpret_one(
         view["why"] = "未配置模型，专家解读需要模型；数值答案不受影响。"
         return view
     try:
-        resp = llmclient.chat_json(
+        resp = llmclient.chat_text(
             _SYSTEM.format(**expert),
             user_content,
             model_ref=model_ref,
             temperature=0.4,
-            max_tokens=320,
+            # deepseek-v4-pro 这类推理模型会把 token 花在 thinking 上，320 会被
+            # 偶发吃光、导致 content 为空。这里给足额度，最终文本仍在下面按 260 字截。
+            max_tokens=2000,
         )
     except llmclient.ModelUnavailable:
         view["why"] = "未配置模型。"
@@ -271,7 +273,7 @@ def _interpret_one(
         view["why"] = f"模型调用失败：{str(exc)[:80]}"
         return view
 
-    text = str((resp.get("data") or {}).get("analysis") or "").strip()
+    text = str((resp.get("text") or "")).strip()
     view["model"] = resp.get("model")
     view["model_ref"] = resp.get("model_ref")
     if not text:
