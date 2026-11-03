@@ -1191,7 +1191,7 @@ def test_attach_entry() -> None:
     html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
     check("输入区有附件按钮与文件选择", 'id="attachBtn"' in html and 'id="attachInput"' in html, "")
     check("附件只收白名单并有拒绝理由", "const TEXT_EXT" in html and '".pdf": "PDF 要解析库' in html, "")
-    check("xlsx 走服务端解析", "const BOOK_EXT" in html and "/api/attachments/parse" in html, "")
+    check("Office 文件走服务端解析", "const SRV_EXT" in html and "/api/attachments/parse" in html, "")
     check("不再有「附件没接进问数」的拦门", "附件还没接进问数" not in html, "")
     check("前端没有偷偷上传", "FormData" not in html, "")
     check("读文件走 FileReader", "readAsArrayBuffer" in html, "")
@@ -1399,6 +1399,227 @@ def test_book_parse() -> None:
     # 解析产物要能被现有材料通道吃下（字段形状和额度都得对）
     got = web_main._attachments({"attachments": [{"name": "sample.xlsx", "text": text}]})
     check("解析结果能进材料通道", len(got) == 1 and got[0]["chars"] == len(text), str(got)[:60])
+
+
+def _mini_docx(body: str) -> bytes:
+    """拼一个最小 docx（只有一个 document.xml），用来造 Word 里不好手动做出的结构。
+
+    真夹具（sample.docx）是 Word 存的，用来证明「认得 Office 的输出」；
+    这里的合成样本只用来覆盖修订、域代码、内容控件这些**手工造才行**的节点 ——
+    它们在协作过的文件里到处都是，但正常打字打不出来。
+    """
+    import io
+    import zipfile
+
+    ns = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    doc = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f"<w:document {ns}><w:body>{body}</w:body></w:document>"
+    )
+    ct = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/'
+        'vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", ct)
+        z.writestr("word/document.xml", doc)
+    return buf.getvalue()
+
+
+def test_docx_parse() -> None:
+    """docx 解析：难点不是抽文字，是判断哪些节点算「正文」。
+
+    document.xml 里同时住着修订删除的旧字、隐藏文字、域代码。它们都不是人看到的
+    内容，但都在文件里。读进来不会报错，只会让材料里多出「其实看不见的数字」——
+    而材料对照恰恰要拿这些 token 去核原文，错了也发现不了。
+    """
+    print("\n[17.7] Word 解析")
+    import docparse  # noqa: E402
+
+    fx = ROOT / "tests" / "fixtures" / "sample.docx"
+    check("有 docx 测试夹具", fx.exists(), str(fx))
+    if fx.exists():
+        r = docparse.parse_book(fx.read_bytes(), "sample.docx")
+        check("能解析 docx", r.get("ok") is True, str(r.get("error"))[:60])
+        text = r.get("text") or ""
+        check("段落文字读到了", "规模以上工业增加值同比增长7.2%" in text, text[:60])
+        check("标题带层级标记", "# 2026年9月全市经济运行情况" in text and "# 一、工业" in text, "")
+        check("正文段落不被当标题", "\n市统计局 2026年10月12日" in text, "")
+        check("表格按制表符保列位", "指标\t本月（%）\t同比（%）\t备注" in text, "")
+        check(
+            "表格数据行对得上列",
+            "规上工业增加值\t5.6\t7.2\t当月" in text,
+            [ln for ln in text.split("\n") if "规上" in ln][:1],
+        )
+        check("横向合并的表头不重复四次", text.count("2026年9月主要指标") == 1, "")
+        check(
+            "纵向合并的续格留空不左移",
+            "固定资产投资\t-3.2\t-1.8" in text,
+            [ln for ln in text.split("\n") if "固定资产" in ln][:1],
+        )
+        check("表格后面的段落还在", "注：本表数据为初步核算数。" in text, "")
+        check(
+            "隐藏文字没被当正文",
+            "真实增速其实是" not in text and "隐藏" not in text,
+            [ln for ln in text.split("\n") if "隐藏" in ln][:1],
+        )
+        check("跳过隐藏文字要说出来", "隐藏文字" in (r.get("note") or ""), r.get("note") or "")
+        check("表格数量可用于芯片提示", r.get("tables") == 1 and r.get("paras", 0) >= 6, str(r)[:80])
+
+        # 额度截断
+        cut = docparse.parse_book(fx.read_bytes(), "sample.docx", limit=40)
+        check("超额度会截断并标出来", cut.get("truncated") is True and "已截断" in (cut.get("text") or ""), "")
+
+        # 按包结构分派，不看扩展名：有人把 xlsx 改名成 .docx
+        ms = docparse.parse_book((ROOT / "tests" / "fixtures" / "sample.xlsx").read_bytes(), "骗人.docx")
+        check("改名成 .docx 的 xlsx 仍按内容识别", ms.get("kind") == "xlsx", str(ms.get("kind")))
+
+    # 修订删除、域代码、隐藏 run、内容控件 —— 合成样本
+    rv = docparse.parse_book(
+        _mini_docx(
+            '<w:p><w:r><w:t>增速为</w:t></w:r>'
+            '<w:del w:id="1"><w:r><w:delText>9.9%</w:delText></w:r></w:del>'
+            '<w:r><w:t>7.2%</w:t></w:r></w:p>'
+        ),
+        "rev.docx",
+    )
+    check(
+        "修订里删掉的旧数字不读进来",
+        rv.get("ok") and "7.2%" in rv["text"] and "9.9%" not in rv["text"],
+        rv.get("text"),
+    )
+    # 有的生成器（LibreOffice 往返、部分第三方库）在 w:del 里写的是普通 w:t 而不是
+    # w:delText。只靠「不认 delText」拦不住这种，必须整块跳过 w:del。
+    rv2 = docparse.parse_book(
+        _mini_docx(
+            '<w:p><w:r><w:t>增速为</w:t></w:r>'
+            '<w:del w:id="2"><w:r><w:t>9.9%</w:t></w:r></w:del>'
+            '<w:r><w:t>7.2%</w:t></w:r></w:p>'
+        ),
+        "rev2.docx",
+    )
+    check(
+        "w:del 里写普通 w:t 也不读",
+        rv2.get("ok") and "9.9%" not in rv2["text"] and "7.2%" in rv2["text"],
+        rv2.get("text"),
+    )
+    fl = docparse.parse_book(
+        _mini_docx(
+            '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+            '<w:r><w:instrText> PAGE </w:instrText></w:r>'
+            '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+            '<w:r><w:t>3</w:t></w:r>'
+            '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'
+        ),
+        "field.docx",
+    )
+    check(
+        "域代码（PAGE 这类指令）不进正文",
+        fl.get("ok") and fl["text"].strip() == "3",
+        repr(fl.get("text")),
+    )
+    hd = docparse.parse_book(
+        _mini_docx(
+            '<w:p><w:r><w:t>对外口径7.2%</w:t></w:r>'
+            '<w:r><w:rPr><w:vanish/></w:rPr><w:t>内部7.25%</w:t></w:r></w:p>'
+        ),
+        "hidden.docx",
+    )
+    check(
+        "隐藏 run 不读，且计数上报",
+        hd.get("ok") and "内部7.25%" not in hd["text"] and "隐藏文字" in (hd.get("note") or ""),
+        hd.get("text"),
+    )
+    sd = docparse.parse_book(
+        _mini_docx(
+            '<w:sdt><w:sdtContent><w:p><w:r><w:t>内容控件里的字</w:t></w:r></w:p>'
+            "</w:sdtContent></w:sdt>"
+            '<w:p><w:r><w:t>普通段落</w:t></w:r></w:p>'
+        ),
+        "sdt.docx",
+    )
+    check("内容控件里的段落也读", sd.get("ok") and "内容控件里的字" in sd["text"], sd.get("text"))
+
+    # 续格里残留旧字：Word 自己合并时会留，某些转换工具更会留。留着就会让
+    # 同一个区县出现两遍，而且写回去的人会以为是两个区。
+    vm = docparse.parse_book(
+        _mini_docx(
+            "<w:tbl>"
+            "<w:tr><w:tc><w:p><w:r><w:t>区县</w:t></w:r></w:p></w:tc>"
+            "<w:tc><w:p><w:r><w:t>指标</w:t></w:r></w:p></w:tc></w:tr>"
+            '<w:tr><w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr>'
+            "<w:p><w:r><w:t>A区</w:t></w:r></w:p></w:tc>"
+            "<w:tc><w:p><w:r><w:t>工业</w:t></w:r></w:p></w:tc></w:tr>"
+            '<w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr>'
+            "<w:p><w:r><w:t>A区</w:t></w:r></w:p></w:tc>"
+            "<w:tc><w:p><w:r><w:t>投资</w:t></w:r></w:p></w:tc></w:tr>"
+            "</w:tbl>"
+        ),
+        "vmerge.docx",
+    )
+    check(
+        "纵向合并的续格残字被丢掉，列位不塌",
+        vm.get("ok") and "\n\t投资" in vm["text"] and vm["text"].count("A区") == 1,
+        repr(vm.get("text")),
+    )
+
+    # 读不出内容时说清楚是什么情况，别只说「没有文字」
+    img = docparse.parse_book(
+        _mini_docx('<w:p><w:r><w:drawing/></w:r></w:p>'),
+        "scan.docx",
+    )
+    check(
+        "整份是图片时说 OCR 没做",
+        img.get("code") == "no_text" and "OCR" in (img.get("error") or ""),
+        str(img)[:80],
+    )
+    empty = docparse.parse_book(_mini_docx('<w:p><w:pPr/></w:p>'), "blank.docx")
+    check("空文档单独报错", empty.get("code") == "no_text" and "OCR" not in (empty.get("error") or ""), "")
+
+    # 认不出就明说
+    doc = docparse.parse_book(bytes.fromhex("d0cf11e0a1b11ae1") + b"0" * 64, "老文件.doc")
+    check(
+        ".doc 的出路说的是另存为 .docx",
+        doc.get("code") == "ole2" and ".docx" in (doc.get("error") or ""),
+        doc.get("error") or "",
+    )
+    xls = docparse.parse_book(bytes.fromhex("d0cf11e0a1b11ae1") + b"0" * 64, "老表.xls")
+    check(
+        ".xls 的出路仍是另存为 .xlsx",
+        xls.get("code") == "ole2" and ".xlsx" in (xls.get("error") or ""),
+        xls.get("error") or "",
+    )
+    import io as _io
+    import zipfile as _zip
+
+    buf = _io.BytesIO()
+    with _zip.ZipFile(buf, "w") as z:
+        z.writestr("hello.txt", "zip 里只有个文本")
+    check(
+        "普通压缩包不硬当成 Office",
+        docparse.parse_book(buf.getvalue(), "a.zip").get("code") == "not_office",
+        "",
+    )
+    pp = _io.BytesIO()
+    with _zip.ZipFile(pp, "w") as z:
+        z.writestr("ppt/presentation.xml", "<p/>")
+    check("pptx 明确拒绝", docparse.parse_book(pp.getvalue(), "a.pptx").get("code") == "pptx", "")
+
+    # 解析产物要能被现有材料通道吃下
+    import main as web_main  # noqa: E402
+
+    got = web_main._attachments({"attachments": [{"name": "sample.docx", "text": "x" * 300}]})
+    check("docx 产物同样走材料通道", len(got) == 1 and got[0]["chars"] == 300, str(got)[:60])
+
+    # 前端：必须真的放开 .docx，而不是后端能读、前端还在拦
+    html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("前端把 .docx 交给服务端解析", '".docx"' in html and "SRV_EXT" in html, "")
+    check("前端不再说 Word 没接", "Word 还没接" not in html, "")
+    check("芯片能显示 docx 的段数", "paras" in html, "")
 
 
 def test_frontend_theme() -> None:
@@ -2505,6 +2726,7 @@ def main() -> int:
     test_meetplan()
     test_attach_entry()
     test_book_parse()
+    test_docx_parse()
     test_frontend_theme()
     test_frontend_sidebar()
     test_frontend_thread_switch()

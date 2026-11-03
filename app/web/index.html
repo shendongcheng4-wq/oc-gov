@@ -1886,7 +1886,7 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
       <!-- 附件芯片：选中之后才出现，没选就整行不占位 -->
       <div class="attach-list" id="attachList" hidden></div>
       <div class="inputbar">
-        <button class="attach" id="attachBtn" title="添加参考材料（纯文本类文件，最多 5 个、合计 3 万字）" aria-label="添加附件">
+        <button class="attach" id="attachBtn" title="添加参考材料（txt / md / csv / Word / Excel，最多 5 个、合计 3 万字）" aria-label="添加附件">
           <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.5-8.5a3.5 3.5 0 0 1 4.9 4.9l-8.5 8.5a2 2 0 0 1-2.8-2.8l7.7-7.7"/></svg>
         </button>
         <textarea id="q" rows="3" placeholder="请输入您的问题…" autocomplete="off"></textarea>
@@ -7587,7 +7587,7 @@ $("#tmClose").onclick = () => $("#themeModal").classList.remove("on");
 $("#themeModal").onclick = (e) => { if (e.target.id === "themeModal") $("#themeModal").classList.remove("on"); };
 
 /* ---------- 附件入口 ----------
-   纯文本 → 浏览器 `FileReader` 读成字符串；`.xlsx` → POST 给后端解析成文本。
+   纯文本 → 浏览器 `FileReader` 读成字符串；`.xlsx` / `.docx` → POST 给后端解析成文本。
    两条路终点相同（都是一个 text），后面的额度截断、进 planner、材料对照不用分叉。
 
    不走 multipart：后端自己写的 HTTP 层只解 JSON，几万字的文本直接进 body 完全
@@ -7596,14 +7596,15 @@ $("#themeModal").onclick = (e) => { if (e.target.id === "themeModal") $("#themeM
    **边界**：附件是「参考材料」，不是数据源。planner 靠它理解「按这份材料的
    口径」「这里面说的那个」指什么；答案里的数字仍然只来自指标接口。材料里的
    数字不进取数链路 —— 否则「每个数都能追到出处」这条底线就断了。
-   PDF / Word 仍要解析库，图片要 OCR，都还没做，选择时明确拒绝并说明原因。 */
+   PDF 要解析库、图片要 OCR，都还没做，选择时明确拒绝并说明原因。 */
 const ATT = { files: [], MAX: 5, MAX_CHARS: 12000, MAX_TOTAL: 30000 };
 const TEXT_EXT = [".txt", ".md", ".csv", ".tsv", ".json", ".log", ".yaml", ".yml", ".xml"];
-// 走服务端解析的格式（zip + XML，要还原「显示值」，不能当纯文本读）
-const BOOK_EXT = [".xlsx"];
+// 走服务端解析的格式：都是 zip + XML，要还原「显示值」或判断「哪些算正文」，
+// 不能当纯文本读
+const SRV_EXT = [".xlsx", ".docx"];
 const EXT_WHY = {
-  ".pdf": "PDF 要解析库，还没接", ".doc": "Word 还没接，先另存为 .docx 或 txt",
-  ".docx": "Word 还没接，先另存为 txt", ".xls": "旧版 Excel（.xls）请另存为 .xlsx",
+  ".pdf": "PDF 要解析库，还没接", ".doc": "旧版 Word（.doc）请另存为 .docx",
+  ".xls": "旧版 Excel（.xls）请另存为 .xlsx",
   ".ppt": "PPT 要解析库", ".pptx": "PPT 要解析库",
   ".png": "图片要 OCR", ".jpg": "图片要 OCR", ".jpeg": "图片要 OCR",
 };
@@ -7633,8 +7634,9 @@ function renderAttach() {
     if (f.state === "reading") { meta = "读取中…"; cls = " wait"; }
     else if (f.state === "ok") {
       meta = charText(f.chars) + (f.cut ? " · 已截断" : "");
-      // 表格型附件报行数：只说「6.2k 字」看不出表有多长、读到第几行被截了
-      if (f.rows) meta = `${f.rows} 行 · ` + meta;
+      // 表格型附件报行数、文档型报段数：只说「6.2k 字」看不出读到第几行被截了
+      if (f.kind === "docx" && f.paras) meta = `${f.paras} 段 · ` + meta;
+      else if (f.rows) meta = `${f.rows} 行 · ` + meta;
     }
     else if (f.state === "empty") { meta = "没有文字"; cls = " bad"; }
     else if (f.state === "error") { meta = f.err || "读取失败"; cls = " bad"; }
@@ -7683,7 +7685,7 @@ function readOne(file, rec, cap) {
   r.readAsArrayBuffer(file);
 }
 
-/* xlsx 交给后端解析，两个理由：
+/* xlsx / docx 交给后端解析，两个理由：
    ① 浏览器里也要写一遍 zip 解压 + 数字格式还原，和 Python 那份必然跑偏；
    ② 更要命的是「存的值」和「看到的值」不是一回事 —— xlsx 里 7.2% 存的是 0.072，
       日期存的是序列号 45292。前端少还原一步，材料对照的原文核验就会静默失效
@@ -7716,6 +7718,8 @@ function readBook(file, rec, cap) {
       if (it.truncated) rec.cut = true;
       rec.text = t;
       rec.chars = t.length;
+      rec.kind = it.kind || "";
+      rec.paras = it.paras || 0;
       rec.rows = it.rows || 0;
       rec.sheets = (it.sheets || []).length;
       rec.note = it.note || "";
@@ -7738,9 +7742,9 @@ function addAttach(list) {
     const ext = lower.slice(lower.lastIndexOf("."));
     // 同一个文件重复选不重复列：芯片上分不出两条一模一样的名字
     if (ATT.files.some((x) => x.name === f.name && x.size === f.size)) continue;
-    const isBook = BOOK_EXT.includes(ext);
+    const isBook = SRV_EXT.includes(ext);
     if (!isBook && !TEXT_EXT.includes(ext) && !(f.type || "").startsWith("text/")) {
-      refused = EXT_WHY[ext] || "只支持纯文本（txt / md / csv / json）和 .xlsx";
+      refused = EXT_WHY[ext] || "只支持纯文本（txt / md / csv / json）、Word（.docx）和 Excel（.xlsx）";
       continue;
     }
     // 二进制文件先按体积挡：等传到后端再被拒，用户白等几十秒

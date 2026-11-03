@@ -6,14 +6,17 @@
     「有 Python」改成「能 pip install」—— 内网往往不能。
 
 为什么自己写不算难
-    xlsx 就是 zip 包里的 XML，结构由 ECMA-376 定死，要的信息只有三个部件：
-    workbook（有哪些表）、sharedStrings（字符串池）、worksheet（单元格）。
-    真正难的不是解压，是**「存的值」和「看到的值」不是一回事** —— 见 _render 那段。
+    xlsx / docx 都是 zip 包里的 XML，结构由 ECMA-376 定死。
+    xlsx 要的信息只有三个部件：workbook（有哪些表）、sharedStrings（字符串池）、
+    worksheet（单元格）。真正难的不是解压，是**「存的值」和「看到的值」不是一回事**
+    —— 见 _render_number 那段。
+    docx 要的是 word/document.xml 一棵树，难点在**哪些节点算正文**：
+    修订删除的旧字、隐藏文字、域代码都不能读进来 —— 见 _docx_blocks 那段。
 
 不支持就明说
-    .xls（OLE2 二进制，和 xlsx 毫无关系）、加了密码的 xlsx（也是 OLE2 容器，
-    只是扩展名还叫 xlsx）、PDF（要解析库，而且排版格式取出的数字经常错行）。
-    这三种都返回明确的错误码，不猜、不硬读。
+    .xls / .doc（OLE2 二进制，和 xlsx / docx 毫无关系）、加了密码的 Office 文件
+    （也是 OLE2 容器，只是扩展名还叫 xlsx / docx）、PDF（要解析库，而且排版格式
+    取出的数字经常错行）。这些都返回明确的错误码，不猜、不硬读。
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ import zipfile
 from xml.etree import ElementTree as ET
 
 _MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_WORD = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _RELNS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 _PKGREL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 
@@ -361,83 +365,361 @@ def _sheet_rows(
     return rows, maxcol, merges, blank_formula
 
 
-def _parse_xlsx(data: bytes, limit: int) -> dict:
+def _parse_xlsx(zf: zipfile.ZipFile, names: set[str], limit: int) -> dict:
+    sheets, date1904 = _sheet_paths(zf, names)
+    if not sheets:
+        return _err("no_sheet", "工作簿里没有工作表")
+    sst = _shared_strings(zf, names)
+    xfs = _cell_formats(zf, names)
+
+    blocks: list[str] = []
+    meta: list[dict] = []
+    used = 0
+    truncated = False
+    total_rows = 0
+    merge_hits: list[str] = []
+    blank_formula = 0
+
+    for name, path in sheets:
+        got = _sheet_rows(zf, path, sst, xfs, date1904)
+        if got is None:
+            continue
+        rows, maxcol, merges, blanks = got
+        blank_formula += blanks
+        if not rows:
+            meta.append({"name": name, "rows": 0, "cols": 0})
+            continue
+        if merges:
+            merge_hits.append(f"{name}（{len(merges)} 处）")
+        total_rows += len(rows)
+        body: list[str] = []
+        for r in rows:
+            if not r:
+                body.append("")
+                continue
+            last = max(r)
+            body.append("\t".join(r.get(i, "") for i in range(1, last + 1)))
+        chunk = f"## {name}\n" + "\n".join(body)
+        if used + len(chunk) > limit:
+            room = limit - used
+            if room > 40:
+                blocks.append(chunk[:room] + "\n…（已截断）")
+                used = limit
+            truncated = True
+            meta.append({"name": name, "rows": len(rows), "cols": maxcol})
+            break
+        blocks.append(chunk)
+        used += len(chunk) + 1
+        meta.append({"name": name, "rows": len(rows), "cols": maxcol})
+
+    text = "\n".join(blocks)
+    notes: list[str] = []
+    if truncated:
+        notes.append("内容超过额度，后面的表和行没有读入")
+    if merge_hits:
+        notes.append("有合并单元格（" + "、".join(merge_hits) + "），合并区只保留左上角的值")
+    if blank_formula:
+        notes.append(f"{blank_formula} 个公式格没有计算结果")
+    return {
+        "ok": True,
+        "kind": "xlsx",
+        "text": text,
+        "chars": len(text),
+        "truncated": truncated,
+        "sheets": meta,
+        "rows": total_rows,
+        "note": "；".join(notes),
+    }
+
+
+# ---------------------------------------------------------------- Word（docx）
+#
+# docx 比 xlsx 简单的地方：文本就是文本，没有「存 0.072 显示 7.2%」这种陷阱。
+# docx 比 xlsx 难的地方：**哪些节点算正文**。一棵 document.xml 里同时住着
+#
+#   · 修订删除的旧字（w:del 里的 w:delText）—— 读进来会把「删掉的旧数字」当正文
+#   · 隐藏文字（w:vanish）—— 有人会把敏感数或草稿段设成隐藏，打印时看不见
+#   · 域代码（w:instrText）—— 是 PAGE / MERGEFORMAT 这类指令，不是给人看的字
+#   · 表格的合并单元格（gridSpan / vMerge）—— 不补空位，整张表会错列
+#
+# 这几条都不会报错，只会让读出来的东西「看起来对、其实不是原文」。
+
+
+def _w(tag: str) -> str:
+    return _WORD + tag
+
+
+# 装内容的容器节点：段落/表格可能被包在内容控件(sdt)、自定义 XML 里
+_WRAP = ("sdtContent", "customXml", "smartTag", "ins", "moveTo")
+
+
+def _is_on(el: ET.Element) -> bool:
+    """OOXML 的开关属性：不写 val 就是开，`0/false/off` 才是关。"""
+    return (el.get(_w("val")) or "1").strip().lower() not in ("0", "false", "off")
+
+
+def _docx_styles(zf: zipfile.ZipFile, names: set[str]) -> dict[str, int]:
+    """styleId → 标题级别（0 是最高级）。只收「能确定是标题」的样式。
+
+    标题级别记在 styles.xml 的 `w:outlineLvl` 里，不在段落上 —— 只读段落的话
+    标题和正文长得一模一样，一份红头文件的层级就整个丢了。中文模板的样式名
+    有叫「标题 1」的，也有 styleId 直接是 "Heading1" 的，两种都认。
+    """
+    if "word/styles.xml" not in names:
+        return {}
+    try:
+        root = ET.fromstring(zf.read("word/styles.xml"))
+    except ET.ParseError:
+        return {}
+
+    out: dict[str, int] = {}
+    for st in root.iter(_w("style")):
+        sid = st.get(_w("styleId")) or ""
+        if not sid:
+            continue
+        lvl: int | None = None
+        ppr = st.find(_w("pPr"))
+        if ppr is not None:
+            ol = ppr.find(_w("outlineLvl"))
+            if ol is not None:
+                try:
+                    lvl = int(ol.get(_w("val")) or "")
+                except (TypeError, ValueError):
+                    lvl = None
+        if lvl is None:
+            nm = st.find(_w("name"))
+            label = (nm.get(_w("val")) if nm is not None else "") or ""
+            m = re.match(r"^(?:heading|标题)\s*([1-9])$", label.strip(), re.I) or re.match(
+                r"^heading\s*([1-9])$", sid, re.I
+            )
+            if m:
+                lvl = int(m.group(1)) - 1
+        if lvl is not None and 0 <= lvl <= 8:
+            out[sid] = lvl
+    return out
+
+
+def _outline_of(p: ET.Element, styles: dict[str, int]) -> int | None:
+    ppr = p.find(_w("pPr"))
+    if ppr is not None:
+        ol = ppr.find(_w("outlineLvl"))   # 段落上直接写了级别的优先
+        if ol is not None:
+            try:
+                return int(ol.get(_w("val")) or "")
+            except (TypeError, ValueError):
+                pass
+        ps = ppr.find(_w("pStyle"))
+        if ps is not None:
+            return styles.get(ps.get(_w("val")) or "")
+    return None
+
+
+def _run_hidden(r: ET.Element) -> bool:
+    rpr = r.find(_w("rPr"))
+    if rpr is None:
+        return False
+    v = rpr.find(_w("vanish"))
+    return v is not None and _is_on(v)
+
+
+def _para_hidden(p: ET.Element) -> bool:
+    ppr = p.find(_w("pPr"))
+    if ppr is not None:
+        rpr = ppr.find(_w("rPr"))
+        if rpr is not None:
+            v = rpr.find(_w("vanish"))
+            if v is not None and _is_on(v):
+                return True
+        ps = ppr.find(_w("pStyle"))
+        if ps is not None and (ps.get(_w("val")) or "").lower() in ("hidden", "隐藏"):
+            return True
+    return False
+
+
+def _docx_walk(node: ET.Element, parts: list[str], st: dict) -> None:
+    for ch in node:
+        tag = ch.tag
+        if tag in (_w("del"), _w("moveFrom")):
+            # 修订里「删掉的」旧内容。它还在文件里（为了能接受/拒绝修订），
+            # 但打印出来看不见 —— 读进来就是拿旧数字当新数字。
+            continue
+        if tag == _w("t"):
+            parts.append(ch.text or "")
+        elif tag == _w("tab"):
+            parts.append("\t")
+        elif tag in (_w("br"), _w("cr")):
+            parts.append("\n")
+        elif tag == _w("r"):
+            if _run_hidden(ch):
+                st["hidden"] += 1
+                continue
+            _docx_walk(ch, parts, st)
+        else:
+            _docx_walk(ch, parts, st)
+
+
+def _para_text(p: ET.Element, st: dict) -> str:
+    parts: list[str] = []
+    _docx_walk(p, parts, st)
+    t = "".join(parts).replace("\r", "").replace("\v", " ")
+    # 段内制表符是缩进，硬换行（Shift+Enter）是折行，都不是新段落。
+    # 统一折成空格：留着 \t 的话，材料进 TSV 那条路会多出一个假列。
+    t = re.sub(r"[ \t\u00a0]+", " ", t)
+    return t.replace("\n", " ").strip()
+
+
+def _docx_cell_text(tc: ET.Element, styles: dict[str, int], st: dict) -> str:
+    parts: list[str] = []
+    for ch in tc:
+        if ch.tag == _w("p"):
+            parts.append(_para_text(ch, st))
+        elif ch.tag == _w("tbl"):
+            # 表格套表格：内层每一行折成一行，否则外层这一格会把表撑成好几行
+            nested = _table_rows(ch, styles, st)
+            parts.append(" / ".join(" ".join(c for c in r if c) for r in nested))
+        elif ch.tag == _w("sdt"):
+            box = ch.find(_w("sdtContent"))
+            if box is not None:
+                parts.append(_docx_cell_text(box, styles, st))
+        elif ch.tag in (_w("sdtContent"), _w("customXml")):
+            parts.append(_docx_cell_text(ch, styles, st))
+    t = " ".join(x for x in parts if x)
+    return re.sub(r"[\t\r\n]+", " ", t).strip()
+
+
+def _table_rows(tbl: ET.Element, styles: dict[str, int], st: dict) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for tr in tbl.findall(_w("tr")):
+        row: list[str] = []
+        for tc in tr.findall(_w("tc")):
+            tpr = tc.find(_w("tcPr"))
+            span, cont = 1, False
+            if tpr is not None:
+                gs = tpr.find(_w("gridSpan"))
+                if gs is not None:
+                    try:
+                        span = max(1, min(64, int(gs.get(_w("val")) or 1)))
+                    except (TypeError, ValueError):
+                        span = 1
+                vm = tpr.find(_w("vMerge"))
+                # 纵向合并：续格的 val 是空（或 continue）。补空串占位，
+                # 不补的话续行会整体左移一列 —— 政务报表里最常见的就是这种表头。
+                cont = vm is not None and (vm.get(_w("val")) or "continue") != "restart"
+            row.append("" if cont else _docx_cell_text(tc, styles, st))
+            row.extend([""] * (span - 1))
+        rows.append(row)
+        st["table_rows"] += 1
+    return rows
+
+
+def _docx_blocks(container: ET.Element, styles: dict[str, int], lines: list[str], st: dict) -> None:
+    for ch in container:
+        tag = ch.tag
+        if tag == _w("p"):
+            if _para_hidden(ch):
+                st["hidden"] += 1
+                continue
+            txt = _para_text(ch, st)
+            if not txt:
+                # 空段落多是排版留白。连续多个折成一个，省额度但不丢分段。
+                if lines and lines[-1] != "":
+                    lines.append("")
+                continue
+            lvl = _outline_of(ch, styles)
+            lines.append(("#" * min(6, lvl + 1) + " " + txt) if lvl is not None else txt)
+            st["paras"] += 1
+        elif tag == _w("tbl"):
+            st["tables"] += 1
+            rows = _table_rows(ch, styles, st)
+            if rows:
+                if lines and lines[-1] != "":
+                    lines.append("")
+                for r in rows:
+                    lines.append("\t".join(r).rstrip("\t"))
+                lines.append("")
+        elif tag == _w("sdt"):
+            box = ch.find(_w("sdtContent"))
+            if box is not None:
+                _docx_blocks(box, styles, lines, st)
+        elif tag != _w("sectPr") and ch.tag.rsplit("}", 1)[-1] in _WRAP:
+            _docx_blocks(ch, styles, lines, st)
+
+
+def _parse_docx(zf: zipfile.ZipFile, names: set[str], limit: int) -> dict:
+    try:
+        root = ET.fromstring(zf.read("word/document.xml"))
+    except (KeyError, ET.ParseError):
+        return _err("bad_docx", "word/document.xml 读不出来，文件可能损坏")
+
+    body = root.find(_w("body"))
+    if body is None:
+        return _err("bad_docx", "文档里没有正文（word/document.xml 缺 body）")
+
+    st = {"paras": 0, "tables": 0, "table_rows": 0, "hidden": 0}
+    lines: list[str] = []
+    _docx_blocks(body, _docx_styles(zf, names), lines, st)
+
+    images = sum(1 for _ in body.iter(_w("drawing"))) + sum(1 for _ in body.iter(_w("pict")))
+    text = "\n".join(lines).strip("\n")
+    truncated = False
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "\n…（已截断）"
+        truncated = True
+
+    if not text.strip():
+        # 空文档要分成两种情况说：整份都是图片（扫描件）、真的没写东西。
+        # 混成一句「没有文字」，用户不知道该去截图还是该去改文件。
+        if images:
+            return _err(
+                "no_text",
+                f"这份文档里没有文字，只有 {images} 张图片 —— 图片要 OCR，本机没有",
+            )
+        return _err("no_text", "这份文档里没有文字")
+
+    notes: list[str] = []
+    if truncated:
+        notes.append("内容超过额度，后面的段落没有读入")
+    if st["tables"]:
+        notes.append(f"含 {st['tables']} 个表格，按制表符一行一行列出")
+    if images:
+        notes.append(f"{images} 张图片没有读入（没有 OCR）")
+    if st["hidden"]:
+        notes.append(f"跳过 {st['hidden']} 处隐藏文字（Word 里看不见的不当正文）")
+
+    return {
+        "ok": True,
+        "kind": "docx",
+        "text": text,
+        "chars": len(text),
+        "truncated": truncated,
+        "paras": st["paras"],
+        "tables": st["tables"],
+        "rows": st["table_rows"],
+        "images": images,
+        "note": "；".join(notes),
+    }
+
+
+def _parse_zip(data: bytes, limit: int) -> dict:
     try:
         zf = zipfile.ZipFile(io.BytesIO(data))
     except zipfile.BadZipFile:
-        return _err("bad_zip", "文件损坏，或者不是 xlsx（zip 打不开）")
+        return _err("bad_zip", "文件损坏，或者不是 Office 文件（zip 打不开）")
 
     with zf:
         bad = _guard(zf)
         if bad:
             return bad
         names = set(zf.namelist())
-        if "xl/workbook.xml" not in names:
-            return _err("not_xlsx", "包里没有 xl/workbook.xml —— 这不是 Excel 文件")
-
-        sheets, date1904 = _sheet_paths(zf, names)
-        if not sheets:
-            return _err("no_sheet", "工作簿里没有工作表")
-        sst = _shared_strings(zf, names)
-        xfs = _cell_formats(zf, names)
-
-        blocks: list[str] = []
-        meta: list[dict] = []
-        used = 0
-        truncated = False
-        total_rows = 0
-        merge_hits: list[str] = []
-        blank_formula = 0
-
-        for name, path in sheets:
-            got = _sheet_rows(zf, path, sst, xfs, date1904)
-            if got is None:
-                continue
-            rows, maxcol, merges, blanks = got
-            blank_formula += blanks
-            if not rows:
-                meta.append({"name": name, "rows": 0, "cols": 0})
-                continue
-            if merges:
-                merge_hits.append(f"{name}（{len(merges)} 处）")
-            total_rows += len(rows)
-            body: list[str] = []
-            for r in rows:
-                if not r:
-                    body.append("")
-                    continue
-                last = max(r)
-                body.append("\t".join(r.get(i, "") for i in range(1, last + 1)))
-            chunk = f"## {name}\n" + "\n".join(body)
-            if used + len(chunk) > limit:
-                room = limit - used
-                if room > 40:
-                    blocks.append(chunk[:room] + "\n…（已截断）")
-                    used = limit
-                truncated = True
-                meta.append({"name": name, "rows": len(rows), "cols": maxcol})
-                break
-            blocks.append(chunk)
-            used += len(chunk) + 1
-            meta.append({"name": name, "rows": len(rows), "cols": maxcol})
-
-        text = "\n".join(blocks)
-        notes: list[str] = []
-        if truncated:
-            notes.append("内容超过额度，后面的表和行没有读入")
-        if merge_hits:
-            notes.append("有合并单元格（" + "、".join(merge_hits) + "），合并区只保留左上角的值")
-        if blank_formula:
-            notes.append(f"{blank_formula} 个公式格没有计算结果")
-        return {
-            "ok": True,
-            "text": text,
-            "chars": len(text),
-            "truncated": truncated,
-            "sheets": meta,
-            "rows": total_rows,
-            "note": "；".join(notes),
-        }
+        # 不看扩展名，看包里有没有那个部件 —— 有人把 .docx 改名成 .zip 发过来，
+        # 也有人把 .xlsx 直接改后缀叫 .docx。扩展名是猜的，包结构不是。
+        if "xl/workbook.xml" in names:
+            return _parse_xlsx(zf, names, limit)
+        if "word/document.xml" in names:
+            return _parse_docx(zf, names, limit)
+        if "ppt/presentation.xml" in names:
+            return _err("pptx", "PPT 还没接（先把要用的几页复制到 Word 或存成 PDF 截图）")
+        return _err("not_office", "这是个 zip 包，但里面没有 Excel / Word 的正文部件")
 
 
 def parse_book(data: bytes, name: str = "", limit: int = 12000) -> dict:
@@ -446,8 +728,17 @@ def parse_book(data: bytes, name: str = "", limit: int = 12000) -> dict:
         return _err("empty", "文件是空的")
     head = data[:8]
     if head[:2] == b"PK":
-        return _parse_xlsx(data, limit)
+        return _parse_zip(data, limit)
     if head == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+        # OLE2 是老 Office 的容器，也是「加了密码的新版 Office」的容器。
+        # 两种都读不了，但出路不同，按扩展名把话说准。
+        low = (name or "").lower()
+        if low.endswith(".doc"):
+            return _err(
+                "ole2",
+                "这是旧版 Word（.doc）或者加了密码的文件，都不支持 —— "
+                "用 Word / WPS 另存为 .docx 并去掉密码再来",
+            )
         return _err(
             "ole2",
             "这是 .xls（旧版 Excel）或者加了密码的文件，都不支持 —— "
@@ -455,4 +746,4 @@ def parse_book(data: bytes, name: str = "", limit: int = 12000) -> dict:
         )
     if head[:4] == b"%PDF":
         return _err("pdf", "PDF 还没接（要解析库，且排版格式取出的表格容易错行）")
-    return _err("unknown", "认不出这个格式（文件头不是 zip，也不是 Excel / PDF）")
+    return _err("unknown", "认不出这个格式（文件头不是 zip，也不是 Office / PDF）")

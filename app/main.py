@@ -368,7 +368,7 @@ class Handler(BaseHTTPRequestHandler):
     def _parse_attachments(self, body: dict) -> None:
         """把上传的 Office 文件转成纯文本，交回前端走原有的材料通道。
 
-        为什么在服务端做：xlsx 是 zip + XML，前端要写一遍解压和数字格式渲染，
+        为什么在服务端做：xlsx / docx 都是 zip + XML，前端要写一遍解压和格式还原，
         服务端再写一遍 —— 两份实现迟早跑偏，而且是「一边读出 7.2%、另一边读出
         0.072」这种最难发现的跑偏。这里只留一份。
 
@@ -425,11 +425,14 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "name": name,
                     "ok": True,
+                    "kind": out.get("kind") or "",
                     "text": out["text"],
                     "chars": out["chars"],
                     "truncated": out["truncated"],
                     "sheets": out.get("sheets") or [],
                     "rows": out.get("rows") or 0,
+                    "paras": out.get("paras") or 0,
+                    "tables": out.get("tables") or 0,
                     "note": out.get("note") or "",
                 }
             )
