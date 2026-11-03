@@ -1190,7 +1190,8 @@ def test_attach_entry() -> None:
     print("\n[17.5] 附件")
     html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
     check("输入区有附件按钮与文件选择", 'id="attachBtn"' in html and 'id="attachInput"' in html, "")
-    check("附件只收纯文本白名单", "const TEXT_EXT" in html and '".pdf": "PDF 要解析库"' in html, "")
+    check("附件只收白名单并有拒绝理由", "const TEXT_EXT" in html and '".pdf": "PDF 要解析库' in html, "")
+    check("xlsx 走服务端解析", "const BOOK_EXT" in html and "/api/attachments/parse" in html, "")
     check("不再有「附件没接进问数」的拦门", "附件还没接进问数" not in html, "")
     check("前端没有偷偷上传", "FormData" not in html, "")
     check("读文件走 FileReader", "readAsArrayBuffer" in html, "")
@@ -1324,6 +1325,80 @@ def test_attach_entry() -> None:
         "function historyView(" in html and "b.__m = aiMsgs[i] ? historyView(" in html,
         "挂原始消息会让刷新后的导出变成『完整但空』",
     )
+
+
+def test_book_parse() -> None:
+    """xlsx 解析：要的是「人在 Excel 里看到的那个字」，不是单元格里的存储值。
+
+    这一节最要紧的不是「能读出文字」，而是「7.2% 读出来还是 7.2%，不是 0.072」。
+    读成 0.072 的话，材料对照的原文核验会判「材料里没有这个数」，对照块静默
+    不出现 —— 功能看着没坏，其实坏了，而且一句报错都没有。
+
+    夹具 tests/fixtures/sample.xlsx 是用真 Excel 存的，不是手搓的 XML：
+    手搓的样本只能证明「我的解析器认我自己写的东西」。
+    """
+    print("\n[17.6] Excel 解析")
+    import docparse  # noqa: E402
+
+    fx = ROOT / "tests" / "fixtures" / "sample.xlsx"
+    check("有 xlsx 测试夹具", fx.exists(), str(fx))
+    if not fx.exists():
+        return
+    r = docparse.parse_book(fx.read_bytes(), "sample.xlsx")
+    check("能解析 xlsx", r.get("ok") is True, str(r.get("error"))[:60])
+    text = r.get("text") or ""
+
+    # 显示值 vs 存储值 —— 整个解析器存在的理由
+    check("百分比读出 5.6% 而不是 0.056", "5.6%" in text and "0.056" not in text, text[:70])
+    check("负数小数不被当成日期", "-3.25" in text, "")
+    check("千分位按 Excel 的显示保留", "1,234.5" in text, "")
+    check("日期从序列号还原成日期", "2026-09-30" in text and "46295" not in text, "")
+    check("第二个工作表也被读到", "## 主要指标" in text and "## 说明" in text, "")
+    check("合并单元格保留左上角标题", "2026年9月主要经济指标" in text, "")
+    check(
+        "工作表元信息可用于芯片提示",
+        (r.get("sheets") or [{}])[0].get("name") == "主要指标",
+        str(r.get("sheets"))[:80],
+    )
+    check("合并单元格要在 note 里说明", "合并单元格" in (r.get("note") or ""), r.get("note") or "")
+
+    # 认不出就明说，不猜
+    ole2 = docparse.parse_book(bytes.fromhex("d0cf11e0a1b11ae1") + b"0" * 64)
+    check(
+        ".xls 明确拒绝并指出出路",
+        ole2.get("code") == "ole2" and "另存为" in (ole2.get("error") or ""),
+        "",
+    )
+    check("PDF 明确拒绝", docparse.parse_book(b"%PDF-1.7\n").get("code") == "pdf", "")
+    check("认不出的字节流不瞎猜", docparse.parse_book(b"hello world").get("code") == "unknown", "")
+    check("空文件单独报错", docparse.parse_book(b"").get("code") == "empty", "")
+
+    # 渲染规则单测：这些来自 ECMA-376，不是「我实现的」
+    check("0.072 + 0.00% 显示为 7.20%", docparse._render_number("0.072", "0.00%", False) == "7.20%", "")
+    check(
+        "General 不留浮点尾巴",
+        docparse._render_number("0.30000000000000004", None, False) == "0.3",
+        "",
+    )
+    check("序列号 1 是 1900-01-01", docparse._render_number("1", "yyyy-mm-dd", False) == "1900-01-01", "")
+    check(
+        "序列号 46329 是 2026-11-03",
+        docparse._render_number("46329", "yyyy-mm-dd", False) == "2026-11-03",
+        docparse._render_number("46329", "yyyy-mm-dd", False),
+    )
+
+    # 接口与限额
+    import main as web_main  # noqa: E402
+
+    check("解析接口有独立的体积上限", web_main._MAX_UPLOAD_BODY > web_main._MAX_JSON_BODY, "")
+    check("单文件上限小于请求体上限", web_main._MAX_UPLOAD_FILE < web_main._MAX_UPLOAD_BODY, "")
+    src = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+    check("解析接口注册在位", '"/api/attachments/parse"' in src, "")
+    check("上传走 base64", "b64decode" in src, "")
+
+    # 解析产物要能被现有材料通道吃下（字段形状和额度都得对）
+    got = web_main._attachments({"attachments": [{"name": "sample.xlsx", "text": text}]})
+    check("解析结果能进材料通道", len(got) == 1 and got[0]["chars"] == len(text), str(got)[:60])
 
 
 def test_frontend_theme() -> None:
@@ -2429,6 +2504,7 @@ def main() -> int:
     test_saved()
     test_meetplan()
     test_attach_entry()
+    test_book_parse()
     test_frontend_theme()
     test_frontend_sidebar()
     test_frontend_thread_switch()

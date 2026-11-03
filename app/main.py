@@ -20,6 +20,7 @@ HTTP 层只管三件事：校验入参、调 core、把异常映射成状态码�
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -80,6 +81,7 @@ sys.path.insert(0, str(CORE / "oversight"))
 
 import ask as ask_mod  # noqa: E402
 import chat  # noqa: E402
+import docparse  # noqa: E402
 import extract as meeting_extract  # noqa: E402
 import ledger as meetings  # noqa: E402
 import llm  # noqa: E402
@@ -227,6 +229,20 @@ _MAX_ATT_FILES = 5
 _MAX_ATT_EACH = 12000      # 单份材料最多带多少字
 _MAX_ATT_TOTAL = 30000     # 合计上限，超了就不再收
 
+# 请求体上限。分两档：普通 JSON 和文件上传（base64 比原始字节胖约 33%）。
+_MAX_JSON_BODY = 4 * 1024 * 1024
+_MAX_UPLOAD_BODY = 16 * 1024 * 1024
+_MAX_UPLOAD_FILE = 9 * 1024 * 1024     # 单个文件解码后的大小
+_DRAIN_MAX = 24 * 1024 * 1024          # 超限时最多还愿意读掉多少字节再回 413
+
+
+class _TooBig(Exception):
+    """请求体超过上限。"""
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        super().__init__(f"body 超过 {limit} 字节")
+
 
 def _attachments(body: dict) -> list[dict]:
     """校验并裁剪前端送来的参考材料。
@@ -292,8 +308,23 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _body(self) -> dict:
-        length = int(self.headers.get("Content-Length") or 0)
+    def _body(self, max_bytes: int = _MAX_JSON_BODY) -> dict:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            length = 0
+        if length > max_bytes:
+            # 超限但不算离谱：把 body 读完再回 413。不读就关连接，Windows 会给
+            # 对端发 RST，浏览器那边看到的是「连接被重置」而不是一句人话。
+            # 真离谱的（几十上百 MB）不替它读，直接断。
+            if length <= _DRAIN_MAX:
+                try:
+                    self.rfile.read(length)
+                except OSError:
+                    pass
+            else:
+                self.close_connection = True
+            raise _TooBig(max_bytes)
         raw = self.rfile.read(length) if length else b"{}"
         try:
             data = json.loads(raw.decode("utf-8") or "{}")
@@ -333,6 +364,76 @@ class Handler(BaseHTTPRequestHandler):
 
     def _delete_ok(self, ok: bool, **extra) -> None:
         self._json({"ok": ok, **extra})
+
+    def _parse_attachments(self, body: dict) -> None:
+        """把上传的 Office 文件转成纯文本，交回前端走原有的材料通道。
+
+        为什么在服务端做：xlsx 是 zip + XML，前端要写一遍解压和数字格式渲染，
+        服务端再写一遍 —— 两份实现迟早跑偏，而且是「一边读出 7.2%、另一边读出
+        0.072」这种最难发现的跑偏。这里只留一份。
+
+        返回的是**文本**，不是答案：前端拿到之后和读本地 txt 的结果走同一条路，
+        额度截断、进 planner、材料对照都不用改。
+        """
+        raw = body.get("files")
+        if not isinstance(raw, list):
+            one = {"name": body.get("name"), "data": body.get("data")}
+            raw = [one] if body.get("data") else []
+        if not raw:
+            return self._json({"ok": False, "error": "no_file"}, 400)
+        if len(raw) > _MAX_ATT_FILES:
+            return self._json(
+                {"ok": False, "error": "too_many_files", "limit": _MAX_ATT_FILES}, 400
+            )
+
+        items: list[dict] = []
+        for it in raw[:_MAX_ATT_FILES]:
+            if not isinstance(it, dict):
+                continue
+            name = str(it.get("name") or "未命名").strip()[:120] or "未命名"
+            b64 = it.get("data")
+            if not isinstance(b64, str) or not b64.strip():
+                items.append({"name": name, "ok": False, "error": "文件是空的"})
+                continue
+            # base64 比原始字节胖约 4/3，超长的不解码，省一次大内存分配
+            if len(b64) > _MAX_UPLOAD_FILE * 4 // 3 + 4096:
+                items.append({"name": name, "ok": False, "error": "文件超过 9MB"})
+                continue
+            try:
+                blob = base64.b64decode(b64, validate=False)
+            except (ValueError, TypeError):
+                items.append(
+                    {"name": name, "ok": False, "error": "base64 解不开，文件可能在传输中损坏"}
+                )
+                continue
+            if len(blob) > _MAX_UPLOAD_FILE:
+                items.append({"name": name, "ok": False, "error": "文件超过 9MB"})
+                continue
+
+            out = docparse.parse_book(blob, name, limit=_MAX_ATT_EACH)
+            if not out.get("ok"):
+                items.append(
+                    {
+                        "name": name,
+                        "ok": False,
+                        "error": out.get("error") or "解析失败",
+                        "code": out.get("code") or "",
+                    }
+                )
+                continue
+            items.append(
+                {
+                    "name": name,
+                    "ok": True,
+                    "text": out["text"],
+                    "chars": out["chars"],
+                    "truncated": out["truncated"],
+                    "sheets": out.get("sheets") or [],
+                    "rows": out.get("rows") or 0,
+                    "note": out.get("note") or "",
+                }
+            )
+        self._json({"ok": True, "items": items})
 
     # ---------------- GET ----------------
     def do_GET(self) -> None:
@@ -571,9 +672,18 @@ class Handler(BaseHTTPRequestHandler):
     # ---------------- POST ----------------
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        body = self._body()
+        limit = _MAX_UPLOAD_BODY if path == "/api/attachments/parse" else _MAX_JSON_BODY
+        try:
+            body = self._body(limit)
+        except _TooBig as exc:
+            return self._json(
+                {"ok": False, "error": "body_too_large", "limit": exc.limit}, 413
+            )
 
         try:
+            if path == "/api/attachments/parse":
+                return self._parse_attachments(body)
+
             if path == "/api/ask":
                 return self._ask(body)
 

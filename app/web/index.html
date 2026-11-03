@@ -7587,19 +7587,23 @@ $("#tmClose").onclick = () => $("#themeModal").classList.remove("on");
 $("#themeModal").onclick = (e) => { if (e.target.id === "themeModal") $("#themeModal").classList.remove("on"); };
 
 /* ---------- 附件入口 ----------
-   选纯文本 → 浏览器 `FileReader` 读成字符串 → 随提问塞进 JSON 发给后端。
-   不走上传接口：这个后端自己写的 HTTP 层只解 JSON、没有 multipart，而几万字
-   的文本直接进 body 完全扛得住，不必为此引一个上传服务。
+   纯文本 → 浏览器 `FileReader` 读成字符串；`.xlsx` → POST 给后端解析成文本。
+   两条路终点相同（都是一个 text），后面的额度截断、进 planner、材料对照不用分叉。
+
+   不走 multipart：后端自己写的 HTTP 层只解 JSON，几万字的文本直接进 body 完全
+   扛得住，不必为此引一个上传服务。
 
    **边界**：附件是「参考材料」，不是数据源。planner 靠它理解「按这份材料的
    口径」「这里面说的那个」指什么；答案里的数字仍然只来自指标接口。材料里的
    数字不进取数链路 —— 否则「每个数都能追到出处」这条底线就断了。
-   格式限纯文本：PDF/Word/Excel 要解析库，图片要 OCR，都不是加个按钮的事。 */
+   PDF / Word 仍要解析库，图片要 OCR，都还没做，选择时明确拒绝并说明原因。 */
 const ATT = { files: [], MAX: 5, MAX_CHARS: 12000, MAX_TOTAL: 30000 };
 const TEXT_EXT = [".txt", ".md", ".csv", ".tsv", ".json", ".log", ".yaml", ".yml", ".xml"];
+// 走服务端解析的格式（zip + XML，要还原「显示值」，不能当纯文本读）
+const BOOK_EXT = [".xlsx"];
 const EXT_WHY = {
-  ".pdf": "PDF 要解析库", ".doc": "Word 要解析库", ".docx": "Word 要解析库",
-  ".xls": "Excel 要解析库", ".xlsx": "Excel 要解析库",
+  ".pdf": "PDF 要解析库，还没接", ".doc": "Word 还没接，先另存为 .docx 或 txt",
+  ".docx": "Word 还没接，先另存为 txt", ".xls": "旧版 Excel（.xls）请另存为 .xlsx",
   ".ppt": "PPT 要解析库", ".pptx": "PPT 要解析库",
   ".png": "图片要 OCR", ".jpg": "图片要 OCR", ".jpeg": "图片要 OCR",
 };
@@ -7627,11 +7631,16 @@ function renderAttach() {
     let meta = sizeText(f.size);
     let cls = "";
     if (f.state === "reading") { meta = "读取中…"; cls = " wait"; }
-    else if (f.state === "ok") { meta = charText(f.chars) + (f.cut ? " · 已截断" : ""); }
+    else if (f.state === "ok") {
+      meta = charText(f.chars) + (f.cut ? " · 已截断" : "");
+      // 表格型附件报行数：只说「6.2k 字」看不出表有多长、读到第几行被截了
+      if (f.rows) meta = `${f.rows} 行 · ` + meta;
+    }
     else if (f.state === "empty") { meta = "没有文字"; cls = " bad"; }
     else if (f.state === "error") { meta = f.err || "读取失败"; cls = " bad"; }
+    const tip = [f.name, f.note].filter(Boolean).join("\n");
     return `<span class="att-chip${cls}">
-      <span class="nm" title="${esc(f.name)}">${esc(f.name)}</span>
+      <span class="nm" title="${esc(tip)}">${esc(f.name)}</span>
       <span class="sz">${esc(meta)}</span>
       <span class="x" data-attrm="${i}" role="button" title="移除">✕</span>
     </span>`;
@@ -7674,6 +7683,53 @@ function readOne(file, rec, cap) {
   r.readAsArrayBuffer(file);
 }
 
+/* xlsx 交给后端解析，两个理由：
+   ① 浏览器里也要写一遍 zip 解压 + 数字格式还原，和 Python 那份必然跑偏；
+   ② 更要命的是「存的值」和「看到的值」不是一回事 —— xlsx 里 7.2% 存的是 0.072，
+      日期存的是序列号 45292。前端少还原一步，材料对照的原文核验就会静默失效
+      （材料里写 7.2，我们手上是 0.072，闸判「材料里没这个数」，对照块不出现）。 */
+function b64Of(buf) {
+  const bytes = new Uint8Array(buf);
+  let s = "";
+  const CH = 0x8000;                 // 分块 apply，一次塞整个大数组会爆栈
+  for (let i = 0; i < bytes.length; i += CH) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  }
+  return btoa(s);
+}
+
+function readBook(file, rec, cap) {
+  const fr = new FileReader();
+  fr.onload = async () => {
+    try {
+      const res = await fetch("/api/attachments/parse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: [{ name: file.name, data: b64Of(fr.result) }] }),
+      });
+      const js = await res.json().catch(() => ({}));
+      if (!res.ok || js.ok === false) throw new Error(js.error || `HTTP ${res.status}`);
+      const it = (js.items || [])[0] || {};
+      if (!it.ok) throw new Error(it.error || "解析失败");
+      let t = String(it.text || "");
+      if (t.length > cap) { t = t.slice(0, cap); rec.cut = true; }
+      if (it.truncated) rec.cut = true;
+      rec.text = t;
+      rec.chars = t.length;
+      rec.rows = it.rows || 0;
+      rec.sheets = (it.sheets || []).length;
+      rec.note = it.note || "";
+      rec.state = t.trim() ? "ok" : "empty";
+    } catch (e) {
+      rec.state = "error";
+      rec.err = (e && e.message) || "解析失败";
+    }
+    renderAttach();
+  };
+  fr.onerror = () => { rec.state = "error"; rec.err = "读取失败"; renderAttach(); };
+  fr.readAsArrayBuffer(file);
+}
+
 function addAttach(list) {
   let refused = "";
   for (const f of list) {
@@ -7682,17 +7738,22 @@ function addAttach(list) {
     const ext = lower.slice(lower.lastIndexOf("."));
     // 同一个文件重复选不重复列：芯片上分不出两条一模一样的名字
     if (ATT.files.some((x) => x.name === f.name && x.size === f.size)) continue;
-    if (!TEXT_EXT.includes(ext) && !(f.type || "").startsWith("text/")) {
-      refused = EXT_WHY[ext] || "只支持纯文本类文件（txt / md / csv / json）";
+    const isBook = BOOK_EXT.includes(ext);
+    if (!isBook && !TEXT_EXT.includes(ext) && !(f.type || "").startsWith("text/")) {
+      refused = EXT_WHY[ext] || "只支持纯文本（txt / md / csv / json）和 .xlsx";
       continue;
     }
+    // 二进制文件先按体积挡：等传到后端再被拒，用户白等几十秒
+    if (isBook && f.size > 9 * 1024 * 1024) { refused = "文件超过 9MB"; continue; }
     // 总量配额按已读到的字算，所以多个文件时后面那个会被截得更短 ——
     // 与其让第二个文件悄悄挤掉第一个，不如当场截断并在芯片上写明
     const room = Math.max(0, ATT.MAX_TOTAL - attUsed());
     if (!room) { refused = `附件合计最多 ${Math.round(ATT.MAX_TOTAL / 1000)}k 字`; break; }
     const rec = { name: f.name, size: f.size, text: "", chars: 0, state: "reading", cut: false };
     ATT.files.push(rec);
-    readOne(f, rec, Math.min(ATT.MAX_CHARS, room));
+    const cap = Math.min(ATT.MAX_CHARS, room);
+    if (isBook) readBook(f, rec, cap);
+    else readOne(f, rec, cap);
   }
   renderAttach();
   if (refused) toast(`没加进去：${refused}`);
