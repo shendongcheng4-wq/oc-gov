@@ -1,0 +1,5 @@
+id: demo-time
+version: 0.1.0
+name: 演示·当前时间
+description: 示例工具插件：问「现在几点」时返回当前日期时间。
+entry: main.py

@@ -14,8 +14,9 @@ run.cmd              :: http://127.0.0.1:8090
 run.cmd 8091         :: 换端口
 ```
 
-- 零第三方依赖，标准库即可跑（Python 3.11+）
+- 核心零第三方依赖，标准库即可跑（Python 3.11+）
 - 跨会话记忆是**可选增强**：装了 `octop-memory`（`pip install octop-memory`）才启用，会记住领导长期关注的指标/维度/主题，开新会话时作为背景喂给模型；不装则静默降级，其余功能不受影响
+- 插件引擎是**可选增强**：装了 `octop-harness`（`pip install octop-harness`）才启用，问数/知识库/资料库都没命中时用 octop 的 HarnessAgent（含插件工具）兜底回答；不装则静默降级，其余功能不受影响。插件放 `plugins/` 目录，按 octop 的 `plugin.yaml` + `setup(ctx)` 约定写
 - 模型：点右上角模型胶囊配置（或访问 `/#models`），支持多服务商多模型、一键测连通性。**不配也能跑**：问数退回规则解析，罗盘和预警不受影响
 - 首次启动从 `config/local.env` 自动导入一条 provider；没有该文件就从空配置开始，在页面里加
 - 首次启动自动生成 8 条示例督办台账到 `data/oversight-state.json`；删掉该文件重启即回到基线
@@ -84,6 +85,7 @@ oc-gov/
 │   ├── briefdoc.py            材料助手：按骨架装配公文（指标带出处、事项带台账号）
 │   ├── knowledge.py           知识库：口径/事项/会议原文的零依赖检索（bigram + 术语加权）
 │   ├── rag.py                 资料库：通用文档检索（上传文档→切块→SQLite 向量索引，可选 ONNX 向量化+bigram 降级）
+│   ├── harness.py             插件引擎（可选）：封装 octop_harness，问数没命中时兜底；没装则降级
 │   ├── meetplan.py            对话里约会议：一句话 → 待确认的会议草稿（时间/单位/撞车）
 │   ├── notify.py              消息提醒：规则表 + 跨天去重 + 外发闸门（企微 webhook / SMTP）
 │   ├── metrics/
@@ -99,6 +101,8 @@ oc-gov/
 ├── config/notify.example.json 推送通道配置模板（真实配置是 notify.json，已 gitignore）
 ├── data/                      运行时状态：models.json / chats.json / meetings.json /
 │                              oversight-state.json / workspaces.json / notify.json（已 gitignore）
+├── plugins/                   插件目录（可选 octop-harness 引擎用），每个子目录一个插件
+│   └── demo-time/             示例插件：plugin.yaml + main.py（setup(ctx) 注册工具）
 └── tests/smoke.py             冒烟测试
 ```
 

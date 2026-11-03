@@ -98,6 +98,48 @@ import knowledge as knowledge_mod  # noqa: E402
 import experts as expert_mod  # noqa: E402
 import meetplan as meetplan_mod  # noqa: E402
 import rag as rag_mod  # noqa: E402
+import harness as harness_mod  # noqa: E402
+
+
+def _harness_fallback(question: str, result: dict) -> dict | None:
+    """问数/知识库/资料库都没命中（refused）时，用 octop_harness 引擎兜底。
+
+    只在装了 octop_harness 时才走这条路；没装或调用失败都返回 None，让上层
+    保持原拒答结果不变。HarnessAgent 是异步的，这里用 asyncio.run 在请求线程
+    里起一个独立事件循环跑（ThreadingHTTPServer 每请求一线程，互不干扰）。
+    """
+    if not result.get("refused"):
+        return None
+    if not harness_mod.available():
+        return None
+    try:
+        import asyncio
+        ans = asyncio.run(harness_mod.ask(question))
+    except Exception:  # noqa: BLE001 —— 引擎兜底失败绝不打断主链路
+        return None
+    if not ans or not ans.get("text"):
+        return None
+    return {
+        "refused": False,
+        "question": question,
+        "planner": "harness",
+        "intent": "harness",
+        "headline": ans["text"],
+        "harness": {
+            "plugin_count": ans.get("plugin_count", 0),
+        },
+        "sources": [],
+        "notes": [],
+        "trace": [
+            {
+                "step": len(result.get("trace") or []) + 1,
+                "tool": "harness.ask",
+                "call": f"HarnessAgent.call({question!r})",
+                "status": "ok",
+                "summary": "octop_harness 引擎兜底回答",
+            }
+        ],
+    }
 
 
 def request_cancel(turn_id: str) -> None:
@@ -460,9 +502,13 @@ class Handler(BaseHTTPRequestHandler):
                         "metrics": wb.overview()["metric_count"],
                         "planner": llm.llm_info(),
                         "model_ready": modelcfg.available(),
+                        "harness": harness_mod.status(),
                         "mock": True,
                     }
                 )
+
+            if path == "/api/plugins":
+                return self._json({"ok": True, **harness_mod.status()})
 
             if path == "/api/overview":
                 return self._json({"ok": True, **wb.overview()})
@@ -1329,6 +1375,7 @@ class Handler(BaseHTTPRequestHandler):
                 "suggestions": (result.get("suggestions") or [])[:12],
                 "knowledge": knowledge_mod.to_meta(result.get("knowledge")),
                 "rag": result.get("rag") or [],
+                "harness": result.get("harness") or {},
                 "expert_views": views,
                 # 建会草稿要跟着落库：回放时要能重新画出那张卡（含当时的假设与缺项），
                 # 只留一句 headline 的话，用户回看时不知道自己当时确认了什么
@@ -1362,6 +1409,11 @@ class Handler(BaseHTTPRequestHandler):
             known_metrics=chat.known_metrics(thread["id"]),
             attachments=atts,
         )
+        # 问数/知识库/资料库都没命中时，用 octop_harness 引擎（含插件工具）兜底。
+        # 只在装了 harness 且结果 refused 时才走，否则保持原结果不变。
+        fb = _harness_fallback(question, result)
+        if fb is not None:
+            result = fb
         result["planner_info"] = llm.llm_info()
         # 本轮上下文的裁剪统计。前端在用量行里写出来，让「它怎么把刚才的忘了」
         # 有一个可核对的解释，而不是让人怀疑系统不稳定。
@@ -1446,6 +1498,10 @@ class Handler(BaseHTTPRequestHandler):
                 attachments=atts,
                 should_stop=lambda: cancel_requested(turn_id),
             )
+            # 问数/知识库/资料库都没命中时，用 octop_harness 引擎兜底（同 _ask）
+            fb = _harness_fallback(question, result)
+            if fb is not None:
+                result = fb
             result["planner_info"] = llm.llm_info()
             # 本轮上下文的裁剪统计。前端在用量行里写出来，让「它怎么把刚才的忘了」
             # 有一个可核对的解释，而不是让人怀疑系统不稳定。

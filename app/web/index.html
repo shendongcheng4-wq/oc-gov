@@ -4035,7 +4035,7 @@ function renderUsageFoot() {
   el.title = THREAD_TOKENS ? "本会话所有轮次的模型用量合计（含失败调用）" : "";
 }
 
-const INTENT_CN = { value: "取值", trend: "走势", breakdown: "分解", compare: "对比", definition: "口径", knowledge: "依据", meet: "约会议", rag: "资料" };
+const INTENT_CN = { value: "取值", trend: "走势", breakdown: "分解", compare: "对比", definition: "口径", knowledge: "依据", meet: "约会议", rag: "资料", harness: "插件" };
 function intentLabel(i) { return INTENT_CN[i] || i || "—"; }
 
 /* 后端给的错误码 → 人话。原样抛 "empty_question" 等于没解释。 */
@@ -4116,6 +4116,8 @@ function historyView(m, threadId) {
     knowledge: meta.knowledge || [],
     // 资料库片段同理：从政策文件召回的那段原文，刷新后不能凭空消失
     rag: meta.rag || [],
+    // 插件引擎兜底的回答标记同理：刷新后不能看起来像普通回答
+    harness: meta.harness || {},
     // 建会草稿同理：回放要能看出当时解析成了什么、哪些字段是推定的。
     // 已经建过会的，后端 annotate 会补上 meeting_id，卡片自动变成「已建会」。
     meet_draft: meta.meet_draft || null,

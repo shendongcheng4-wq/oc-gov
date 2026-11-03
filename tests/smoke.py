@@ -1758,6 +1758,31 @@ def test_rag() -> None:
     rag.delete_base(base2["id"])
 
 
+def test_harness() -> None:
+    """可选 octop_harness 引擎：没装时静默降级，装了能查状态、能加载插件。
+
+    不依赖 octop_harness 是否真的装了——本测试只断言「降级路径存在」和
+    「状态接口结构正确」，真装环境的端到端在外部脚本里单独验证。
+    """
+    print("\n[21] 插件引擎（可选 octop_harness）")
+    import harness
+
+    check("harness 模块可导入", hasattr(harness, "available"), "")
+    st = harness.status()
+    check("status 返回结构完整", all(k in st for k in ("available", "plugins", "plugins_dir")), str(st))
+    check("plugins_dir 指向项目 plugins 目录", str(st.get("plugins_dir", "")).endswith("plugins"), str(st.get("plugins_dir")))
+    # 没装 octop_harness 时 available 应为 False 且不抛异常
+    check("available 返回布尔", isinstance(harness.available(), bool), "")
+    if not harness.available():
+        check("未装时 import_error 非空", bool(harness.import_error()), "")
+
+    # plugins 目录下的示例插件（demo-time）应能被识别为插件目录
+    pdir = harness.plugins_dir()
+    if pdir.is_dir():
+        has_demo = (pdir / "demo-time" / "plugin.yaml").is_file()
+        check("示例插件 demo-time 存在 plugin.yaml", has_demo, "")
+
+
 def test_frontend_theme() -> None:
     """前端主题的静态约定。
 
@@ -2865,6 +2890,7 @@ def main() -> int:
     test_book_parse()
     test_docx_parse()
     test_rag()
+    test_harness()
     test_frontend_theme()
     test_frontend_sidebar()
     test_frontend_thread_switch()
