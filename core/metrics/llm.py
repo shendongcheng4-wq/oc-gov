@@ -80,19 +80,31 @@ def plan(
     history: list[dict[str, str]] | None = None,
     model_ref: str | None = None,
     timeout: float = 30.0,
+    known_metrics: list[str] | None = None,
 ) -> dict[str, object]:
     """调用模型得到查询计划。失败时抛异常，由调用方退回规则解析。"""
     conn = modelcfg.resolve(model_ref)
     if conn is None:
         raise RuntimeError("no_model_configured")
 
-    # 历史只带最近 8 条（约 4 轮）。再多对意图解析没有边际收益，只是白烧 token。
+    # 历史条数由 core/chat.context 按 token 预算裁好，这里不再二次截断 ——
+    # 原来写死 [-8:] 等于把上层的预算算完又砍回 4 轮，改预算也不会有效果。
+    # known_metrics 是跨轮「已经问过哪些指标」的落水石：历史窗口再短，
+    # 这句「那去年呢」也知道「那」指的是什么。
+    memory = ""
+    if known_metrics:
+        memory = (
+            "\n\n本会话此前已经涉及这些已注册指标（用户说「这个 / 它 / 再拆开看」时可沿用）：\n"
+            + "\n".join(f"- {name}" for name in known_metrics[:12])
+        )
+
     out = llmclient.chat_json(
         SYSTEM_PROMPT
         + _catalog_prompt()
+        + memory
         + f"\n\n今天是 {today_iso}。最新可得期为 {md.latest_available()}。",
         question,
-        history=(history or [])[-8:],
+        history=history or [],
         model_ref=model_ref,
         timeout=timeout,
     )

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import sys
+import time
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -25,8 +26,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import experts as experts_mod  # noqa: E402
 import knowledge as knowledge_mod
 import llm
+import llmclient
 import meetplan as meetplan_mod
 import mockdata as md
+import modelcfg
 import people as people_mod
 
 # --------------------------------------------------------------------------
@@ -190,6 +193,9 @@ def _delta_text(delta: float | None, unit: str, label: str) -> str:
 
 def _source_brief(source: dict[str, Any]) -> dict[str, Any]:
     return {
+        # 前端点来源胶囊要用它打开口径抽屉。老会话的 meta 里没这个字段，
+        # 前端另有从 api 反解的兜底。
+        "code": source.get("code"),
         "department": source["department"],
         "report": source["report"],
         "period": source["period"],
@@ -199,20 +205,123 @@ def _source_brief(source: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _plan_attempts(model_ref: str | None, limit: int = 3) -> list[str]:
+    """这一轮可以试哪几个模型：先指定的（或全局默认），再其它可用模型。
+
+    为什么不只试一个：planner 一挂就直接掉到规则解析，答案质量是断崖式的
+    （规则只认别名，问法一变就落空），而用户界面上一模一样，看不出换了引擎。
+    换个 provider 重试一次的成本远低于答错一次。
+    """
+    primary = model_ref or modelcfg.active_ref()
+    refs = [primary] if primary else []
+    for item in modelcfg.resolved():
+        ref = item.get("ref")
+        if ref and ref not in refs:
+            refs.append(ref)
+    return refs[:limit]
+
+
+# 单次 planner 调用的超时。第一次给足（模型可能冷启动），重试收紧 ——
+# 已经失败过一次了，再等 30 秒不如早点降级。
+_PLAN_TIMEOUT_FIRST = 30.0
+_PLAN_TIMEOUT_RETRY = 20.0
+# 整段解析最多花多久。全部模型都网络超时时，不能让用户干等两分钟才看到规则答案。
+_PLAN_BUDGET = 75.0
+
+
+def _short_err(exc: BaseException) -> str:
+    """把失败压成一句能给人看的话。
+
+    原始异常里常带着上游的完整响应体（401 那句会回显 key 的后四位），而这些
+    字符串会跟着 degraded 落进会话记录、也可能出现在界面上。诊断需要的只是
+    「哪个模型、什么样的失败」，不需要把对方返回的 JSON 原样存下来。
+    """
+    text = str(exc)
+    head = text.split("{", 1)[0].strip().rstrip(":")
+    return head[:120] or type(exc).__name__
+
+
 def _plan_question(
     question: str,
     today: date,
     history: list[dict[str, Any]] | None = None,
     model_ref: str | None = None,
-) -> tuple[dict[str, Any] | None, str]:
-    """优先用模型做意图解析；不可用或失败就退回规则。"""
+    known_metrics: list[str] | None = None,
+    should_stop: Any = None,
+) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
+    """用模型做意图解析；失败按「同模型重试 → 换模型 → 退回规则」逐级降级。
+
+    返回 (plan, planner, degraded)。`planner` 直接进 trace 和界面文案，
+    所以取值要能自解释：llm / llm_retry / llm_fallback / rules / llm_failed。
+
+    `degraded` 非空表示「这次的结果不是首选路径给的」。它必须能传到界面上：
+    静默换引擎等于在用户不知情的情况下改变答案质量，这比慢两秒严重得多。
+    """
     if not llm.available():
-        return None, "rules"
-    try:
-        plan = llm.plan(question, today.isoformat(), history=history, model_ref=model_ref)
-        return plan, "llm"
-    except Exception as exc:  # 网络/额度/解析失败都不该让问数不可用
-        return None, f"llm_failed: {exc}"
+        return None, "rules", {}
+
+    attempts = _plan_attempts(model_ref)
+    if not attempts:
+        return None, "rules", {}
+
+    started = time.monotonic()
+    errors: list[str] = []
+    tried = 0
+
+    for idx, ref in enumerate(attempts):
+        # 每个模型最多两次：一次原样重试。再多了就是在赌对方恢复，赌注是用户的等待。
+        for retry in range(2):
+            if should_stop is not None and should_stop():
+                raise TurnCancelled()
+            if tried and time.monotonic() - started > _PLAN_BUDGET:
+                errors.append("超出解析时间预算，放弃继续尝试")
+                break
+            timeout = _PLAN_TIMEOUT_FIRST if not tried else _PLAN_TIMEOUT_RETRY
+            tried += 1
+            try:
+                plan = llm.plan(
+                    question,
+                    today.isoformat(),
+                    history=history,
+                    model_ref=ref,
+                    known_metrics=known_metrics,
+                    timeout=timeout,
+                )
+            except llmclient.ModelUnavailable:
+                return None, "rules", {}
+            except Exception as exc:  # noqa: BLE001 网络/额度/解析失败都不该让问数不可用
+                errors.append(f"{ref}: {_short_err(exc)}")
+                # 网络类失败重试同一个模型基本是白等（换 provider 才有救），
+                # 所以只对「可能有瞬时抖动」的情形再试一次。
+                if not llmclient.retryable(exc) or getattr(exc, "kind", "") == "network":
+                    break
+                if retry == 0:
+                    time.sleep(0.4)
+                continue
+
+            if idx == 0 and retry == 0:
+                return plan, "llm", {}
+            if idx == 0:
+                return plan, "llm_retry", {
+                    "kind": "retry",
+                    "reason": f"模型第一次调用失败，重试后成功：{errors[-1][:160]}",
+                    "model": ref,
+                }
+            return plan, "llm_fallback", {
+                "kind": "fallback",
+                "reason": "首选模型不可用，已改用备用模型解析",
+                "from": attempts[0],
+                "model": ref,
+            }
+
+        if time.monotonic() - started > _PLAN_BUDGET:
+            break
+
+    return None, "llm_failed: " + " / ".join(errors)[:200], {
+        "kind": "rules",
+        "reason": "模型解析失败，已退回规则解析（只认指标别名，问法一变就可能落空）",
+        "errors": errors[:4],
+    }
 
 
 # 事项类话术。出现这些词，说明用户要的是「这件事办到哪了」，不是「这个数是多少」。
@@ -243,6 +352,19 @@ def _codes_from_result(result: dict[str, Any]) -> list[str]:
     return codes
 
 
+class TurnCancelled(Exception):
+    """用户在客户端点了「停止」。
+
+    只在「步骤边界」抛出（每次给前端推阶段之前）：模型请求本身是阻塞的
+    urllib 调用，中途掐不断，但解析完立刻停，至少不会再串行喊三位专家。
+    usage 挂在异常上，让上层能把已经花掉的 token 记进账里。
+    """
+
+    def __init__(self, usage: dict[str, Any] | None = None) -> None:
+        super().__init__("turn_cancelled")
+        self.usage = usage or {}
+
+
 def ask(
     question: str,
     today: date | None = None,
@@ -251,21 +373,54 @@ def ask(
     on_step: Any = None,
     expert_ids: list[str] | None = None,
     person_id: str | None = None,
+    known_metrics: list[str] | None = None,
+    should_stop: Any = None,
 ) -> dict[str, Any]:
-    result = _ask_impl(question, today, history, model_ref, on_step, person_id)
-    for i, step in enumerate(result.get("trace") or [], 1):
-        step["step"] = i
+    def check() -> None:
+        # 停止信号只在这里判：分发阶段提示的那一处是整条流水线的唯一收窄口，
+        # 模型/专家/取数都绕不过去，漏判的可能性最小。
+        if should_stop is not None and should_stop():
+            raise TurnCancelled()
 
-    # 给会话层用的结构化摘要：只有指标名，不含数值（见 core/chat.py 的说明）
-    codes = _codes_from_result(result)
-    result["metric_codes"] = codes
-    result["metric_names"] = [md.METRICS[c]["name"] for c in codes]
+    def step(name: str, data: dict[str, Any]) -> None:
+        check()
+        if on_step:
+            on_step(name, data)
 
-    # 专家解读放在最后：答案已经是成品，专家只能补「怎么看」，改不了任何数值。
-    # 任何一位专家失败都只影响他自己那一段，不牵连答案。
-    if expert_ids:
-        result["expert_views"] = experts_mod.interpret(result, expert_ids, model_ref, on_step=on_step)
-    return result
+    with llmclient.track_usage() as usage_sink:
+        try:
+            extra: dict[str, Any] = {}
+            result = _ask_impl(
+                question, today, history, model_ref, step, person_id, known_metrics,
+                should_stop, out=extra,
+            )
+            # 降级信息要跟着答案一起走：落库、回放、界面上都得看得见。
+            # 只在实时那一条路径上提示的话，刷新一下就好像什么都没发生过。
+            if extra.get("degraded"):
+                result["degraded"] = extra["degraded"]
+            for i, item in enumerate(result.get("trace") or [], 1):
+                item["step"] = i
+
+            # 给会话层用的结构化摘要：只有指标名，不含数值（见 core/chat.py 的说明）
+            codes = _codes_from_result(result)
+            result["metric_codes"] = codes
+            result["metric_names"] = [md.METRICS[c]["name"] for c in codes]
+
+            # 专家解读放在最后：答案已经是成品，专家只能补「怎么看」，改不了任何数值。
+            # 任何一位专家失败都只影响他自己那一段，不牵连答案。
+            check()
+            if expert_ids:
+                result["expert_views"] = experts_mod.interpret(
+                    result, expert_ids, model_ref, on_step=step
+                )
+        except TurnCancelled as exc:
+            exc.usage = llmclient.summarize(usage_sink)
+            raise
+
+        # 用量必须由流水线自己汇总后随结果带走：调用链（trace）不落库，
+        # 唯一一次能把它写进历史的机会就是这里。
+        result["usage"] = llmclient.summarize(usage_sink)
+        return result
 
 
 def _ask_impl(
@@ -275,7 +430,16 @@ def _ask_impl(
     model_ref: str | None = None,
     on_step: Any = None,
     person_id: str | None = None,
+    known_metrics: list[str] | None = None,
+    should_stop: Any = None,
+    out: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """`out` 是给调用方传回附加信息的口子（目前只放 degraded）。
+
+    为什么用这个而不是让每个 return 都带上：这个函数有十来个提前返回
+    （拒答、口径、对比、走势…），逐个加字段迟早漏一个，而漏掉的那个恰好
+    就是降级路径 —— 用户看到一段规则答案，界面上却什么都没提示。
+    """
     today = today or date.today()
     trace: list[dict[str, Any]] = []
     question = question.strip()
@@ -293,7 +457,11 @@ def _ask_impl(
         draft = meetplan_mod.parse(question, today=today, person=person)
         return meetplan_mod.as_result(draft, question)
 
-    plan, planner = _plan_question(question, today, history, model_ref)
+    plan, planner, degraded = _plan_question(
+        question, today, history, model_ref, known_metrics, should_stop
+    )
+    if out is not None and degraded:
+        out["degraded"] = degraded
 
     if plan is not None:
         hits = [
@@ -382,6 +550,8 @@ def _ask_impl(
                 "codes": [h["code"] for h in hits],
                 "names": [h["name"] for h in hits],
                 "period": period_info.get("period"),
+                # 降级要让用户在等待期间就知道，而不是等答案出来再解释
+                "degraded": degraded or None,
             },
         )
 

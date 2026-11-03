@@ -23,7 +23,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import sys
+import threading
+import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -38,6 +41,18 @@ CORE = ROOT / "core"
 METRICS_DIR = CORE / "metrics"
 MEETING_DIR = CORE / "meeting"
 CONFIG_ENV = ROOT / "config" / "local.env"
+
+# 进行中轮次的「停止」开关。key = turn_id（每次流式请求生成一个），value = 登记时间。
+#
+# 为什么不用「写 socket 失败」来判断：客户端关页面和点停止在传输层是同一件事，
+# 而这两者的语义**相反** —— 关页面要照常算完落库（断开不杀 turn），点停止要真的停。
+# 靠 BrokenPipe 分不出来，所以改成前端显式调 /api/ask/cancel。
+#
+# 用时间戳而不是布尔：停止请求可能早于轮次登记、也可能晚于轮次结束，
+# 留一个 TTL 窗让两端都能对上，过期的当作没发生，不会误杀下一轮。
+_CANCELS: dict[str, float] = {}
+_CANCEL_LOCK = threading.Lock()
+CANCEL_TTL = 300.0
 
 
 def _load_local_env() -> None:
@@ -79,6 +94,98 @@ import briefdoc as brief_mod  # noqa: E402
 import knowledge as knowledge_mod  # noqa: E402
 import experts as expert_mod  # noqa: E402
 import meetplan as meetplan_mod  # noqa: E402
+
+
+def request_cancel(turn_id: str) -> None:
+    turn_id = str(turn_id or "").strip()
+    if not turn_id:
+        return
+    now = time.time()
+    with _CANCEL_LOCK:
+        # 顺手清过期的：这张表只有一个写入点，在这里清最省事
+        for key in [k for k, ts in _CANCELS.items() if now - ts > CANCEL_TTL]:
+            _CANCELS.pop(key, None)
+        _CANCELS[turn_id] = now
+
+
+def cancel_requested(turn_id: str) -> bool:
+    with _CANCEL_LOCK:
+        return turn_id in _CANCELS
+
+
+def clear_cancel(turn_id: str) -> None:
+    with _CANCEL_LOCK:
+        _CANCELS.pop(turn_id, None)
+
+
+# ── 轮次事件日志（断线续流） ──────────────────────────────────────────────
+#
+# 以前每轮只往 socket 写 data:，没有 id:，也没留底 —— 手机切个网、笔记本合盖再
+# 打开，前端就永远停在「正在解析」。turn 本身还在后台跑完并落库，但用户看到的
+# 是一段死界面，只能在侧栏重新点一次会话才看得到答案。
+#
+# 现在每个事件都进这个内存表，并在 SSE 里带 `id: {turn_id}-{seq}`。前端断线后
+# 从最后收到的 seq 接着拉，不必重算，也不会漏掉 done（答案就在 done 里）。
+#
+# 只放内存不落盘：一轮的事件顶多十几条、几 KB，服务重启后本来也没有「正在跑的
+# 轮次」可续；需要看历史结果就走 /api/threads/<id>。
+_TURNS: dict[str, dict] = {}
+_TURN_LOCK = threading.Lock()
+TURN_TTL = 600.0      # 一轮结束后事件留多久（够一次断线重连和切后台回来）
+TURN_MAX = 40         # 同时留存的轮次数上限，防止长时间运行把内存吃满
+
+
+def turn_open(thread_id: str, owner: str) -> str:
+    turn_id = secrets.token_hex(8)
+    now = time.time()
+    with _TURN_LOCK:
+        for key in [k for k, v in _TURNS.items() if now - v["ts"] > TURN_TTL]:
+            _TURNS.pop(key, None)
+        # 还是太多就丢最老的：续流是尽力而为，不能为了它把内存拖垮
+        while len(_TURNS) >= TURN_MAX:
+            _TURNS.pop(min(_TURNS, key=lambda k: _TURNS[k]["ts"]), None)
+        _TURNS[turn_id] = {
+            "thread_id": thread_id,
+            "owner": owner,
+            "events": [],
+            "done": False,
+            "ts": now,
+        }
+    return turn_id
+
+
+def turn_push(turn_id: str, payload: dict) -> int:
+    """记一条事件并返回它的 seq（1 起）。turn 已被清理时返回 0。"""
+    with _TURN_LOCK:
+        turn = _TURNS.get(turn_id)
+        if turn is None:
+            return 0
+        turn["events"].append(payload)
+        turn["ts"] = time.time()
+        return len(turn["events"])
+
+
+def turn_close(turn_id: str) -> None:
+    with _TURN_LOCK:
+        turn = _TURNS.get(turn_id)
+        if turn is not None:
+            turn["done"] = True
+            turn["ts"] = time.time()
+
+
+def turn_events(turn_id: str, after: int, owner: str) -> dict | None:
+    """取 seq > after 的事件。turn 不存在或不属于这个人时返回 None。"""
+    with _TURN_LOCK:
+        turn = _TURNS.get(turn_id)
+        if turn is None or (owner and turn["owner"] and turn["owner"] != owner):
+            return None
+        events = list(turn["events"])
+        return {
+            "thread_id": turn["thread_id"],
+            "done": turn["done"],
+            "last": len(events),
+            "events": events[max(0, int(after)) :],
+        }
 
 
 EXAMPLES = [
@@ -323,6 +430,29 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/ask/examples":
                 return self._json({"ok": True, "items": EXAMPLES})
 
+            # 断线续流：取某一轮已经产生、但客户端还没收到的事件。
+            # 优先级：`?after=N` > 标准头 `Last-Event-ID: turn-N` > 从头给。
+            # 支持标准头是因为浏览器 EventSource 重连时只发这个，不认自定义参数。
+            turn_id = _tail(path, "/api/ask/turn/")
+            if turn_id:
+                qs = parse_qs(urlparse(self.path).query)
+                after = str((qs.get("after") or [""])[0]).strip()
+                if not after:
+                    last_id = self.headers.get("Last-Event-ID") or ""
+                    after = last_id.rsplit("-", 1)[-1] if "-" in last_id else ""
+                try:
+                    after_n = max(0, int(after or 0))
+                except ValueError:
+                    after_n = 0
+                found = turn_events(turn_id, after_n, self._person())
+                if found is None:
+                    # 过期、或者不是自己的轮次 —— 两种情况回同一个错，别让人拿 id
+                    # 挨个试就能探出「哪些轮次存在过」。前端按 404 收场即可。
+                    return self._json(
+                        {"ok": False, "error": "turn_not_found", "turn_id": turn_id}, 404
+                    )
+                return self._json({"ok": True, "turn_id": turn_id, **found})
+
             # ---- 模型配置 ----
             if path == "/api/models":
                 providers = modelcfg.list_providers()
@@ -343,16 +473,31 @@ class Handler(BaseHTTPRequestHandler):
 
             # ---- 会话 ----
             if path == "/api/threads":
-                return self._json({"ok": True, "items": chat.list_threads(), "stats": chat.stats()})
+                qs = parse_qs(urlparse(self.path).query)
+                q = str((qs.get("q") or [""])[0]).strip()
+                # 只回当前身份的会话。以前不分身份，切到副市长看到的还是市长
+                # 那一屏 —— 演示能糊过去，接权限就是事故。
+                pid = self._person()
+                return self._json(
+                    {
+                        "ok": True,
+                        "query": q,
+                        "owner": pid,
+                        "items": chat.list_threads(q or None, owner=pid),
+                        "stats": chat.stats(pid),
+                    }
+                )
 
             tid = _tail(path, "/api/threads/")
             if tid:
-                thread = chat.get(tid)
+                thread = chat.get(tid, owner=self._person())
                 if thread is None:
                     return self._json({"ok": False, "error": "thread_not_found"}, 404)
                 # 回放时补「这张草稿卡已经建过会」——否则刷新后又变成可点按钮
                 meetplan_mod.annotate(thread["id"], thread.get("messages") or [])
-                return self._json({"ok": True, "thread": thread})
+                return self._json(
+                    {"ok": True, "thread": thread, "usage": chat.usage_total(thread)}
+                )
 
             # ---- 会议助手 ----
             if path == "/api/meetings":
@@ -390,6 +535,20 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/ask/stream":
                 return self._ask_stream(body)
 
+            # 停止一轮。只登记标记，真正的停发生在 ask 的下一个步骤边界；
+            # 返回 ok 只代表"收到了"，不代表"已经停了"——界面不该等这个结果。
+            if path == "/api/ask/cancel":
+                turn_id = str(body.get("turn_id") or "").strip()
+                if not turn_id:
+                    return self._json({"ok": False, "error": "turn_id_required"}, 400)
+                # 只允许停自己的轮次。turn_id 随机且短命，但「能停别人的」这件事
+                # 没有任何正当代价 —— 别处都在按身份隔离，这里留个口子没道理。
+                seen = turn_events(turn_id, 0, self._person(body))
+                if seen is None:
+                    return self._json({"ok": False, "error": "turn_not_found"}, 404)
+                request_cancel(turn_id)
+                return self._json({"ok": True})
+
             if path == "/api/models":
                 provider = modelcfg.upsert_provider(body)
                 return self._json(
@@ -418,6 +577,9 @@ class Handler(BaseHTTPRequestHandler):
                 thread = chat.create(
                     title=body.get("title"),
                     model_ref=body.get("model_ref") or modelcfg.active_ref(),
+                    # 归属必须在这里就给：漏了的话新会话 owner=""，谁都读不到，
+                    # 建完立刻 404 —— 比不隔离更让人摸不着头脑
+                    owner=self._person(body),
                 )
                 return self._json({"ok": True, "thread": thread})
 
@@ -605,7 +767,11 @@ class Handler(BaseHTTPRequestHandler):
 
             tid = _tail(path, "/api/threads/")
             if tid:
-                removed = chat.delete(tid)
+                # 先判存在 + 归属：chat.delete 对不存在的 id 也返回 True（"删完确实没有"），
+                # 直接透出会让前端把"别人已经删了"显示成"删除成功"，列表白等一次刷新
+                if chat.get(tid, owner=self._person()) is None:
+                    return self._json({"ok": False, "error": "thread_not_found"}, 404)
+                removed = chat.delete(tid, owner=self._person())
                 # 会话没了，指向它的收藏也得清 —— 否则收藏夹里留点点开是空白的条目
                 if removed:
                     saved_mod.purge_thread(tid)
@@ -625,6 +791,21 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         body = self._body()
         try:
+            # ---- 会话重命名 ----
+            tid = _tail(path, "/api/threads/")
+            if tid:
+                title = str(body.get("title") or "").strip()
+                if not title:
+                    return self._json({"ok": False, "error": "empty_title"}, 400)
+                pid = self._person(body)
+                if not chat.rename(tid, title, owner=pid):
+                    return self._json({"ok": False, "error": "thread_not_found"}, 404)
+                # 回显截断后的标题：MAX_TITLE=24，前端要按实际值改 DOM，
+                # 否则它会显示自己提交的全文，刷新后才突然变短
+                return self._json(
+                    {"ok": True, "id": tid, "title": (chat.get(tid, owner=pid) or {}).get("title")}
+                )
+
             parts = _parts(path, "/api/meetings/")
             if len(parts) == 3 and parts[1] == "items":
                 result = meetings.update_item(parts[0], parts[2], body)
@@ -780,7 +961,9 @@ class Handler(BaseHTTPRequestHandler):
         if not question:
             raise ValueError("empty_question")
 
-        thread = chat.ensure(body.get("thread_id"), model_ref=body.get("model_ref"))
+        thread = chat.ensure(
+            body.get("thread_id"), model_ref=body.get("model_ref"), owner=self._person(body)
+        )
 
         # 会话粘性：新会话先钉住当前默认模型，后续轮次沿用（对应 octop 的
         # threads.model_ref）。这样用户之后改了全局默认，老会话不会被悄悄换掉。
@@ -793,7 +976,34 @@ class Handler(BaseHTTPRequestHandler):
 
         # 先取历史再落本条，否则当前问题会在 history 和 messages 里各出现一次
         history = chat.context(thread["id"])
-        chat.append(thread["id"], "user", question)
+
+        # 重试：可能停在两种状态上，都要认成"同一轮重来"而不是新的一问：
+        #   1) 上一轮失败：只落了 user 消息，最后一条就是这次的问题；
+        #   2) 上一轮被用户停掉：最后一条是「已停止生成」占位，它前面才是这次的问题。
+        # 不这么判的话，重试按钮会污染会话记录（同一条问题连问两遍）。
+        msgs = thread.get("messages") or []
+        last = msgs[-1] if msgs else None
+        prev = msgs[-2] if len(msgs) >= 2 else None
+        same_q = lambda m: (m.get("content") or "").strip() == question if m else False
+        is_retry = bool(body.get("retry")) and last is not None and (
+            (last.get("role") == "user" and same_q(last))
+            or (
+                last.get("role") == "assistant"
+                and (last.get("meta") or {}).get("cancelled")
+                and prev is not None
+                and prev.get("role") == "user"
+                and same_q(prev)
+            )
+        )
+        if is_retry:
+            if last.get("role") == "assistant":
+                # 「已停止」占位让位给这次真正的答案
+                chat.drop_last(thread["id"])
+                history = chat.context(thread["id"])
+            if history and history[-1].get("role") == "user":
+                history = history[:-1]
+        else:
+            chat.append(thread["id"], "user", question)
         return thread, history, question
 
     def _persist_answer(self, thread_id: str, result: dict) -> dict | None:
@@ -802,6 +1012,9 @@ class Handler(BaseHTTPRequestHandler):
         meta 里存 sources/notes/facts 是为了**历史消息能重新渲染成同样的样式**；
         不存 trace 是因为回看历史不需要调用链路，省一半体积。给模型用的上下文
         只取 metric_names/intent（见 core/chat.py），这些字段不会进模型。
+
+        唯一的例外是 usage：它不在 trace 里另存，而是单独算一份放 meta。trace
+        可以不看，账不能不算 —— 不存的话，这一轮花掉多少 token 就永久丢了。
         """
         info = result.get("planner_info") or {}
         # 专家解读要跟着落库，否则回看历史时那段凭空消失 —— 现在专家是「对话中」
@@ -815,18 +1028,34 @@ class Handler(BaseHTTPRequestHandler):
             meta={
                 "refused": bool(result.get("refused")),
                 "planner": result.get("planner"),
+                # 这一轮是不是降级出来的（换模型 / 退回规则）。不落库的话，
+                # 刷新之后答案还在、提示没了 —— 用户会以为这就是模型给的结论。
+                "degraded": result.get("degraded"),
                 "intent": result.get("intent"),
+                # detail 是「为什么没答 / 这个数怎么读」的补充说明。不落库的话，
+                # 实时看有、刷新就没 —— 拒答那条尤其明显：只剩一句干巴巴的"没有对应指标"
+                "detail": result.get("detail"),
                 "model": info.get("model"),
                 "metric_codes": result.get("metric_codes") or [],
                 "metric_names": result.get("metric_names") or [],
                 "sources": result.get("sources") or [],
                 "notes": result.get("notes") or [],
                 "facts": result.get("facts") or [],
+                # 走势图要跟着落库：回看历史时图突然消失、只剩一行字，
+                # 是比"从来没有图"更奇怪的体验。序列最多 24 期，体积可接受。
+                "series": result.get("series") or [],
+                "series_title": result.get("series_title"),
+                # 拒答时给的可问清单也要落：刷新之后那 11 个胶囊凭空消失，
+                # 用户会以为系统"这次答不上就说没了"。每条约 40 字，可控。
+                "suggestions": (result.get("suggestions") or [])[:12],
                 "knowledge": knowledge_mod.to_meta(result.get("knowledge")),
                 "expert_views": views,
                 # 建会草稿要跟着落库：回放时要能重新画出那张卡（含当时的假设与缺项），
                 # 只留一句 headline 的话，用户回看时不知道自己当时确认了什么
                 "meet_draft": meetplan_mod.to_meta(result.get("meet_draft")),
+                # 用量：调用链（trace）不落库，如果这里也不存，本轮花掉多少 token
+                # 就永久丢失了 —— 回看历史、做预算都无从统计。几十字节，值得存。
+                "usage": result.get("usage") or {},
             },
         )
 
@@ -842,6 +1071,7 @@ class Handler(BaseHTTPRequestHandler):
             model_ref=thread.get("model_ref"),
             expert_ids=_expert_ids(body),
             person_id=self._person(body),
+            known_metrics=chat.known_metrics(thread["id"]),
         )
         result["planner_info"] = llm.llm_info()
         msg = self._persist_answer(thread["id"], result)
@@ -861,40 +1091,59 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             return self._json({"ok": False, "error": str(exc)}, 400)
 
+        # 这一轮的身份证。前端点「停止」时带着它来取消 —— 只认这个，
+        # 不认 socket 断没断（关页面和点停止在传输层长得一样，见 _CANCELS 的说明）。
+        # 同时它也是续流的句柄：断线后前端拿它回放已经产生的事件。
+        # 必须在发响应头之前就建好，下面 X-Turn-Id 要用。
+        turn_id = turn_open(thread["id"], self._person(body))
+
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache, no-store")
         self.send_header("Connection", "close")
         self.send_header("X-Accel-Buffering", "no")
+        # 也放在响应头里：万一第一个事件块就丢了，前端仍然知道该拿哪个 id 去续流。
+        # 只靠事件里的 start，断在最前面那一瞬间就彻底接不上了。
+        self.send_header("X-Turn-Id", turn_id)
         self.end_headers()
         self.close_connection = True
 
         def push(payload: dict) -> None:
-            # 客户端中途关页面时 wfile 会抛 BrokenPipe。这一轮仍然跑完并落库
-            # （对应 octop 的「断开不杀 turn」语义），只是没人接了，不该因此报错。
+            # 先记日志再写 socket：断线时这一步就是唯一能把结果留下的地方。
+            # 没有它，重连只能靠「再问一遍」，而那一遍又要重新烧 token。
+            seq = turn_push(turn_id, payload)
+            frame = f"id: {turn_id}-{seq}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
             try:
-                self.wfile.write(f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8"))
+                self.wfile.write(frame.encode("utf-8"))
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError, OSError):
+                # 客户端中途关页面时 wfile 会抛 BrokenPipe。这一轮仍然跑完并落库
+                # （对应 octop 的「断开不杀 turn」语义），只是没人接了，不该因此报错。
                 pass
 
         push(
             {
                 "type": "start",
+                "turn_id": turn_id,
                 "thread_id": thread["id"],
                 "model_ref": thread.get("model_ref"),
                 "turns": len(history) // 2,
             }
         )
 
+        def step(name: str, data: dict) -> None:
+            push({"type": name, **data})
+
         try:
             result = ask_mod.ask(
                 question,
                 history=history,
                 model_ref=thread.get("model_ref"),
-                on_step=lambda name, data: push({"type": name, **data}),
+                on_step=step,
                 expert_ids=_expert_ids(body),
                 person_id=self._person(body),
+                known_metrics=chat.known_metrics(thread["id"]),
+                should_stop=lambda: cancel_requested(turn_id),
             )
             result["planner_info"] = llm.llm_info()
             msg = self._persist_answer(thread["id"], result)
@@ -907,16 +1156,48 @@ class Handler(BaseHTTPRequestHandler):
                     "result": result,
                 }
             )
+        except ask_mod.TurnCancelled as exc:
+            # 停止也要留痕：只落一条 user 提问、没有任何回答，刷新后像是"卡住了"。
+            # 落一句明确的「已停止」，并把已经花掉的 token 记上（模型那一步是计费的）。
+            msg = chat.append(
+                thread["id"],
+                "assistant",
+                "已停止生成，这一轮没有产出答案。",
+                meta={"cancelled": True, "usage": exc.usage or {}},
+            )
+            push(
+                {
+                    "type": "cancelled",
+                    "turn_id": turn_id,
+                    "thread_id": thread["id"],
+                    "message_id": (msg or {}).get("id"),
+                }
+            )
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc()
             push({"type": "error", "error": f"{type(exc).__name__}: {exc}"})
+        finally:
+            # 记下「这一轮结束了」。续流的一端靠这个字段决定还要不要继续追问 ——
+            # 只按「有没有新事件」判断的话，跑完那一刻会多等一个轮询周期。
+            turn_close(turn_id)
+            # 这一轮结束了，取消标记留着没有意义；不清的话下次同 key 的请求
+            # （虽然 turn_id 是随机的）会白查一次表
+            clear_cancel(turn_id)
 
 
 def main() -> None:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8090
+
+    # 老会话没有 owner 字段（隔离是后加的）。一次性划给默认身份，而不是当成
+    # "所有人可见"——那等于隔离没做；也不是直接丢弃——用户的会话不该莫名消失。
+    # 只认「字段缺失」，重复启动不会反复改写。
+    claimed = chat.own_orphans(people.resolve(None))
+
     httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     info = modelcfg.llm_info()
     print(f"AI 市长工作台已启动： http://127.0.0.1:{port}", flush=True)
+    if claimed:
+        print(f"会话归属：{claimed} 条历史会话已归入默认身份（{people.resolve(None)}）", flush=True)
     print(f"数据期次 {wb.md.latest_available()}；待披露 {wb.md.pending_periods() or '无'}", flush=True)
     print(
         f"模型 {info['ref'] or '未配置'}（{'可用' if info['available'] else '不可用，问数将退回规则解析'}）",

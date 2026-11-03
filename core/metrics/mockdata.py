@@ -471,6 +471,9 @@ def source_of(code: str, period: str) -> dict[str, Any]:
     """出处元数据 —— 每个数值必须带着它一起返回。"""
     meta = METRICS[code]
     return {
+        # code 跟着出处一起走：界面上「点来源看口径」要靠它定位到哪个指标，
+        # 从 api 字符串反解一次能用但脆（接口路径一改就断），干脆在这里给全
+        "code": code,
         "department": meta["department"],
         "report": f"{meta['report']}{_period_label(period)}",
         "period": _period_label(period),

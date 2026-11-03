@@ -376,12 +376,48 @@ html.ask-fold .ask-rail{display:flex}
 .chat-item .ci-t{font-size:12px;color:var(--ink);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chat-item .ci-p{font-size:11px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chat-item .ci-n{font-size:10px;color:var(--faint);flex:0 0 auto;padding-top:2px}
+/* 改名 / 删除只在 hover（或键盘聚焦）时出现：常驻两个按钮会让列表看着像表单。
+   触屏没有 hover，所以 :focus-within 也放出来一份。 */
+.chat-item{position:relative}
+.ci-ops{display:none;gap:1px;flex:0 0 auto;align-items:center}
+.chat-item:hover .ci-ops,.chat-item:focus-within .ci-ops{display:flex}
+.ci-ops button{
+  border:0;background:transparent;color:var(--faint);cursor:pointer;
+  font:inherit;font-size:11px;line-height:1;padding:3px 4px;border-radius:4px
+}
+.ci-ops button:hover{background:var(--hover-2);color:var(--ink)}
+.ci-ops button[data-del]:hover{color:var(--warn)}
+/* 内联改名：撑满条目宽度，否则长标题会把侧栏顶开 */
+.ci-edit{
+  width:100%;font:inherit;font-size:12px;font-weight:600;color:var(--ink);
+  background:var(--surface);border:1px solid var(--brand);border-radius:4px;
+  padding:1px 4px;outline:none
+}
 .chats-empty{padding:30px 14px;text-align:center;color:var(--faint);font-size:11.5px;line-height:1.9}
+/* 历史会话搜索：贴在标题下、列表上，不占一整行高度 */
+.chats-search{
+  display:flex;align-items:center;gap:6px;margin:0 12px 8px;padding:0 8px;
+  background:var(--surface-2);border:1px solid var(--line);border-radius:7px;flex:0 0 auto
+}
+.chats-search:focus-within{border-color:var(--brand);background:var(--surface)}
+.chats-search svg{width:12px;height:12px;color:var(--faint);flex:0 0 auto}
+.chats-search input{
+  flex:1;min-width:0;border:0;background:transparent;outline:none;
+  font:inherit;font-size:11.5px;color:var(--ink);padding:6px 0
+}
+.chats-search button{
+  border:0;background:transparent;color:var(--faint);cursor:pointer;
+  font:inherit;font-size:11px;padding:2px 3px;border-radius:4px;flex:0 0 auto
+}
+.chats-search button:hover{color:var(--ink);background:var(--surface-4)}
+/* 按正文命中的那条，预览换成命中片段：颜色略深，和"最后一句"区分开 */
+.chat-item .ci-p.hit{color:var(--ink-2)}
 .chats-foot{
   display:flex;align-items:center;gap:7px;padding:8px 12px;border-top:1px solid var(--line-2);
   font-size:11px;color:var(--muted);flex:0 0 auto
 }
 .chats-foot .cf-label{flex:0 0 auto}
+.chats-foot .cf-usage{margin-left:auto;font-size:10px;color:var(--faint);white-space:nowrap}
 .ask-head{display:flex;align-items:center;padding:13px 14px 9px; gap:8px}
 .ask-head h2{margin:0;font-size:13.5px;font-weight:700;letter-spacing:.1px}
 .ask-head h2 b{color:var(--brand)}
@@ -493,6 +529,13 @@ html.ask-fold .ask-rail{display:flex}
 .ai-tag{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);margin-bottom:5px}
 .ai-tag i{width:15px;height:15px;border-radius:4px;background:var(--brand-soft);color:var(--brand);
   display:grid;place-items:center;font-style:normal;font-size:9px;font-weight:700}
+/* 复制：靠最右，平时极淡，hover 才成形。常驻可见但不抢眼 ——
+   复制是"想到才用"的动作，藏进右键菜单等于没有。 */
+.ai-cp{
+  margin-left:auto;border:1px solid transparent;background:transparent;color:var(--faint);
+  font:inherit;font-size:10.5px;line-height:1;padding:3px 6px;border-radius:5px;cursor:pointer
+}
+.ai-cp:hover{color:var(--brand);border-color:var(--line);background:var(--surface)}
 .ai-body{
   background:var(--surface-4);border:1px solid var(--line);border-radius:3px 10px 10px 10px;
   padding:10px 12px;font-size:12.5px;line-height:1.75;color:var(--ink-2)
@@ -527,15 +570,50 @@ html.ask-fold .ask-rail{display:flex}
 
 .ai-src{
   margin-top:9px;padding-top:8px;border-top:1px dashed var(--line-3);
-  display:flex;flex-wrap:wrap;gap:4px
+  display:flex;flex-direction:column;gap:5px
 }
+/* 一行 = 一个指标的完整出处（报表 / 部门 / 披露日）。以前平铺成一排，
+   多指标时看不出哪个部门对应哪张表。 */
+.src-row{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
 .src-pill{
   font-size:10px;color:var(--muted);background:var(--surface);border:1px solid var(--line);
-  border-radius:5px;padding:2px 6px;display:inline-flex;align-items:center;gap:4px;cursor:pointer;
+  border-radius:5px;padding:2px 6px;display:inline-flex;align-items:center;gap:4px;
   line-height:1.5;white-space:nowrap
 }
-.src-pill:hover{border-color:var(--line-3);color:var(--brand)}
+/* 只有带 data-src 的才装成可点：没有 code 的就只是标签，不能给手型骗人 */
+.src-pill[data-src]{cursor:pointer}
+.src-pill[data-src]:hover{border-color:var(--line-3);color:var(--brand)}
+.src-pill[data-src]:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
 .src-pill em{font-style:normal;color:var(--faint)}
+/* 要点：一句话之外，把「值 / 环比 / 同比」摊成能扫的格子 */
+.facts{margin-top:8px;display:flex;flex-wrap:wrap;gap:6px}
+.fact{
+  border:1px solid var(--line);border-radius:7px;padding:3px 8px;background:var(--surface);
+  display:flex;flex-direction:column;gap:1px;min-width:74px
+}
+.fact u{text-decoration:none;font-size:10px;color:var(--faint);line-height:1.4}
+.fact b{font-size:12px;font-weight:600;color:var(--ink);line-height:1.4}
+/* 走势：趋势题的答案本来就是一条线，只给一个数等于让人自己脑补 */
+.bchart{margin-top:9px;border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:7px 8px 3px}
+.bchart-h{font-size:10.5px;color:var(--muted);margin-bottom:2px}
+.bchart-x{display:flex;justify-content:space-between;font-size:10px;color:var(--faint);padding:1px 1px 2px}
+/* 拒答时的可问清单：点了看口径，别让用户对着「11 个指标」自己猜怎么问 */
+.sug{margin-top:9px}
+.sug-h{font-size:10.5px;color:var(--faint);margin-bottom:5px}
+.sug-list{display:flex;flex-wrap:wrap;gap:5px}
+.sug-list button{
+  font:inherit;font-size:11px;color:var(--brand);background:var(--brand-soft);
+  border:1px solid var(--line-3);border-radius:6px;padding:3px 8px;cursor:pointer
+}
+.sug-list button:hover{background:var(--hover-2)}
+/* 首屏示例：新用户进来不该只对着空输入框。
+   左对齐 + 限宽成一列块状：句子长短不一，居中对齐会让每行参差得像散落的字。 */
+.ask-examples{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-start;margin:13px auto 0;max-width:430px}
+.ask-examples button{
+  font:inherit;font-size:11.5px;color:var(--brand);background:var(--brand-soft);
+  border:1px solid var(--line-3);border-radius:6px;padding:4px 9px;cursor:pointer;text-align:left
+}
+.ask-examples button:hover{background:var(--hover-2)}
 .notes{margin-top:8px;display:flex;flex-direction:column;gap:4px}
 /* 专家解读：只给「怎么看」，数字一律不在这块出现 */
 .ev-wrap{margin-top:9px;display:flex;flex-direction:column;gap:6px}
@@ -591,6 +669,34 @@ html.ask-fold .ask-rail{display:flex}
   background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-ink);
   border-radius:8px;padding:8px 10px;font-size:11.5px;line-height:1.6;margin-top:8px
 }
+/* 降级说明。用左竖线而不是实心底色：它是「免责说明」，不该比答案本身更抢眼，
+   但也不能像脚注一样看不见。 */
+.deg{
+  margin-top:8px;padding:6px 9px;border-left:2px solid var(--warn-line);
+  background:var(--warn-bg);border-radius:0 6px 6px 0;
+  font-size:11px;line-height:1.55;color:var(--warn-ink)
+}
+.deg b{font-weight:600}
+/* 失败/中断后的重试。放在警告框下面一行，做成小按钮而不是主按钮 ——
+   重试是补救动作，不该和「发送」抢视觉权重。 */
+.fail-ops{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+.fail-ops .btn-retry{
+  border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
+  font:inherit;font-size:11px;padding:3px 10px;border-radius:6px;cursor:pointer
+}
+.fail-ops .btn-retry:hover{border-color:var(--brand);color:var(--brand);background:var(--brand-soft)}
+.fail-ops span{font-size:10px;color:var(--faint)}
+/* 「已停止」既不是错误（不该红）也不是答案（不该用正文色），取中间的灰 */
+.ai-note{
+  color:var(--muted);font-size:12px;background:var(--surface-4);
+  border:1px dashed var(--line);border-radius:8px;padding:8px 10px
+}
+/* 单轮用量：比正文小一号、贴在答案最下面。它是账目，不能抢答案的位置 */
+.ai-usage{
+  margin-top:9px;padding-top:7px;border-top:1px dashed var(--line);
+  display:flex;flex-wrap:wrap;gap:4px 10px;font-size:10px;color:var(--faint)
+}
+.ai-usage .bad{color:var(--warn)}
 .trace-fold{margin-top:8px;font-size:11px;color:var(--muted);cursor:pointer;user-select:none}
 .trace-fold:hover{color:var(--brand)}
 .trace{margin-top:6px;border-left:2px solid var(--line-3);padding-left:9px;display:none}
@@ -614,6 +720,10 @@ html.ask-fold .ask-rail{display:flex}
 }
 .inputbar button:hover{background:var(--brand-2)}
 .inputbar button:disabled{background:var(--disabled);cursor:default}
+/* 计算中：同一个按钮变成「停止」。不另起一个按钮 —— 位置不变，手不用重新找，
+   而且天然防止"上一轮还没完又发一条"。 */
+.inputbar #go.is-stop{background:var(--warn)}
+.inputbar #go.is-stop:hover{background:var(--warn-ink)}
 /* 附件入口：做成 34×34 的图标按钮，不抢发送的主操作位。
    这一版只做到「选文件 → 列成芯片 → 可移除」，**文件没进问数链路**（后端只吃问题
    文本、HTTP 层只解 JSON），所以按钮旁边不给「上传中/已解析」这类会骗人的状态。 */
@@ -1661,6 +1771,14 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
           <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
       </div>
+      <!-- 搜索：按标题和对话正文找。会话一多，靠时间分组往下翻是最慢的办法 -->
+      <div class="chats-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="11" cy="11" r="6.5"/><path d="M20 20l-3.6-3.6"/>
+        </svg>
+        <input id="chatsQ" type="text" placeholder="搜索标题或对话内容" autocomplete="off" aria-label="搜索历史会话">
+        <button id="chatsQClear" hidden aria-label="清空搜索">✕</button>
+      </div>
       <!-- 「＋新对话」是和下面会话列表并列的第一行，不跟标题挤在一起（WorkBuddy 的「新建任务」就长这样） -->
       <div class="chats-scroll">
         <div class="chats-list" id="chatsList"></div>
@@ -1668,6 +1786,7 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
       <div class="chats-foot">
         <span class="cf-label">当前模型</span>
         <span class="model-pill" data-model-pill title="点击配置模型">未配置模型</span>
+        <span class="cf-usage" id="cfUsage"></span>
       </div>
     </div>
     <div class="ask-body">
@@ -2627,6 +2746,14 @@ async function commitMeet(card) {
   }
 }
 
+/* 来源/建议胶囊背后的指标 code。新数据里出处自带 code；老会话的 meta 只有
+   api 路径，从末段反解兜底。反解失败返回空 → 胶囊退化成纯标签，不给手型。 */
+function srcCode(s) {
+  if (s && s.code) return s.code;
+  const m = String((s && s.api) || "").match(/\/metrics\/([A-Z0-9_]+)\s*$/);
+  return m ? m[1] : "";
+}
+
 function aiBubble(r, ref) {
   // 收藏星号。只认后端给的消息 id：拿不到 id 就不画 —— 点了收藏哪一条都说不清，
   // 而收藏夹里躺一条"不知道是什么"的条目比没有这个功能更糟。
@@ -2640,14 +2767,56 @@ function aiBubble(r, ref) {
          aria-label="关注这条回答"><span class="sb-ic">${on ? "★" : "☆"}</span><span class="sb-tx">${on ? "已关注" : "关注"}</span></button>`
     : "";
 
-  const srcs = (r.sources || []).map((s) => [
-    `<span class="src-pill" data-src="${esc(s.code || "")}">${esc(s.report || "指标接口")}</span>`,
-    s.department ? `<span class="src-pill">${esc(s.department)}</span>` : "",
-    s.published_at ? `<span class="src-pill">披露 ${esc(s.published_at)}</span>` : "",
-  ].join("")).join("");
+  // 一行一个指标：报表 / 部门 / 披露日 三个胶囊共用同一个 data-src，
+  // 点哪个都打开同一个口径抽屉（用户不会去分辨该点哪一个）。
+  const srcs = (r.sources || []).map((s) => {
+    const code = srcCode(s);
+    const hit = code
+      ? ` data-src="${esc(code)}" role="button" tabindex="0" title="查看口径与出处"`
+      : "";
+    return `<div class="src-row">${[
+      `<span class="src-pill"${hit}>${esc(s.report || "指标接口")}</span>`,
+      s.department ? `<span class="src-pill"${hit}>${esc(s.department)}</span>` : "",
+      s.published_at ? `<span class="src-pill"${hit}>披露 ${esc(s.published_at)}</span>` : "",
+    ].join("")}</div>`;
+  }).join("");
+
+  const facts = (r.facts || []).map((f) => `
+    <div class="fact"><u>${esc(f.label || "")}</u><b>${esc(f.value || "")}</b></div>`).join("");
+  const factsBlock = facts ? `<div class="facts">${facts}</div>` : "";
+
+  // 趋势题后端多给一条序列。以前只有抽屉里画，答案气泡里反倒没图 ——
+  // 问「最近三个月什么走势」得到一行字，等于让人自己脑补。
+  const series = r.series || [];
+  const chartBlock = series.length >= 2
+    ? `<div class="bchart">
+         <div class="bchart-h">${esc(r.series_title || "走势")}</div>
+         ${spark(series.map((p) => p.value), "brand")}
+         <div class="bchart-x">
+           <span>${esc(series[0].label || "")}</span>
+           <span>${esc(series[series.length - 1].label || "")}</span>
+         </div>
+       </div>`
+    : "";
+
+  // 拒答时后端把 11 个已注册指标全列出来。点了看口径抽屉 —— 那里有「可用提问方式」，
+  // 比替用户猜一个问题更有用。
+  const sugs = (r.suggestions || []).map((s) => {
+    const code = srcCode(s);
+    return code
+      ? `<button data-src="${esc(code)}" title="查看「${esc(s.name || code)}」的口径与可用问法">${esc(s.name || code)}</button>`
+      : `<span class="src-pill">${esc(s.name || "")}</span>`;
+  }).join("");
+  const sugBlock = sugs
+    ? `<div class="sug"><div class="sug-h">这些指标可以问（点开看怎么问）：</div><div class="sug-list">${sugs}</div></div>`
+    : "";
 
   const notes = (r.notes || []).slice(0, 2).map((n) => `<div class="note-row">${esc(n)}</div>`).join("");
   const notesBlock = notes ? `<div class="notes">${notes}</div>` : "";
+
+  /* 降级提示。这条不是「锦上添花」：换模型/退回规则都会改变答案质量，
+     而界面上原本一点痕迹都没有 —— 用户会以为这就是模型给的结论。 */
+  const degBlock = degradedNote(r.degraded);
 
   // 专家解读：失败的项也显示（写清为什么没给），免得"召唤了却没反应"
   const evs = (r.expert_views || []).map((v) => `
@@ -2664,18 +2833,75 @@ function aiBubble(r, ref) {
     ? `<div class="trace-fold" data-fold>展开调用链路</div><div class="trace">${traceItems}</div>`
     : "";
 
+  // 用量：这一轮到底花了多少。以前只出现在 trace 的一句摘要里，而 trace 不落库，
+  // 刷新即失。政务/企业场景对模型预算是敏感的，这笔账必须能回看。
+  const u = r.usage || {};
+  // "没报用量" 和 "调用直接失败" 要分开说：前者是对方没回，钱可能照花；
+  // 后者根本没调通，写「服务端未回传」会让人以为还有一笔账没结。
+  const usageDetail = u.reported
+    ? `<span>输入 ${fmtTok(u.prompt_tokens)} · 输出 ${fmtTok(u.completion_tokens)} tokens</span>`
+    : u.calls && u.failed === u.calls
+      ? `<span>调用失败，未产生用量</span>`
+      : `<span>服务端未回传用量</span>`;
+  const usageBlock = u.calls
+    ? `<div class="ai-usage">
+         <span>${u.calls} 次模型调用</span>
+         ${usageDetail}
+         ${u.ms ? `<span>${(u.ms / 1000).toFixed(1)}s</span>` : ""}
+         ${u.failed ? `<span class="bad">${u.failed} 次失败</span>` : ""}
+       </div>`
+    : "";
+
+  const copyBtn = `<button class="ai-cp" data-cp="1" title="复制这条回答" aria-label="复制这条回答">复制</button>`;
+
+  // 用户点了「停止」：后端落了一条明确的记录。这里不能再画成正常答案，
+  // 否则回看历史会以为当时真的答了这么一句。
+  if (r.cancelled) {
+    return `
+      <div class="ai-tag"><i>AI</i>${esc(plannerLabel())}${copyBtn}</div>
+      <div class="ai-body"><div class="ai-note">已停止生成 · 这一轮没有产出答案</div>${usageBlock}</div>`;
+  }
+
   return `
-    <div class="ai-tag"><i>AI</i>${esc(plannerLabel())}${star}</div>
+    <div class="ai-tag"><i>AI</i>${esc(plannerLabel())}${star}${copyBtn}</div>
     <div class="ai-body">
       <div>${r.headline_html || esc(r.headline)}</div>
       ${r.detail ? `<div style="margin-top:6px;color:var(--muted);font-size:12px">${esc(r.detail)}</div>` : ""}
+      ${degBlock}
+      ${factsBlock}
+      ${chartBlock}
       ${meetBlock(r.meet_draft, ref)}
       ${kbBlock(r.knowledge)}
+      ${sugBlock}
       ${notesBlock}
       ${evBlock}
       ${srcs ? `<div class="ai-src">${srcs}</div>` : ""}
       ${traceBlock}
+      ${usageBlock}
     </div>`;
+}
+
+/* token 数写给人看：四位数以上用 k，否则原样。0 也照实显示 ——
+   "0 输入" 和 "没报" 是两件事，后者另有文案。 */
+function fmtTok(n) {
+  const v = Number(n) || 0;
+  return v >= 1000 ? (v / 1000).toFixed(1).replace(/\.0$/, "") + "k" : String(v);
+}
+
+/* 降级说明。三种情况要分开写，因为用户能做的事不一样：
+   退回规则 → 换个问法可能就能答对；换模型 → 去设置里修首选模型；
+   重试成功 → 不用管，只是让你知道刚才慢了一下。 */
+function degradedNote(d) {
+  if (!d || !d.kind) return "";
+  // 标签和正文之间用一个全角空格隔开：靠 CSS margin 的话，复制出来是
+  // 「这次没走模型模型解析失败…」，粘到文档里就是病句。
+  if (d.kind === "rules") {
+    return `<div class="deg"><b>这次没走模型</b>　${esc(d.reason || "已退回规则解析，结果可能不够准")}</div>`;
+  }
+  if (d.kind === "fallback") {
+    return `<div class="deg"><b>用了备用模型</b>　${esc(d.from || "首选模型")} 不可用，本次由 ${esc(d.model || "备用模型")} 解析</div>`;
+  }
+  return `<div class="deg"><b>重试后成功</b>　模型第一次调用失败，已自动重试</div>`;
 }
 
 /* ---------- 可召唤的专家团 ----------
@@ -2849,6 +3075,7 @@ function closeSlash() {
 function pickSlash(id) {
   selectExpert(id);
   $("#q").value = "";
+  draftSave();   // 程序清空不触发 input 事件，草稿得手动对齐，否则刷新后又冒出来
   closeSlash();
   $("#q").focus();
 }
@@ -2866,6 +3093,7 @@ function slashKeydown(e) {
   if (e.key === "Escape") {
     // 连斜杠一起清掉：留着 /经 再按 Enter 会把它当问题发出去
     $("#q").value = "";
+    draftSave();
     closeSlash();
     return true;
   }
@@ -2888,20 +3116,50 @@ function slashKeydown(e) {
   return false;
 }
 
-async function ask(question) {
-  if (!question.trim()) return;
+/* 进行中的那一轮。有它才能"停止"：AbortController 断的是前端的等待，
+   后端在下一个步骤边界看到对端已断就抛 TurnCancelled。
+
+   注意停止**不等于**关页面：关页面后端照常算完落库（"断开不杀 turn"），
+   停止则是明确的"不要再算了"，会落一条「已停止生成」。两者在界面上的区别，
+   就是用户按的是浏览器关闭按钮还是这里的「停止」。 */
+let RUN = null;
+
+function setRunning(on) {
+  const b = $("#go");
+  if (!b) return;
+  b.classList.toggle("is-stop", !!on);
+  b.dataset.run = on ? "1" : "";
+  b.textContent = on ? "停止" : "发送";
+}
+
+async function ask(question, opts = {}) {
+  question = String(question || "");
+  if (!question.trim() || RUN) return;
   const box = $("#thread");
   const empty = $("#threadEmpty");
   if (empty) empty.remove();
 
-  box.insertAdjacentHTML("beforeend", `<div class="bub-user">${esc(question)}</div>`);
+  // 发出去了，草稿就不该还在：否则下次进这个会话，输入框里又冒出已经问过的话
+  try {
+    localStorage.removeItem(DRAFT_KEY(THREAD));
+    localStorage.removeItem(DRAFT_KEY(null));
+  } catch (e) { /* 隐身模式 */ }
+
+  // 重试不重复画用户气泡：这一问上一轮已经显示在屏幕上了，后端也已落库
+  if (!opts.retry) {
+    box.insertAdjacentHTML("beforeend", `<div class="bub-user">${esc(question)}</div>`);
+  }
   const holder = document.createElement("div");
   holder.className = "bub-ai";
+  // 重试要拿到原问题。挂在 DOM 上而不是全局变量：多条失败并存时不会串。
+  holder.dataset.retryq = question;
   holder.innerHTML = `<div class="ai-tag"><i>AI</i>${esc(plannerLabel())}</div>
     <div class="ai-body"><div class="stage-hint">正在调用模型解析意图…</div></div>`;
   box.appendChild(holder);
   box.scrollTop = box.scrollHeight;
-  $("#go").disabled = true;
+
+  RUN = { ac: new AbortController(), question, turnId: null, stopped: false };
+  setRunning(true);
 
   const stage = (text) => {
     const el = holder.querySelector(".ai-body");
@@ -2909,21 +3167,117 @@ async function ask(question) {
   };
   const fail = (msg) => {
     holder.innerHTML = `<div class="ai-tag"><i>AI</i>${esc(plannerLabel())}</div>
-      <div class="ai-body"><div class="warnbox">${esc(msg)}</div></div>`;
+      <div class="ai-body"><div class="warnbox">${esc(msg)}</div>
+      ${retryOps()}</div>`;
+  };
+  const stopped = () => {
+    holder.innerHTML = `<div class="ai-tag"><i>AI</i>${esc(plannerLabel())}</div>
+      <div class="ai-body"><div class="ai-note">已停止生成 · 这一轮没有产出答案</div>
+      ${retryOps()}</div>`;
+  };
+
+  let finished = false;
+  // 收到的最后一条事件序号。断线续流从这里接着拉，已经处理过的不再重放。
+  let lastSeq = 0;
+
+  /* 一条事件的处理逻辑。SSE 直连和断线续流共用这一份 —— 写两份的话，
+     续流那条路径平时走不到，最迟半年就会和主线对不上。 */
+  const handle = (f) => {
+    if (f.type === "start") {
+      THREAD = f.thread_id;
+      // 记下这一轮的 id：点「停止」时要带着它去告诉后端"别算了"。
+      // 光断开连接分不出"关页面"和"点停止"，后端只能靠这个显式信号。
+      if (RUN) RUN.turnId = f.turn_id || RUN.turnId;
+      if (!finished) {
+        stage(f.turns ? `已接入会话 · 第 ${f.turns + 1} 轮` : "新会话已建立，正在解析…");
+      }
+    } else if (f.type === "plan") {
+      if (finished) return;
+      // planner 现在是 llm / llm_retry / llm_fallback / rules / llm_failed:…，
+      // 只认 === "llm" 的话，换过模型的那次会被说成「规则解析」，正好说反
+      const who = String(f.planner || "").startsWith("llm") ? "模型" : "规则";
+      const names = (f.names || []).join("、");
+      const extra = f.degraded && f.degraded.kind === "fallback" ? `（备用 ${f.degraded.model || ""}）` : "";
+      stage(`${who}解析完成${extra} · ${intentLabel(f.intent)}${names ? " · " + names : " · 未命中已注册指标"}`);
+    } else if (f.type === "experts") {
+      // 专家是串行调模型的，三位加起来好几秒。不报进度的话，界面会从
+      // 「解析完成」一直静默到出结果，看着像卡死。
+      if (finished) return;
+      const tail = f.phase === "start" ? "正在看材料" : (f.ok ? "已给出意见" : "未给出意见");
+      stage(`专家解读 · ${f.name} ${tail}（${f.index}/${f.total}）`);
+    } else if (f.type === "done") {
+      finished = true;
+      THREAD = f.thread_id;
+      holder.innerHTML = aiBubble(f.result, { threadId: f.thread_id, messageId: f.message_id });
+      // 星级按钮要能定位到这条消息（收藏夹跳回来也靠它），落库 id 由后端返回
+      holder.dataset.mid = f.message_id || "";
+      bindFold(holder);
+      const u = (f.result && f.result.usage) || {};
+      THREAD_TOKENS += Number(u.total_tokens) || 0;
+      renderUsageFoot();
+    } else if (f.type === "cancelled") {
+      // 后端确认已经停了。它落了一条「已停止生成」，所以侧栏条数会变，
+      // 但这里不重载正文 —— 用户刚主动停下，不该立刻给他换一屏内容。
+      finished = true;
+      THREAD = f.thread_id || THREAD;
+      stopped();
+    } else if (f.type === "error") {
+      finished = true;
+      fail(`这一轮没算完：${friendlyError(f.error)}`);
+    }
+  };
+
+  /* 断线之后怎么收场。两种断法（读到末尾 / reader 抛异常）都走这里，
+     逻辑只写一份 —— 否则其中一条迟早会和另一条走偏。 */
+  const recover = async () => {
+    if (finished) return;
+    const turnId = RUN && RUN.turnId;
+    if (!turnId) return;
+    const back = await resumeTurn(turnId, () => lastSeq, (n) => { lastSeq = n; }, handle);
+    if (finished) return;              // 续流里收到 done/cancelled，答案已经画好
+    if (back === "cancelled") return stopped();
+    if (back === "timeout") {
+      return fail("连接中断，这一轮可能还在后台计算。稍后点开这条会话就能看到结果。");
+    }
+    if (back === "gone") {
+      // 服务重启过，或者这一轮超过了保留期：没事件可放。退回读会话 ——
+      // 如果后端其实已经算完并落库，答案就在这里，不该让用户再问一遍。
+      const th = await fetchThreadQuietly();
+      const msgs = (th && th.messages) || [];
+      if (msgs.length && msgs[msgs.length - 1].role === "assistant") renderThread(th);
+    }
   };
 
   try {
     const res = await fetch("/api/ask/stream", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, thread_id: THREAD, experts: currentExperts() }),
+      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      body: JSON.stringify({
+        question,
+        thread_id: THREAD,
+        experts: currentExperts(),
+        // 重试时后端认「上一条 user 正文相同」就跳过落库，否则会话里会出现
+        // 同一条问题连问两遍
+        retry: !!opts.retry,
+      }),
+      signal: RUN.ac.signal,
     });
-    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok || !res.body) {
+      // 后端报错时返回的是 {"ok":false,"error":"empty_question"} 这种带原因的 JSON。
+      // 以前直接丢掉、只留状态码，用户看到「调用失败：HTTP 400」根本不知道该改什么。
+      let why = "";
+      try {
+        const j = await res.json();
+        why = j ? String(j.error || j.message || "") : "";
+      } catch (e2) { /* 不是 JSON 就没有原因可说 */ }
+      throw new Error(why ? `${askErrText(why)}（HTTP ${res.status}）` : `HTTP ${res.status}`);
+    }
+    // 响应头里先拿到 turn id（事件里的 start 也可能丢）
+    if (RUN) RUN.turnId = res.headers.get("X-Turn-Id") || RUN.turnId;
 
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
-    let finished = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -2932,62 +3286,239 @@ async function ask(question) {
       const chunks = buf.split("\n\n");
       buf = chunks.pop();
       for (const chunk of chunks) {
-        const line = chunk.trim();
-        if (!line.startsWith("data: ")) continue;
-        let f;
-        try { f = JSON.parse(line.slice(6)); } catch { continue; }
-
-        if (f.type === "start") {
-          THREAD = f.thread_id;
-          stage(f.turns ? `已接入会话 · 第 ${f.turns + 1} 轮` : "新会话已建立，正在解析…");
-        } else if (f.type === "plan") {
-          const who = f.planner === "llm" ? "模型" : "规则";
-          const names = (f.names || []).join("、");
-          stage(`${who}解析完成 · ${intentLabel(f.intent)}${names ? " · " + names : " · 未命中已注册指标"}`);
-        } else if (f.type === "experts") {
-          // 专家是串行调模型的，三位加起来好几秒。不报进度的话，界面会从
-          // 「解析完成」一直静默到出结果，看着像卡死。
-          const tail = f.phase === "start" ? "正在看材料" : (f.ok ? "已给出意见" : "未给出意见");
-          stage(`专家解读 · ${f.name} ${tail}（${f.index}/${f.total}）`);
-        } else if (f.type === "done") {
-          finished = true;
-          THREAD = f.thread_id;
-          holder.innerHTML = aiBubble(f.result, { threadId: f.thread_id, messageId: f.message_id });
-          // 星级按钮要能定位到这条消息（收藏夹跳回来也靠它），落库 id 由后端返回
-          holder.dataset.mid = f.message_id || "";
-          bindFold(holder);
-        } else if (f.type === "error") {
-          finished = true;
-          fail(`调用失败：${f.error}`);
+        let payload = null;
+        for (const raw of chunk.split("\n")) {
+          const line = raw.trim();
+          // id 行形如 `id: 1a2b3c-4`，后半段是序号
+          if (line.startsWith("id: ")) {
+            const n = Number(line.slice(4).split("-").pop());
+            if (Number.isFinite(n) && n > lastSeq) lastSeq = n;
+          } else if (line.startsWith("data: ")) {
+            try { payload = JSON.parse(line.slice(6)); } catch { /* 半截包，等下一块 */ }
+          }
         }
+        if (payload) handle(payload);
       }
     }
-    if (!finished) fail("连接中断，没有收到结果。");
+
+    if (!finished) {
+      // 连接断了、但这一轮没结束。后端本来就会把这一轮算完（断开不杀 turn），
+      // 事件也都留在服务端，接着拉回来即可 —— 不重问，不重烧 token。
+      await recover();
+      if (!finished) fail("连接中断，没有收到结果。");
+    }
   } catch (e) {
-    fail(`调用失败：${e.message}`);
+    if (e && e.name === "AbortError") stopped();
+    else {
+      // 网络中断在 fetch 里是**抛异常**而不是「读到末尾」：TCP 被 reset 时
+      // reader.read() 直接 reject。所以续流不能只挂在这个 try 的末尾，
+      // 这里同样要走一遍 —— 否则最常见的断法恰好接不上。
+      await recover();
+      if (!finished) fail(`调用失败：${e.message}`);
+    }
+  } finally {
+    RUN = null;
+    setRunning(false);
   }
 
   box.scrollTop = box.scrollHeight;
-  $("#go").disabled = false;
   refreshThreads();
+}
+
+function retryOps() {
+  return `<div class="fail-ops"><button class="btn-retry" data-act="retry">重试这一轮</button>
+    <span>不会重复记录同一条提问</span></div>`;
+}
+
+/* 断线续流：从服务端的事件日志里把没收到的那几条拉回来。
+   为什么用轮询而不是 EventSource：EventSource 只能发 GET，而问数要 POST 一句
+   问题；为了续流把问题塞进 URL 既难看（长问题）也不安全（进访问日志）。
+   轮询的代价是 700ms 的延迟，对「已经算完、只是没送到」这个场景无所谓。
+   返回 done / expired / timeout / cancelled，由调用方决定怎么收场。 */
+async function resumeTurn(turnId, getSeq, setSeq, handle) {
+  const deadline = Date.now() + 120000;
+  let misses = 0;
+  while (Date.now() < deadline) {
+    if (!RUN || RUN.stopped) return "cancelled";   // 等待期间用户点了停止
+    await new Promise((r) => setTimeout(r, 700));
+    let d = null;
+    try {
+      const r = await fetch(
+        `/api/ask/turn/${encodeURIComponent(turnId)}?after=${getSeq()}`,
+        { headers: { "X-Person-Id": PID.get() } },
+      );
+      if (r.status === 404) return "gone";   // 过期，或根本不是自己的轮次
+      d = await r.json();
+    } catch (e) {
+      // 网络又断了。连续几次都拉不到就别耗着 —— 界面总得给个结论
+      if (++misses > 6) return "timeout";
+      continue;
+    }
+    misses = 0;
+    for (const ev of d.events || []) handle(ev);
+    if (typeof d.last === "number") setSeq(d.last);
+    if (d.done) return "done";
+  }
+  return "timeout";
+}
+
+/* 安静地取一次会话，不渲染。续流失败时用它判断「后端其实算完了没有」。 */
+async function fetchThreadQuietly() {
+  if (!THREAD) return null;
+  try {
+    const r = await fetch(`/api/threads/${encodeURIComponent(THREAD)}`, {
+      headers: { "X-Person-Id": PID.get() },
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d.thread || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/* 复制回答。取的是渲染后的可见文本，不是后端 headline —— headline 里带 <b>
+   标签，原样复制会把尖括号一起抄过去。
+   先把调用链路/用量/按钮这些"界面元件"从克隆体里摘掉：用户要的是答案。 */
+function copyBubble(el) {
+  const holder = el.closest(".bub-ai");
+  const body = holder && holder.querySelector(".ai-body");
+  if (!body) return;
+  const clone = body.cloneNode(true);
+  clone.querySelectorAll(".trace, .trace-fold, .ai-usage, .fail-ops").forEach((n) => n.remove());
+  const text = (clone.innerText || "").trim();
+  if (!text) return;
+  copyText(text).then(
+    () => toast("已复制这条回答"),
+    () => toast("复制失败：浏览器不让写剪贴板，请手动选中"),
+  );
+}
+
+async function copyText(text) {
+  // 127.0.0.1 算安全上下文，clipboard API 可用；别的部署方式下可能没有，
+  // 所以留一条 execCommand 的兜底（已废弃，但仍是唯一非安全上下文的办法）
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;top:-1000px;opacity:0";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    if (!document.execCommand("copy")) throw new Error("copy_rejected");
+  } finally {
+    ta.remove();
+  }
 }
 
 /* ---------- 会话与模型状态 ---------- */
 let THREAD = null;   // 当前会话 id；null = 还没建（首次提问时后端建）
 let MODELS = { providers: [], resolved: [], active: null, ready: false };
+let THREAD_TOKENS = 0;   // 当前会话累计 token（后端 meta.usage 汇总，切换会话时重置）
+
+/* 输入草稿：按会话分开存。共用一个 key 会让"换个会话继续写"把上一段冲掉；
+   不分会话存又会在切回来时看到别人会话的半句话。null 表示"还没建会话"。 */
+function DRAFT_KEY(tid) {
+  return "ocgov.draft." + (tid || "new");
+}
+function draftLoad(tid) {
+  const el = $("#q");
+  if (!el) return;
+  let v = "";
+  try { v = localStorage.getItem(DRAFT_KEY(tid)) || ""; } catch (e) { v = ""; }
+  el.value = v;
+  // 还原后把光标放到末尾，不然用户接着打字会从开头插进去
+  el.selectionStart = el.selectionEnd = v.length;
+}
+function draftSave() {
+  const el = $("#q");
+  if (!el) return;
+  const v = el.value;
+  try {
+    if (v.trim()) localStorage.setItem(DRAFT_KEY(THREAD), v);
+    else localStorage.removeItem(DRAFT_KEY(THREAD));
+  } catch (e) { /* 隐身模式/配额满：丢草稿比抛错好 */ }
+}
+
+/* 会话累计用量挂在历史那一屏的页脚：单轮用量在每条回答底部，
+   合计放在这里，切会话时跟着换。0 就不显示 —— 一块空标签比没有更碍眼。 */
+function renderUsageFoot() {
+  const el = $("#cfUsage");
+  if (!el) return;
+  el.textContent = THREAD_TOKENS ? `本会话 ${fmtTok(THREAD_TOKENS)} tokens` : "";
+  el.title = THREAD_TOKENS ? "本会话所有轮次的模型用量合计（含失败调用）" : "";
+}
 
 const INTENT_CN = { value: "取值", trend: "走势", breakdown: "分解", compare: "对比", definition: "口径", knowledge: "依据", meet: "约会议" };
 function intentLabel(i) { return INTENT_CN[i] || i || "—"; }
 
-const EMPTY_HTML = `<div class="thread-empty" id="threadEmpty">今天能帮您做什么？选择AI参谋对专业领域提问。<br>可以查会议资料、查统计数据、查项目进展等。</div>`;
+/* 后端给的错误码 → 人话。原样抛 "empty_question" 等于没解释。 */
+const ASK_ERR = {
+  empty_question: "问题不能为空",
+  thread_not_found: "这个会话已经不在了，新建一条再问",
+  unknown_metric: "没有这个指标",
+};
+function askErrText(code) {
+  const s = String(code || "").trim();
+  return ASK_ERR[s] || s || "未知错误";
+}
+
+/* 流里推的 error 是异常串（"TimeoutError: ..."）。直接怼给用户既看不懂，
+   也像是把内部细节漏出去。能归类的归类，归不了的给一句可操作的话，原文进控制台。 */
+function friendlyError(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "未知错误，请重试";
+  const low = s.toLowerCase();
+  if (low.includes("timeout") || low.includes("timed out")) return "模型响应超时，可以重试，或换一个更快的模型";
+  if (/connect|network|refused|getaddrinfo|resolv/.test(low)) return "连不上模型服务，检查网络和模型配置";
+  if (/401|403|unauthor|api.?key|invalid.*key/.test(low)) return "模型鉴权失败，检查 API Key";
+  if (/429|rate.?limit|quota/.test(low)) return "调用额度或频率受限，稍后再试";
+  if (low.includes("json")) return "模型返回的不是合法 JSON，可以重试或换个模型";
+  console.error("[ask] 未归类错误：", s);
+  return "服务端出错了，可以重试；反复失败请检查模型配置";
+}
+
+const EMPTY_TXT = `今天能帮您做什么？选择AI参谋对专业领域提问。<br>可以查会议资料、查统计数据、查项目进展等。`;
+
+/* 首屏示例。后端 /api/ask/examples 一直提供，前端却从没调用过 —— 样式和
+   [data-ask] 的处理器（全局委托里那段）早就写好了，只是没有人生成元素。
+   新用户进来面对一个空输入框，不知道这个系统能问什么，等于把最好的引导浪费掉。 */
+let EXAMPLES = [];
+
+async function loadExamples() {
+  try {
+    const d = await (await fetch("/api/ask/examples")).json();
+    EXAMPLES = (d.items || []).filter((x) => x && x.q).slice(0, 6);
+  } catch (e) {
+    EXAMPLES = [];   // 拉不到就不显示，空态退回原来那一句，不影响提问
+  }
+}
+
+function exampleChips() {
+  if (!EXAMPLES.length) return "";
+  return `<div class="ask-examples">${EXAMPLES.map((x) =>
+    `<button data-ask="${esc(x.q)}" title="${esc(x.tag || "点一下直接问")}">${esc(x.q)}</button>`).join("")}</div>`;
+}
+
+function emptyHtml() {
+  return `<div class="thread-empty" id="threadEmpty">${EMPTY_TXT}${exampleChips()}</div>`;
+}
 
 function bubbleFromHistory(m, threadId) {
   const meta = m.meta || {};
   return aiBubble({
     headline: m.content,
+    // detail 是补充说明（为什么没答、这个数怎么读）。不传的话刷新后这段就没了
+    detail: meta.detail || "",
     sources: meta.sources || [],
     notes: meta.notes || [],
     facts: meta.facts || [],
+    // 走势图同样要回放：趋势题在图消失后只剩一句"近 3 个月走势如何"，
+    // 读者只会以为这条答得敷衍
+    series: meta.series || [],
+    series_title: meta.series_title,
+    // 拒答清单同理：刷新就消失比一开始不给更让人困惑
+    suggestions: meta.suggestions || [],
     // 专家解读也要回放：现在专家是「对话中」的常驻角色，回看时那段凭空消失会很怪
     expert_views: meta.expert_views || [],
     // 知识库条目同理：切回历史对话时「依据」不能消失，否则答案就成了没出处的断言
@@ -2996,7 +3527,13 @@ function bubbleFromHistory(m, threadId) {
     // 已经建过会的，后端 annotate 会补上 meeting_id，卡片自动变成「已建会」。
     meet_draft: meta.meet_draft || null,
     planner: meta.planner,
+    // 降级提示要跟着回放：刷新后答案还在、提示没了，等于让人以为这就是模型给的
+    degraded: meta.degraded || null,
     planner_info: { available: !!meta.model, model: meta.model },
+    // 用量与「已停止」都要回放。用量是账，停止是事实陈述，两者丢了都会让
+    // 历史看起来像另一轮对话。
+    usage: meta.usage || {},
+    cancelled: !!meta.cancelled,
     trace: [],
   }, { threadId, messageId: m.id });
 }
@@ -3005,7 +3542,7 @@ function renderThread(thread) {
   const box = $("#thread");
   const msgs = (thread && thread.messages) || [];
   if (!msgs.length) {
-    box.innerHTML = EMPTY_HTML;
+    box.innerHTML = emptyHtml();
     return;
   }
   box.innerHTML = msgs.map((m) => m.role === "user"
@@ -3019,6 +3556,10 @@ function renderThread(thread) {
 /* 会话列表：一个数组喂两处 —— 历史那一屏、设置里的「会话记录 N 个」。
    sel 时代的 options.length 计数散在三个地方，改成数组之后只认这一个源。 */
 let THREADS = [];
+
+/* 搜索词。空 = 全部会话。搜的是标题 + 全部消息正文（后端做，前端只看结果），
+   所以"上次开会定了什么"这种按内容找的也搜得到 —— 只靠前端过滤 last_preview 不行。 */
+let CHAT_Q = "";
 
 function dayLabel(ts) {
   const d = new Date((ts || 0) * 1000);
@@ -3036,33 +3577,122 @@ function renderChats() {
   const box = $("#chatsList");
   if (!box) return;
   const cnt = $("#chatsCount");
-  if (cnt) cnt.textContent = THREADS.length ? `· ${THREADS.length}` : "";
+  const q = CHAT_Q.trim();
+  if (cnt) cnt.textContent = THREADS.length ? `· ${THREADS.length}${q ? " 条匹配" : ""}` : "";
   if (!THREADS.length) {
-    box.innerHTML = `<div class="chats-empty">还没有会话。<br>问第一个问题就会自动建一条。</div>`;
+    box.innerHTML = q
+      ? `<div class="chats-empty">没有匹配「${esc(q)}」的会话。<br>标题和对话正文都会搜，换个词试试。</div>`
+      : `<div class="chats-empty">还没有会话。<br>问第一个问题就会自动建一条。</div>`;
     return;
   }
   let last = "";
   box.innerHTML = THREADS.map((t) => {
     const lb = dayLabel(t.updated_at || t.created_at);
-    const grp = lb !== last ? `<div class="chats-grp">${lb}</div>` : "";
+    // 搜索时分了组就是干扰：结果是"匹配项"，不是"按时间的全部"
+    const grp = !q && lb !== last ? `<div class="chats-grp">${lb}</div>` : "";
     last = lb;
+    // 按正文命中的，用命中片段代替最后一条预览 —— 否则用户看不出这条为什么被搜出来
+    const preview = t.snippet || t.last_preview || "（空会话）";
     return `${grp}
       <div class="chat-item${t.id === THREAD ? " on" : ""}" data-tid="${esc(t.id)}" title="${esc(t.title || "未命名对话")}">
         <div class="ci-main">
           <div class="ci-t">${esc(t.title || "未命名对话")}</div>
-          <div class="ci-p">${esc(t.last_preview || "（空会话）")}</div>
+          <div class="ci-p${t.snippet ? " hit" : ""}">${esc(preview)}</div>
         </div>
         <span class="ci-n">${t.message_count || 0}</span>
+        <div class="ci-ops">
+          <button data-ren="${esc(t.id)}" title="重命名" aria-label="重命名会话">✎</button>
+          <button data-del="${esc(t.id)}" title="删除会话" aria-label="删除会话">✕</button>
+        </div>
       </div>`;
   }).join("");
 }
 
 async function refreshThreads() {
   try {
-    const d = await (await fetch("/api/threads")).json();
+    const q = CHAT_Q.trim();
+    const url = q ? `/api/threads?q=${encodeURIComponent(q)}` : "/api/threads";
+    // 会话是按身份存的，不带这个头就会拿到「默认身份」那一屏 —— 切人之后
+    // 列表还停在原处，看起来像没生效。
+    const d = await (await fetch(url, { headers: { "X-Person-Id": PID.get() } })).json();
     THREADS = d.items || [];
     renderChats();
   } catch (e) { /* 列表拉不到不影响问数 */ }
+}
+
+/* 重命名：内联编辑。prompt() 会弹出浏览器原生框，和这套界面完全不搭；
+   就地改成 input，按 Enter 落库、Esc 取消、失焦也当保存。 */
+function startRename(item) {
+  if (!item) return;
+  const id = item.dataset.tid;
+  const t = item.querySelector(".ci-t");
+  if (!t || item.querySelector(".ci-edit")) return;
+
+  const old = t.textContent;
+  const inp = document.createElement("input");
+  inp.className = "ci-edit";
+  inp.value = old;
+  inp.maxLength = 24;   // 和后端 MAX_TITLE 对齐，超了后端会静默截断
+  t.replaceWith(inp);
+  inp.focus();
+  inp.select();
+
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    const val = inp.value.trim();
+    if (!save || !val || val === old) return renderChats();
+    try {
+      const r = await fetch(`/api/threads/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+        body: JSON.stringify({ title: val }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!d.ok) throw new Error(askErrText(d.error || `HTTP ${r.status}`));
+      const row = THREADS.find((x) => x.id === id);
+      if (row) row.title = d.title || val;   // 用后端回显的值：它才是截断后的真标题
+      toast("已重命名");
+    } catch (e) {
+      toast("重命名失败：" + e.message);
+    }
+    renderChats();
+  };
+
+  inp.addEventListener("keydown", (e) => {
+    // 别让全局快捷键抢走：这里的 Esc 是「取消改名」，不是「关抽屉」
+    e.stopPropagation();
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  });
+  inp.addEventListener("blur", () => finish(true));
+}
+
+/* 删除会话。这是唯一一个误点就无法撤销的操作，所以用原生 confirm 拦一道 ——
+   样式统一不如拦住误删重要。 */
+async function deleteThread(id) {
+  const row = THREADS.find((x) => x.id === id);
+  const name = (row && row.title) || "这条会话";
+  if (!confirm(`删除「${name}」？\n\n对话内容会一起清掉，不能恢复。`)) return;
+  try {
+    const r = await fetch(`/api/threads/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { "X-Person-Id": PID.get() },
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!d.ok) {
+      // 后端删不到说明已经被人删了，不是错误，刷新列表就行
+      toast("这条会话已经不在了");
+      return refreshThreads();
+    }
+    THREADS = THREADS.filter((x) => x.id !== id);
+    if (THREAD === id) { THREAD = null; renderThread(null); }
+    renderChats();
+    toast("已删除");
+  } catch (e) {
+    toast("删除失败：" + e.message);
+  }
 }
 
 async function openThread(id) {
@@ -3070,12 +3700,19 @@ async function openThread(id) {
   renderChats();
   if (!id) {
     renderThread(null);
+    draftLoad(null);
+    THREAD_TOKENS = 0;
+    renderUsageFoot();
     return;
   }
-  const res = await fetch(`/api/threads/${id}`);
+  const res = await fetch(`/api/threads/${id}`, { headers: { "X-Person-Id": PID.get() } });
   if (!res.ok) { THREAD = null; renderThread(null); renderChats(); return; }
   const d = await res.json();
   renderThread(d.thread);
+  // 草稿跟着会话走：上一个会话打了一半的话不该出现在这个会话的输入框里
+  draftLoad(id);
+  THREAD_TOKENS = Number((d.usage || {}).total_tokens) || 0;
+  renderUsageFoot();
 }
 
 /* 历史对话那一屏：从头部按钮进，点某一条就回到对话 */
@@ -3098,6 +3735,9 @@ async function newThread() {
   renderThread(null);
   renderChats();
   showChats(false);
+  THREAD_TOKENS = 0;
+  renderUsageFoot();
+  draftLoad(null);
 }
 
 async function loadModels() {
@@ -3652,6 +4292,11 @@ async function switchPerson(pid) {
   }
   PID.set(pid);
   $("#idMenu").hidden = true;
+  // 会话是按身份存的：不换掉当前会话、不重拉列表，屏幕上留着的还是上一个人的
+  // 聊天记录 —— 既不安全，也让人以为「切换没生效」。
+  THREAD = null;
+  renderThread(null);
+  refreshThreads();
   // 提醒按人算：换身份不刷新，铃铛上还是上一个人的数，点开才发现内容对不上
   NT.data = null;
   await loadWorkspace();
@@ -5928,8 +6573,11 @@ async function boot() {
 
   // 模型配置 + 最近一次会话（没有会话就停在空态，不自动建空记录）
   await loadModels();
+  // 示例要在渲染空态之前就位，否则首屏是「没有示例」，刷新一下才出现
+  await loadExamples();
   await refreshThreads();
   if (THREADS[0]) await openThread(THREADS[0].id);
+  else { renderThread(null); draftLoad(null); renderUsageFoot(); }
 
   // 直接带 #models 打开设置面板，方便收藏一个「配模型」的直达链接
   if (location.hash === "#models") openSettings("model");
@@ -6154,10 +6802,35 @@ document.addEventListener("click", (e) => {
     return renderAgenda();
   }
 
+  // 出处胶囊、拒答清单里的指标名 → 打开口径抽屉。
+  // 以前这三个胶囊给了 cursor:pointer 和 hover 变色，却没有任何处理器：
+  // 看着能点、点了没反应，比不做这个样式更伤。
+  const srcPill = e.target.closest("[data-src]");
+  if (srcPill) {
+    const code = (srcPill.dataset.src || "").trim();
+    if (code) return showMetric(code);
+  }
+
   if (e.target.closest("[data-ask]")) {
     const q = e.target.closest("[data-ask]").dataset.ask;
     $("#q").value = q;
     return ask(q);
+  }
+
+  // 复制回答：取整条气泡的可见文本（正文 + 数值格 + 出处），
+  // 比让用户自己框选再 Ctrl+C 靠谱，也不会漏掉来源。
+  const cp = e.target.closest("[data-cp]");
+  if (cp) return copyBubble(cp);
+
+  // 重试：把这一条失败的占位块换掉重发。问题挂在 .bub-ai 的 dataset 上；
+  // 找不到就当它不存在（老 DOM/手改过），让用户自己重打，不瞎猜。
+  const rt = e.target.closest("[data-act='retry']");
+  if (rt) {
+    const holder = rt.closest(".bub-ai");
+    const q = (holder && holder.dataset.retryq) || "";
+    if (!q) return toast("这次的问题已经取不到了，请在输入框里重新提问");
+    if (holder) holder.remove();
+    return ask(q, { retry: true });
   }
 
   const nav = e.target.closest("[data-nav]");
@@ -6190,6 +6863,32 @@ $("#askChats").onclick = () => showChats(true);
 $("#chatsBack").onclick = () => showChats(false);
 $("#askFold").onclick = () => setAskFold(true);
 $("#askRail").onclick = () => setAskFold(false);
+
+/* 会话搜索。输入即搜（220ms 防抖）—— 数据在本地 JSON 里，一次全量扫描是毫秒级，
+   加个「搜索」按钮反而多一步。Escape 清空，和输入框的惯例一致。 */
+let CHAT_TIMER = 0;
+function applyChatQuery(v) {
+  CHAT_Q = v;
+  const clear = $("#chatsQClear");
+  if (clear) clear.hidden = !v.trim();
+  clearTimeout(CHAT_TIMER);
+  CHAT_TIMER = setTimeout(refreshThreads, 220);
+}
+$("#chatsQ").addEventListener("input", (e) => applyChatQuery(e.target.value));
+$("#chatsQ").addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  e.preventDefault();
+  e.target.value = "";
+  applyChatQuery("");
+  refreshThreads();
+});
+$("#chatsQClear").onclick = () => {
+  const el = $("#chatsQ");
+  el.value = "";
+  applyChatQuery("");
+  refreshThreads();
+  el.focus();
+};
 $("#headNew").onclick = () => {
   newThread();
   toast("已开新会话，下一句提问会自动创建");
@@ -6209,8 +6908,16 @@ $("#deskTabs").addEventListener("dblclick", (e) => {
 });
 // 列表项整行可点：点哪一条就切哪一条，切换完直接回对话屏
 $("#chatsList").onclick = (e) => {
+  // 操作按钮要排在「打开会话」前面：否则点「删除」会先把这条会话打开，再弹确认
+  const ren = e.target.closest("[data-ren]");
+  if (ren) { e.stopPropagation(); return startRename(ren.closest(".chat-item")); }
+  const del = e.target.closest("[data-del]");
+  if (del) { e.stopPropagation(); return deleteThread(del.dataset.del); }
+
   const it = e.target.closest(".chat-item");
   if (!it) return;
+  // 正在改名时点条目不要跳走，否则刚输入的字就白打了
+  if (it.querySelector(".ci-edit")) return;
   openThread(it.dataset.tid).then(() => showChats(false));
 };
 document.querySelectorAll("[data-model-pill]").forEach((p) => {
@@ -6322,6 +7029,23 @@ $("#attachInput").onchange = (e) => {
 };
 
 $("#go").onclick = () => {
+  // 正在算的时候这个按钮就是「停止」，优先级高于一切（包括斜杠菜单）
+  if (RUN) {
+    // 先告诉后端别算了，再断开等待。顺序不能反：abort 之后这个 RUN 马上就没了，
+    // 而 cancel 请求是独立的一条连接，不受 abort 影响。
+    // 打上 stopped 标记：续流循环每轮都看它，否则用户点了停止、界面还在后台
+    // 一直轮询，等于「停止」按了没停。
+    RUN.stopped = true;
+    if (RUN.turnId) {
+      fetch("/api/ask/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+        body: JSON.stringify({ turn_id: RUN.turnId }),
+      }).catch(() => { /* 就算没送到，前端也已经停了，不影响用户 */ });
+    }
+    RUN.ac.abort();
+    return;
+  }
   // 斜杠菜单开着时，「发送」当成确认选人。此时输入框里只有 / 和半个名字，
   // 当问题发出去既解析不出意图，还会让 /经济 进会话标题。
   if (slashQuery() !== null) {
@@ -6341,6 +7065,9 @@ $("#q").addEventListener("keydown", (e) => {
   // 三行输入框：Enter 发送，Shift+Enter 换行（textarea 默认行为）
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
+    // 算着的时候 Enter 不当「停止」用：手快按回车就把正在等的结果掐掉，
+    // 是最容易误伤的操作。要停就点按钮。
+    if (RUN) return;
     $("#go").click();
   }
 });
@@ -6349,7 +7076,7 @@ $("#q").addEventListener("keydown", (e) => {
 let SLASH_IME = false;
 $("#q").addEventListener("compositionstart", () => { SLASH_IME = true; });
 $("#q").addEventListener("compositionend", () => { SLASH_IME = false; syncSlash(); });
-$("#q").addEventListener("input", () => { if (!SLASH_IME) syncSlash(); });
+$("#q").addEventListener("input", () => { draftSave(); if (!SLASH_IME) syncSlash(); });
 $("#slashMenu").onmousedown = (e) => {
   // mousedown 而不是 click：click 之前输入框会先失焦，某些浏览器顺序不稳
   const item = e.target.closest(".slash-item");
@@ -6361,6 +7088,15 @@ $("#drClose").onclick = closeDrawer;
 $("#mask").onclick = closeDrawer;
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeDrawer();
+  // 出处胶囊是 span + role="button"，只做 click 等于把键盘用户排除在外
+  if (e.key === "Enter" || e.key === " ") {
+    const el = document.activeElement;
+    if (el && el.dataset && el.dataset.src) {
+      e.preventDefault();
+      showMetric(el.dataset.src);
+      return;
+    }
+  }
   // Ctrl+, 打开设置：菜单里标了这个组合，就必须真的能用
   if ((e.ctrlKey || e.metaKey) && (e.key === "," || e.code === "Comma")) {
     e.preventDefault();

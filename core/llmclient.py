@@ -10,17 +10,30 @@
 一份，那是明确的重复，所以提到这里。
 
 不做的事（有意）：
-- 不做重试。模型调用失败时上层要么退回规则、要么直接报错，静默重试只会让用户
-  等更久还不知道发生了什么。
+- 这一层**不自己重试**。失败原样抛给调用方 —— 「要不要再试、要不要换模型」是
+  业务决定（问数可以降级到规则，会议纪要不行），写死在这里只能做错。
+  调用方用 `retryable(exc)` 判断同一个模型再试有没有意义。
 - 不做流式。这两处要的都是完整 JSON，没有可读正文流可推。
 - 不缓存。同一句话两次解析结果可能不同，缓存会把「模型飘了」这件事藏起来。
+
+## 用量采集（track_usage）
+
+`usage` 以前只写进 trace 的一句摘要里，而 trace 不落库 —— 花掉的 token 就永久丢了。
+现在每次请求都把 usage 记进一个 contextvar 里的 sink，由上层用 `with track_usage()`
+圈住一轮对话，结束时 `summarize()` 汇成一份可落库的结构。
+
+用 contextvar 而不是模块级 list：服务是多线程的（ThreadingHTTPServer 每请求一线程），
+模块级累加器会把两个人的对话算到一个人头上。新线程的 context 是空的，正好互不干扰。
 """
 
 from __future__ import annotations
 
+import contextvars
 import json
+import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from typing import Any
 
 import modelcfg
@@ -31,7 +44,90 @@ class ModelUnavailable(RuntimeError):
 
 
 class ModelError(RuntimeError):
-    """调用到了，但失败了（网络/额度/返回不是合法 JSON）。"""
+    """调用到了，但失败了（网络/额度/返回不是合法 JSON）。
+
+    `kind` / `status` 是给重试逻辑看的：同样是失败，「鉴权错了」再试一百次也没用，
+    「429 限流」等半秒就好，「连接超时」说明网断了、换一个 provider 才可能活。
+    以前上层只能靠字符串里有没有 "401" 来猜，那是不可靠的。
+    """
+
+    def __init__(self, message: str, *, kind: str = "other", status: int | None = None):
+        super().__init__(message)
+        self.kind = kind          # http | network | json | other
+        self.status = status
+
+
+def retryable(exc: BaseException) -> bool:
+    """同一个模型再试一次有没有意义。
+
+    不重试的情形：鉴权失败（401/403）、请求不合法（400/404/422）、模型不存在。
+    这些换个模型可能好，但同一个模型再试只是白等。
+    """
+    if not isinstance(exc, ModelError):
+        return False
+    if exc.kind in ("network", "json"):
+        return True
+    if exc.kind == "http":
+        code = int(exc.status or 0)
+        return code in (408, 425, 429) or code >= 500
+    return False
+
+
+# ── 用量采集 ────────────────────────────────────────────────────────────
+
+_sink: contextvars.ContextVar[list[dict[str, Any]] | None] = contextvars.ContextVar(
+    "ocgov_llm_usage", default=None
+)
+
+
+@contextmanager
+def track_usage():
+    """圈住一轮对话，收集期间所有模型调用的用量。
+
+    用法：`with track_usage() as sink: ...`，结束后 `summarize(sink)`。
+    嵌套时内层会覆盖外层 —— 本项目没有嵌套场景，真出现了也是内层那圈更准。
+    """
+    bucket: list[dict[str, Any]] = []
+    token = _sink.set(bucket)
+    try:
+        yield bucket
+    finally:
+        _sink.reset(token)
+
+
+def _record(entry: dict[str, Any]) -> None:
+    bucket = _sink.get()
+    if bucket is not None:
+        bucket.append(entry)
+
+
+def _ms(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)
+
+
+def summarize(bucket: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """把逐次调用压成一份可落库的用量。
+
+    失败调用也计入 `calls`，但 token 按 0 算（服务端可能根本没计费）。
+    `reported` 表示"至少有一次调用真的返回了 usage"—— 否则 total 为 0 只代表
+    对方没报，不代表没花钱，界面不能把它显示成「0 tokens」。
+    """
+    bucket = bucket or []
+    prompt = sum(int((c.get("usage") or {}).get("prompt_tokens") or 0) for c in bucket)
+    completion = sum(int((c.get("usage") or {}).get("completion_tokens") or 0) for c in bucket)
+    total = sum(
+        int((c.get("usage") or {}).get("total_tokens") or 0) for c in bucket
+    ) or (prompt + completion)
+    return {
+        "calls": len(bucket),
+        "failed": sum(1 for c in bucket if not c.get("ok")),
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total,
+        "ms": sum(int(c.get("ms") or 0) for c in bucket),
+        "reported": any(bool(c.get("usage")) for c in bucket),
+        "models": sorted({str(c.get("model") or "") for c in bucket if c.get("model")}),
+    }
 
 
 def available() -> bool:
@@ -87,22 +183,41 @@ def chat_json(
         },
         method="POST",
     )
+    started = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:300]
-        raise ModelError(f"HTTP {exc.code}: {detail}") from exc
+        _record({"ok": False, "model": conn["model"], "ms": _ms(started)})
+        raise ModelError(
+            f"HTTP {exc.code}: {detail}", kind="http", status=int(exc.code)
+        ) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise ModelError(f"连接失败: {exc}") from exc
+        _record({"ok": False, "model": conn["model"], "ms": _ms(started)})
+        raise ModelError(f"连接失败: {exc}", kind="network") from exc
+
+    # 到这一步 HTTP 已经成功、token 也已经计费，所以先记用量再解析内容：
+    # 后面即使 JSON 不合法，这通电话的钱是真花了，不该在账上消失。
+    _record(
+        {
+            "ok": True,
+            "model": body.get("model") or conn["model"],
+            "model_ref": conn["ref"],
+            "usage": body.get("usage") or {},
+            "ms": _ms(started),
+        }
+    )
 
     try:
         text = body["choices"][0]["message"]["content"]
         data = json.loads(text)
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-        raise ModelError(f"返回不是合法 JSON: {str(exc)[:200]}") from exc
+        raise ModelError(f"返回不是合法 JSON: {str(exc)[:200]}", kind="json") from exc
     if not isinstance(data, dict):
-        raise ModelError(f"返回的 JSON 顶层不是对象，而是 {type(data).__name__}")
+        raise ModelError(
+            f"返回的 JSON 顶层不是对象，而是 {type(data).__name__}", kind="json"
+        )
 
     return {
         "data": data,
