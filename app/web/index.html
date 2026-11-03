@@ -3132,6 +3132,107 @@ function setRunning(on) {
   b.textContent = on ? "停止" : "发送";
 }
 
+/* ---------- 刷新后接回上一轮 ----------
+   以前刷新一下，正在跑的那一轮就永久失联：后端还在算、事件也留着，但页面已经
+   不认识它了，用户回来只看到历史停在半空，只能重新问一遍（再烧一次 token）。
+
+   现在把 turn_id 存进 sessionStorage（关了标签页才清）。回来先问一句「算完了没」：
+   算完就把会话按正常路径重渲染，没算完就等。
+
+   为什么只等结果、不重放逐条事件：重放要把 ask() 里的 holder/stage/fail 全套
+   闭包抽出来。刷新之后用户要的是答案，不是再看一遍"正在解析意图"。
+   用 sessionStorage 而不是 localStorage：新开标签页不该继承别人的在跑轮次。 */
+const PENDING_TURN = "ocgov.pending";
+
+function pendingSave(p) {
+  try { sessionStorage.setItem(PENDING_TURN, JSON.stringify(p)); } catch (e) { /* 隐身模式 */ }
+}
+function pendingRead() {
+  try { return JSON.parse(sessionStorage.getItem(PENDING_TURN) || "null"); } catch (e) { return null; }
+}
+function pendingClear() {
+  try { sessionStorage.removeItem(PENDING_TURN); } catch (e) { /* 隐身模式 */ }
+}
+
+async function resumePending() {
+  const p = pendingRead();
+  if (!p || !p.turnId) return false;
+  // 换过身份就别接了：后端也认 owner，等着只会白等一轮
+  if (p.person && p.person !== PID.get()) { pendingClear(); return false; }
+
+  // 刷新后停在最近一次会话，通常正是这一轮所在的会话；不是就切过去 ——
+  // 用户刷新就是为了看这一轮，把它藏在别的会话里没道理
+  if (p.threadId && p.threadId !== THREAD) await openThread(p.threadId);
+
+  // 问一句「那一轮完了没」。返回事件包、404 时返回 "gone"、网络不通返回 null。
+  const probe = async () => {
+    try {
+      const r = await fetch(`/api/ask/turn/${encodeURIComponent(p.turnId)}?after=0`, {
+        headers: { "X-Person-Id": PID.get() },
+      });
+      if (r.status === 404) return "gone";
+      return await r.json();
+    } catch (e) {
+      return null;
+    }
+  };
+
+  // 接过一次就够。事件没了但答案已经落库时，回会话里看一眼，别让用户以为白问了
+  const settle = async (d) => {
+    pendingClear();
+    if (d && d.thread_id) await openThread(d.thread_id);
+    else if (p.threadId) await openThread(p.threadId);
+    await refreshThreads();
+  };
+
+  // 先探一次再决定要不要出提示。用户多半是「等结果时刷新」的，这时后端早算完了 ——
+  // 先插一条「正在接回」再马上收掉，等于凭空闪一下。
+  let d = await probe();
+  if (d === "gone") { await settle(null); return false; }
+  if (d && d.done) { await settle(d); return true; }
+
+  const box = $("#thread");
+  const note = document.createElement("div");
+  note.className = "bub-ai";
+  note.dataset.pending = "1";
+  note.innerHTML = `<div class="ai-tag"><i>AI</i>接回上一轮</div>
+    <div class="ai-body"><div class="stage-hint">上一轮还在后台计算，出结果会自动显示…</div></div>`;
+  if (box) { box.appendChild(note); box.scrollTop = box.scrollHeight; }
+
+  const say = (html) => {
+    const b = note.querySelector(".ai-body");
+    if (b) b.innerHTML = html;
+  };
+
+  const deadline = Date.now() + 120000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1200));
+    d = await probe();
+    if (d === "gone") {
+      // 服务重启过，或者超过 10 分钟保留期。事件没了，但答案可能已经落库
+      note.remove();
+      await settle(null);
+      const th2 = await fetchThreadQuietly();
+      const ms = (th2 && th2.messages) || [];
+      if (!ms.length || ms[ms.length - 1].role !== "assistant") {
+        say(`<div class="stage-hint">这一轮没能接上（服务重启或超时），请重新提问。</div>`);
+        if (box) box.appendChild(note);
+      }
+      return false;
+    }
+    if (d && d.done) {
+      note.remove();
+      // 答案早就落库了（done 事件在落库之后才推），按平时点会话的路径读回来
+      await settle(d);
+      return true;
+    }
+  }
+
+  // 还没算完。记录留着，下次刷新接着等；这一页给一句实话，别假装还在转
+  say(`<div class="stage-hint">这一轮还在后台计算，可以先做别的 —— <b>点开这条会话</b>就能看到结果。</div>`);
+  return false;
+}
+
 async function ask(question, opts = {}) {
   question = String(question || "");
   if (!question.trim() || RUN) return;
@@ -3161,6 +3262,15 @@ async function ask(question, opts = {}) {
   RUN = { ac: new AbortController(), question, turnId: null, stopped: false };
   setRunning(true);
 
+  // 记下这一轮，刷新后 resumePending() 靠它接回来。turn_id 在响应头和 start
+  // 事件里各给一次，两处都要调 —— 哪儿先到用哪儿。
+  const rememberTurn = () => {
+    if (!RUN || !RUN.turnId) return;
+    pendingSave({ turnId: RUN.turnId, threadId: THREAD, question, person: PID.get() });
+  };
+  // 这一轮还在后台跑着的时候不能清记录：清了刷新就接不上了
+  let keepPending = false;
+
   const stage = (text) => {
     const el = holder.querySelector(".ai-body");
     if (el) el.innerHTML = `<div class="stage-hint">${esc(text)}</div>`;
@@ -3188,6 +3298,7 @@ async function ask(question, opts = {}) {
       // 记下这一轮的 id：点「停止」时要带着它去告诉后端"别算了"。
       // 光断开连接分不出"关页面"和"点停止"，后端只能靠这个显式信号。
       if (RUN) RUN.turnId = f.turn_id || RUN.turnId;
+      rememberTurn();
       if (!finished) {
         stage(f.turns ? `已接入会话 · 第 ${f.turns + 1} 轮` : "新会话已建立，正在解析…");
       }
@@ -3237,6 +3348,8 @@ async function ask(question, opts = {}) {
     if (finished) return;              // 续流里收到 done/cancelled，答案已经画好
     if (back === "cancelled") return stopped();
     if (back === "timeout") {
+      // 这一轮很可能还在后台算：记录留着，刷新一次就能接回来
+      keepPending = true;
       return fail("连接中断，这一轮可能还在后台计算。稍后点开这条会话就能看到结果。");
     }
     if (back === "gone") {
@@ -3274,6 +3387,7 @@ async function ask(question, opts = {}) {
     }
     // 响应头里先拿到 turn id（事件里的 start 也可能丢）
     if (RUN) RUN.turnId = res.headers.get("X-Turn-Id") || RUN.turnId;
+    rememberTurn();
 
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -3319,6 +3433,7 @@ async function ask(question, opts = {}) {
   } finally {
     RUN = null;
     setRunning(false);
+    if (!keepPending) pendingClear();
   }
 
   box.scrollTop = box.scrollHeight;
@@ -6578,6 +6693,10 @@ async function boot() {
   await refreshThreads();
   if (THREADS[0]) await openThread(THREADS[0].id);
   else { renderThread(null); draftLoad(null); renderUsageFoot(); }
+
+  // 刷新前有一轮还在后台跑的话接回来。**不能 await**：它最长等两分钟，
+  // 把提醒、示例、直达链接全压在这后面比接不回还糟。
+  if (pendingRead()) resumePending();
 
   // 直接带 #models 打开设置面板，方便收藏一个「配模型」的直达链接
   if (location.hash === "#models") openSettings("model");

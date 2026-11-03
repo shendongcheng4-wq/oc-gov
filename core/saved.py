@@ -58,9 +58,15 @@ def _squash(text: str, limit: int) -> str:
     return one if len(one) <= limit else one[: limit - 1] + "…"
 
 
-def _locate(thread_id: str, message_id: str) -> tuple[dict[str, Any], dict[str, Any]] | str:
-    """回到会话里找那条回答，顺带把它的提问也捞出来。找不到返回中文原因。"""
-    thread = chat.get(thread_id)
+def _locate(thread_id: str, message_id: str, owner: str | None = None) -> tuple[dict[str, Any], dict[str, Any]] | str:
+    """回到会话里找那条回答，顺带把它的提问也捞出来。找不到返回中文原因。
+
+    `owner` 必须传：收藏是往**自己**名下写的，但会话可能不是自己的。不核归属的话，
+    拿到别人的 thread_id + message_id 就能把对方的回答收进自己的收藏夹 —— 会话层
+    已经一律 404 了，这里敞着就是一致性缺口。原因文案跟「会话不存在」保持一致，
+    不额外透露「这会话存在但不是你的」。
+    """
+    thread = chat.get(thread_id, owner=owner)
     if not thread:
         return "会话不存在（可能已被删除）。"
     msgs = thread.get("messages") or []
@@ -86,7 +92,9 @@ def list_of(pid: str | None) -> list[dict[str, Any]]:
     """
     out = []
     for it in _items_of(pid):
-        thread = chat.get(it.get("thread_id") or "")
+        # 带上 owner：修复写入端之前存进来的条目可能指向别人的会话，读的时候就别
+        # 再把它显示出来了（否则等于用列表标题把别人的会话名报出来）。
+        thread = chat.get(it.get("thread_id") or "", owner=pid)
         if not thread:
             continue
         if not any(m.get("id") == it["id"] for m in (thread.get("messages") or [])):
@@ -130,7 +138,7 @@ def add(pid: str | None, thread_id: Any, message_id: Any) -> dict[str, Any]:
     if not tid or not mid:
         return {"ok": False, "error": "缺少 thread_id 或 message_id。"}
 
-    found = _locate(tid, mid)
+    found = _locate(tid, mid, key)
     if isinstance(found, str):
         return {"ok": False, "error": found}
     thread, msg = found

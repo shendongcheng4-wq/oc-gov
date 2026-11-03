@@ -943,7 +943,9 @@ def test_saved() -> None:
     print("[17] 收藏问答")
     import saved as sv
 
-    th = chat.create("smoke-saved")
+    # 必须带 owner：收藏会按归属取会话，没主的老会话在真实服务里早被 own_orphans
+    # 迁走了，测试若建一条无主会话，验的就不是线上那条路径。
+    th = chat.create("smoke-saved", owner="mayor")
     chat.append(th["id"], "user", "全市 GDP 是多少？")
     msg = chat.append(
         th["id"],
@@ -968,6 +970,17 @@ def test_saved() -> None:
     ubad = chat.append(th["id"], "user", "再问一句")
     check("不能收藏提问", sv.add("mayor", th["id"], ubad["id"])["ok"] is False, "")
 
+    # 收藏写的是自己名下，但会话可能不是自己的。不核归属的话，拿到别人的
+    # thread_id + message_id 就能把对方的回答收进自己收藏夹 —— 会话层已经一律
+    # 404 了，这里敞着就是缺口。用返回文案区分：没核 owner 时命中的是「这条回答
+    # 不在该会话里」，核了之后直接当会话不存在。不需要真造一条别人的回答。
+    stolen = sv.add("vmayor", th["id"], msg["id"])
+    check(
+        "不能收藏别人会话里的回答",
+        stolen.get("ok") is False and "会话不存在" in str(stolen.get("error")),
+        str(stolen)[:80],
+    )
+
     ws = wb.workspace("mayor")
     check(
         "工作台带出收藏",
@@ -986,7 +999,7 @@ def test_saved() -> None:
     check("删会话清掉指向它的收藏", n == 1 and sv.list_of("mayor") == [], f"purged={n}")
 
     # 上限：造 MAX+1 条消息，最后一条必须被拦下
-    th2 = chat.create("smoke-saved-max")
+    th2 = chat.create("smoke-saved-max", owner="mayor")
     ids = [chat.append(th2["id"], "assistant", f"第 {i} 条答案")["id"] for i in range(sv.MAX_SAVED + 1)]
     th2 = chat.get(th2["id"]) or th2
     for mid in ids[: sv.MAX_SAVED]:
@@ -2188,6 +2201,16 @@ def test_frontend_live() -> None:
             calls.add(url)
     missing = sorted(c for c in calls if not known(c))
     check("页面调用的接口后端都实现了", bool(calls) and not missing, ",".join(missing)[:120])
+
+    # 刷新接回：turn_id 必须真落进 sessionStorage。这条能力最容易在重构里被悄悄
+    # 删掉 —— 删了不报错、不白屏，只是用户刷新后那一轮永久失联，后端算完也白算。
+    check("进行中的轮次存进 sessionStorage", "sessionStorage.setItem(PENDING_TURN" in html, "")
+    check("接回只认自己发起的轮次", "p.person !== PID.get()" in html, "")
+    check("接回要等 done 才重渲染", "if (d && d.done)" in html, "")
+    # 只有"还在后台跑"才留记录；正常结束、点停止都必须清，否则下次开页面会去接
+    # 一轮几小时前的旧轮次
+    check("正常结束才清掉待接记录", "if (!keepPending) pendingClear()" in html, "")
+    check("启动时接回未完成的轮次", "if (pendingRead()) resumePending()" in html, "")
 
 
 def main() -> int:
