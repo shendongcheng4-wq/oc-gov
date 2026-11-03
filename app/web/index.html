@@ -3319,7 +3319,13 @@ async function resumePending() {
 
 async function ask(question, opts = {}) {
   question = String(question || "");
-  if (!question.trim() || RUN) return;
+  if (!question.trim()) return;
+  if (RUN) {
+    // 上一轮还在跑，但它可能属于**另一个**会话（用户中途切走了）。
+    // 静默 return 的话，用户打了字点发送什么也没发生，只会觉得输入框坏了
+    const owner = THREADS.find((x) => x.id === (RUN.threadId || THREAD));
+    return toast(`上一轮还在「${(owner && owner.title) || "原会话"}」里计算，等它算完或切回去停止`);
+  }
   // 重试把这一轮原来的材料带回来：失败时附件芯片已经清掉了，
   // 让用户重新选一遍文件太蛮
   const atts = opts.attachments || attachPayload();
@@ -3351,31 +3357,50 @@ async function ask(question, opts = {}) {
   // 发出去就清空：下一轮不该还带着上一轮的参考材料。重试不清，它还要接着用
   if (!opts.retry) { ATT.files = []; renderAttach(); }
 
-  RUN = { ac: new AbortController(), question, turnId: null, stopped: false };
+  // threadId 记下这一轮属于哪个会话。发问时可能还是 null（新会话），
+  // start 事件会带回真实 id —— 之后无论用户切到哪儿，这个值都不再变。
+  RUN = { ac: new AbortController(), question, turnId: null, threadId: THREAD, holder, stopped: false };
   setRunning(true);
 
   // 记下这一轮，刷新后 resumePending() 靠它接回来。turn_id 在响应头和 start
   // 事件里各给一次，两处都要调 —— 哪儿先到用哪儿。
   const rememberTurn = () => {
     if (!RUN || !RUN.turnId) return;
-    pendingSave({ turnId: RUN.turnId, threadId: THREAD, question, person: PID.get() });
+    // 用这一轮自己的 threadId，不是全局 THREAD：用户切走之后 THREAD 已经是
+    // 别的会话了，照它存会让刷新后跑去接一个根本没在跑的地方
+    pendingSave({ turnId: RUN.turnId, threadId: RUN.threadId || THREAD, question, person: PID.get() });
   };
   // 这一轮还在后台跑着的时候不能清记录：清了刷新就接不上了
   let keepPending = false;
 
+  /* 这一轮现在该往哪个容器里写。
+     切会话会重建 #thread（renderThread 直接 innerHTML），holder 就成了脱离
+     文档的孤儿：往里写用户永远看不见。以前更糟的是紧接着还会把全局 THREAD
+     改回旧会话 —— 界面停在 B、状态却是 A，用户在 B 接着打字，问题挂到 A 去了。
+     所以每次写之前都问一次「这个 turn 还在屏幕上吗」，不在就只落库、不渲染。 */
+  const live = () => (holder.isConnected && holder.parentElement && holder.parentElement.id === "thread" ? holder : null);
+
   const stage = (text) => {
-    const el = holder.querySelector(".ai-body");
+    const h = live();
+    if (!h) return;
+    const el = h.querySelector(".ai-body");
     if (el) el.innerHTML = `<div class="stage-hint">${esc(text)}</div>`;
   };
   const fail = (msg) => {
-    holder.innerHTML = `<div class="ai-tag"><i>AI</i>${esc(plannerLabel())}</div>
+    const h = live();
+    if (!h) return false;
+    h.innerHTML = `<div class="ai-tag"><i>AI</i>${esc(plannerLabel())}</div>
       <div class="ai-body"><div class="warnbox">${esc(msg)}</div>
       ${retryOps()}</div>`;
+    return true;
   };
   const stopped = () => {
-    holder.innerHTML = `<div class="ai-tag"><i>AI</i>${esc(plannerLabel())}</div>
+    const h = live();
+    if (!h) return false;
+    h.innerHTML = `<div class="ai-tag"><i>AI</i>${esc(plannerLabel())}</div>
       <div class="ai-body"><div class="ai-note">已停止生成 · 这一轮没有产出答案</div>
       ${retryOps()}</div>`;
+    return true;
   };
 
   let finished = false;
@@ -3386,7 +3411,17 @@ async function ask(question, opts = {}) {
      续流那条路径平时走不到，最迟半年就会和主线对不上。 */
   const handle = (f) => {
     if (f.type === "start") {
-      THREAD = f.thread_id;
+      // 只在还没有会话时接住新 id（首问由后端建会话）。已经有会话还无条件
+      // 赋值，就是那个串台 bug 的一半：用户跑着的时候切到 B，这里把状态改回 A，
+      // 于是界面在 B、THREAD 是 A，用户在 B 接着打字、问题挂到 A 去了
+      if (RUN) {
+        // 首问由后端建会话：发问时 THREAD 还是 null，这里接住它。
+        // 但用户要是在等待期间切走了（detached），就不能把 id 塞进当前视图
+        if (!THREAD && !RUN.detached) THREAD = f.thread_id;
+        RUN.threadId = f.thread_id || RUN.threadId;
+      } else if (!THREAD) {
+        THREAD = f.thread_id;
+      }
       // 记下这一轮的 id：点「停止」时要带着它去告诉后端"别算了"。
       // 光断开连接分不出"关页面"和"点停止"，后端只能靠这个显式信号。
       if (RUN) RUN.turnId = f.turn_id || RUN.turnId;
@@ -3410,21 +3445,28 @@ async function ask(question, opts = {}) {
       stage(`专家解读 · ${f.name} ${tail}（${f.index}/${f.total}）`);
     } else if (f.type === "done") {
       finished = true;
-      THREAD = f.thread_id;
-      holder.innerHTML = aiBubble(f.result, { threadId: f.thread_id, messageId: f.message_id });
-      // 导出要用完整 result（含 usage/context/trace）；历史回放走 __m
-      holder.__r = f.result;
-      // 星级按钮要能定位到这条消息（收藏夹跳回来也靠它），落库 id 由后端返回
-      holder.dataset.mid = f.message_id || "";
-      bindFold(holder);
+      const h = live();
       const u = (f.result && f.result.usage) || {};
+      if (!h) {
+        // 用户在跑的时候切走了。答案已经落库，不能在这儿静默 ——
+        // 那一轮花掉的 token 是真的，得让他知道去哪儿看
+        const owner = THREADS.find((x) => x.id === f.thread_id);
+        toast(`这一轮算完了，答案存在「${(owner && owner.title) || "原会话"}」里`);
+        return;
+      }
+      h.innerHTML = aiBubble(f.result, { threadId: f.thread_id, messageId: f.message_id });
+      // 导出要用完整 result（含 usage/context/trace）；历史回放走 __m
+      h.__r = f.result;
+      // 星级按钮要能定位到这条消息（收藏夹跳回来也靠它），落库 id 由后端返回
+      h.dataset.mid = f.message_id || "";
+      bindFold(h);
       THREAD_TOKENS += Number(u.total_tokens) || 0;
       renderUsageFoot();
     } else if (f.type === "cancelled") {
       // 后端确认已经停了。它落了一条「已停止生成」，所以侧栏条数会变，
       // 但这里不重载正文 —— 用户刚主动停下，不该立刻给他换一屏内容。
       finished = true;
-      THREAD = f.thread_id || THREAD;
+      if (RUN) RUN.threadId = f.thread_id || RUN.threadId;
       stopped();
     } else if (f.type === "error") {
       finished = true;
@@ -3449,6 +3491,9 @@ async function ask(question, opts = {}) {
     if (back === "gone") {
       // 服务重启过，或者这一轮超过了保留期：没事件可放。退回读会话 ——
       // 如果后端其实已经算完并落库，答案就在这里，不该让用户再问一遍。
+      // 但只在用户还看着这一轮的会话时才重画：否则会把 A 的内容画到 B 上，
+      // 等于用一个看起来正常的界面掩盖数据错位
+      if (RUN && RUN.threadId && RUN.threadId !== THREAD) return;
       const th = await fetchThreadQuietly();
       const msgs = (th && th.messages) || [];
       if (msgs.length && msgs[msgs.length - 1].role === "assistant") renderThread(th);
@@ -4150,6 +4195,10 @@ async function deleteThread(id) {
 }
 
 async function openThread(id) {
+  // 用户主动切到别的会话：这一轮从此不再由界面接管。
+  // 记下来是为了「新会话首问」—— 那一轮发问时还没有会话 id，如果用户等待
+  // 期间切走了，start 事件回来时不能再把 id 塞进他的当前视图
+  if (RUN) RUN.detached = !(RUN.threadId && RUN.threadId === id);
   THREAD = id || null;
   renderChats();
   if (!id) {
@@ -4157,12 +4206,25 @@ async function openThread(id) {
     draftLoad(null);
     THREAD_TOKENS = 0;
     renderUsageFoot();
+    // 按钮只属于「这一轮所在的会话」。正在跑的轮次在别处时还留着「停止」，
+    // 用户在这里按下去，停的是另一条会话的事
+    setRunning(!!(RUN && RUN.threadId && RUN.threadId === id));
     return;
   }
   const res = await fetch(`/api/threads/${id}`, { headers: { "X-Person-Id": PID.get() } });
   if (!res.ok) { THREAD = null; renderThread(null); renderChats(); return; }
   const d = await res.json();
   renderThread(d.thread);
+  // 切回「正在算」的那个会话：把占位块挂回去。这一轮还没落库，服务端返回的
+  // 消息里没有它 —— 不挂回去，用户会以为自己刚才那问白问了，然后重问一遍
+  if (RUN && RUN.holder && RUN.threadId === id && !RUN.holder.isConnected) {
+    const hb = $("#thread");
+    const e = $("#threadEmpty");
+    if (e) e.remove();
+    hb.appendChild(RUN.holder);
+    hb.scrollTop = hb.scrollHeight;
+  }
+  setRunning(!!(RUN && RUN.threadId && RUN.threadId === id));
   // 草稿跟着会话走：上一个会话打了一半的话不该出现在这个会话的输入框里
   draftLoad(id);
   THREAD_TOKENS = Number((d.usage || {}).total_tokens) || 0;
@@ -7592,6 +7654,12 @@ document.addEventListener("keydown", (e) => {
 $("#go").onclick = () => {
   // 正在算的时候这个按钮就是「停止」，优先级高于一切（包括斜杠菜单）
   if (RUN) {
+    // 但只停「属于当前会话」的那一轮。用户在 A 发问、跑到一半切到 B，
+    // 这里如果照旧 abort，停掉的是 A 的事 —— 而他此刻根本没打算停
+    if (RUN.threadId && RUN.threadId !== THREAD) {
+      const owner = THREADS.find((x) => x.id === RUN.threadId);
+      return toast(`上一轮还在「${(owner && owner.title) || "原会话"}」里计算，切回去才能停它`);
+    }
     // 先告诉后端别算了，再断开等待。顺序不能反：abort 之后这个 RUN 马上就没了，
     // 而 cancel 请求是独立的一条连接，不受 abort 影响。
     // 打上 stopped 标记：续流循环每轮都看它，否则用户点了停止、界面还在后台

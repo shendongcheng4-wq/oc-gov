@@ -2226,6 +2226,31 @@ def test_frontend_sidebar() -> None:
     check("旧「新对话」按钮不再残留", 'id="newChat"' not in html, "")
 
 
+def test_frontend_thread_switch() -> None:
+    """跑着的时候切会话，这一轮不能被弄丢，也不能嫁接到别的会话上。
+
+    这是「界面看着正常、数据是错的」那类 bug：切走会重建 #thread，正在写的
+    那个 AI 气泡成了脱离文档的孤儿（往里写谁也看不见），随后 done 又把全局
+    THREAD 改回旧会话 —— 用户在 B 接着打字，问题挂到 A 去了，草稿也跟着错位。
+    修复靠三处同时在，少一处就会退回去，所以逐条卡住。
+    """
+    print("\n[19.5] 跑着的时候切会话")
+    html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("写消息前先确认容器还在（live）", "const live = () =>" in html, "")
+    seg = html[html.index("const stage = (text) =>"):][:300]
+    check("进度提示走 live()，不直接写 holder", "const h = live();" in seg, "")
+    # done 里不能再无条件覆盖当前会话 —— 这一行就是串台的直接成因
+    done_seg = html[html.index('f.type === "done"'):][:600]
+    check("done 不覆盖当前会话", "THREAD = f.thread_id;" not in done_seg, "")
+    check("start 只接住新会话、不抢当前会话", "!RUN.detached" in html, "")
+    check("切回会话时把「正在算」的占位挂回去", "!RUN.holder.isConnected" in html, "")
+    check("按钮只属于它所在的那个会话",
+          "setRunning(!!(RUN && RUN.threadId && RUN.threadId === id))" in html, "")
+    # 刷新接回用的 threadId 必须是这一轮的，不是全局 THREAD
+    check("待接记录用这一轮自己的会话", "threadId: RUN.threadId || THREAD" in html, "")
+    check("在别的会话里按「停止」不会停掉那轮", "RUN.threadId !== THREAD" in html, "")
+
+
 def test_frontend_live() -> None:
     """页面必须真的跟本地服务说话。
 
@@ -2321,6 +2346,7 @@ def main() -> int:
     test_attach_entry()
     test_frontend_theme()
     test_frontend_sidebar()
+    test_frontend_thread_switch()
     test_frontend_live()
     test_http()
     print()
