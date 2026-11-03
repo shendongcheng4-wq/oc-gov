@@ -1240,6 +1240,29 @@ def test_attach_entry() -> None:
     src_llm = (ROOT / "core" / "metrics" / "llm.py").read_text(encoding="utf-8")
     check("材料拼在 user 消息里而不是 system 里", "_materials_prompt(attachments or [])" in src_llm, "")
 
+    # ---- A 档边界（2026-11-03 定）----
+    # 产品决策：材料只帮「看懂问题、选对指标」，材料里的数字永远不进答案。
+    # 每次想「让材料数字也能当答案」都会顺手删掉下面那条 prompt 约束，或者把
+    # 材料往 experts 里一传 —— 两种改法都能跑通、都不报错，只是溯源链静默断掉。
+    # 所以钉在这：这道闸一旦被拆，测试必须红。
+    check(
+        "prompt 里禁止把材料数字当答案",
+        "材料里的数字**不是答案**" in mp,
+        "删了这句，planner 就会拿材料里的数当指标值",
+    )
+    src_exp = (ROOT / "core" / "experts.py").read_text(encoding="utf-8")
+    check(
+        "专家解读拿不到材料（A 档：不进解读）",
+        "attachment" not in src_exp and "material" not in src_exp.lower(),
+        "",
+    )
+    src_ask = (ROOT / "core" / "metrics" / "ask.py").read_text(encoding="utf-8")
+    check(
+        "专家调用不传 attachments",
+        "experts_mod.interpret(" in src_ask and "attachments" not in src_ask.split("experts_mod.interpret(")[1][:120],
+        "",
+    )
+
 
 def test_frontend_theme() -> None:
     """前端主题的静态约定。
