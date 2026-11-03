@@ -823,6 +823,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "doc": doc, "documents": rag_mod.list_documents(parts[0])})
 
             # ---- 会话 ----
+            if path == "/api/threads":
                 thread = chat.create(
                     title=body.get("title"),
                     model_ref=body.get("model_ref") or modelcfg.active_ref(),
