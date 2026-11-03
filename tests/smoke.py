@@ -540,7 +540,7 @@ def test_experts() -> None:
     try:
         views = ex.interpret(
             {"question": "规上工业多少", "metric_names": ["规模以上工业增加值增速"], "facts": []},
-            ["economy", "livelihood", "eco", "economy"],
+            ["economy", "livelihood", "investment", "economy"],
         )
     finally:
         ex.llmclient.available = old
@@ -568,8 +568,9 @@ def test_experts() -> None:
         [
             {
                 "id": "economy",
-                "name": "经济参谋",
+                "name": "经济运行参谋",
                 "avatar": "经",
+                "brief": "精通全市经济数值与局势",
                 "focus": "工业",
                 "ok": True,
                 "text": "增速偏高，结构偏弱",
@@ -588,7 +589,7 @@ def test_experts() -> None:
     chat.append(th["id"], "assistant", "标题", meta={"expert_views": kept})
     again = chat.get(th["id"]) or {}
     back = ((again.get("messages") or [{}])[0].get("meta") or {}).get("expert_views") or []
-    check("重读历史仍带专家解读", len(back) == 1 and back[0].get("name") == "经济参谋", str(back)[:90])
+    check("重读历史仍带专家解读", len(back) == 1 and back[0].get("name") == "经济运行参谋", str(back)[:90])
     # 且这份东西不能污染模型上下文（_summary 只取 指标名/意图/拒答）
     ctx = chat.context(th["id"])
     check("专家解读不进模型上下文", all("增速偏高" not in m.get("content", "") for m in ctx), str(ctx)[:90])
@@ -613,8 +614,9 @@ def test_experts() -> None:
     check("斜杠只在行首认", 'if (v[0] !== "/" && v[0] !== "／") return null;' in html, "")
     check("全角斜杠也认", 'v[0] !== "／"' in html, "")
     check("组词中不抢 Enter", "e.isComposing || e.keyCode === 229" in html, "")
-    pick = html.split("function pickSlash(id)")[1][:220]
+    pick = html.split("function pickSlash(id)")[1][:520]
     check("斜杠选中与下拉同一出口", "selectExpert(id);" in pick, pick[:80])
+    check("斜杠可点名插件", 'startsWith("plugin:")' in pick, pick[:80])
     check("菜单项与下拉名单同源", "/api/experts" in html and "EXP.list.map((e) => ({" in html, "")
     check("没匹配不许当问题发出去", 'return toast("没有这个参谋' in html, "")
 
@@ -1782,6 +1784,19 @@ def test_harness() -> None:
         has_demo = (pdir / "demo-time" / "plugin.yaml").is_file()
         check("示例插件 demo-time 存在 plugin.yaml", has_demo, "")
 
+    # 启停状态：set_enabled 落盘、list_plugins 返回 enabled、unknown 不误报
+    check("set_enabled 返回布尔", isinstance(harness.set_enabled("__smoke_probe__", True), bool), "")
+    check("enabled_map 是 dict", isinstance(harness.enabled_map(), dict), "")
+    harness.set_enabled("__smoke_probe__", True)
+    harness.set_enabled("__smoke_probe__", False)
+    # 清理探针键，别把测试垃圾写进真实状态文件
+    try:
+        st = harness._read_state()
+        st.pop("__smoke_probe__", None)
+        harness._write_state(st)
+    except Exception:  # noqa: BLE001
+        pass
+
 
 def test_frontend_theme() -> None:
     """前端主题的静态约定。
@@ -1896,8 +1911,9 @@ def test_http(port: int | None = None) -> None:
         import experts as ex_api
 
         roster = exs.get("experts") or []
-        # 不把「恰好三个」写成契约：名单是可扩的，接口只要完整反映定义即可。
-        check("/api/experts 返回全部专家", [e.get("id") for e in roster] == [e.get("id") for e in ex_api.EXPERTS], str(exs)[:80])
+        # 不把「恰好几位」写成契约：名单是可扩、可持久化编辑的，接口只要完整反映
+        # 当前定义即可（all_experts 从 data/experts.json 读，缺省回退内置默认）。
+        check("/api/experts 返回全部专家", [e.get("id") for e in roster] == [e.get("id") for e in ex_api.all_experts()], str(exs)[:80])
         # max 是「一次最多叫几位」，必须和 core 里的截断同源；两处各写一个数字就会
         # 出现「能选 3 个但后端只收 3 个以外」或反过来的鬼故事。
         check("max 与截断常量同源", exs.get("max") == ex_api.MAX_PER_CALL, f"max={exs.get('max')} const={ex_api.MAX_PER_CALL}")

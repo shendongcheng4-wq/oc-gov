@@ -1118,6 +1118,52 @@ html.embedded .drawer{top:0;height:100%}
 .test-out{font-size:11.5px;margin-top:8px;padding:6px 9px;border-radius:7px}
 .test-out.ok{background:var(--ok-bg);color:var(--ok);border:1px solid var(--ok-line)}
 .test-out.bad{background:var(--danger-bg);color:var(--danger);border:1px solid var(--danger-line)}
+/* ---------------- 插件面板 ---------------- */
+.plg-search{display:flex;align-items:center;gap:8px;margin:4px 0 12px;padding:7px 11px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
+.plg-search:focus-within{border-color:var(--brand)}
+.plg-search svg{flex:0 0 auto;color:var(--faint)}
+.plg-search input{flex:1;border:0;outline:none;background:transparent;font-size:12.5px;color:var(--ink);font-family:inherit}
+.plg-search input::placeholder{color:var(--faint)}
+.plg-sec{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:14px 0 10px}
+.plg-sec b{font-size:12.5px}
+.plg-sec .plg-mode{font-size:11px;color:var(--muted);padding:4px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2)}
+.plg-howto{display:flex;align-items:center;gap:10px;margin:2px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);font-size:12px;color:var(--muted);line-height:1.6}
+.plg-howto svg{flex:0 0 auto;color:var(--brand)}
+.plg-howto b{color:var(--ink);font-weight:600}
+.plg-howto code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11.5px;color:var(--brand);background:var(--surface);padding:1px 5px;border-radius:5px;border:1px solid var(--line)}
+.plg-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.plg-card{border:1px solid var(--line);border-radius:11px;padding:11px 13px;background:var(--surface);position:relative;display:flex;flex-direction:column;gap:4px}
+.plg-card.off{opacity:.62}
+.plg-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.plg-card-top b{font-size:13px;line-height:1.35}
+.plg-card-top .plg-sw{flex:0 0 auto;position:relative;width:34px;height:19px;border-radius:20px;background:var(--line);cursor:pointer;transition:background .15s;border:0;padding:0}
+.plg-card-top .plg-sw::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.plg-card.on .plg-sw{background:var(--brand)}
+.plg-card.on .plg-sw::after{left:17px}
+.plg-card-desc{font-size:11px;color:var(--muted);line-height:1.55}
+.plg-card-id{font-size:10px;color:var(--faint);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;margin-top:2px}
+.plg-card-tools{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.plg-empty{grid-column:1/-1}
+/* ---------------- 专家管理 ---------------- */
+.exp-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.exp-card{border:1px solid var(--line);border-radius:11px;padding:11px 13px;background:var(--surface);position:relative;display:flex;flex-direction:column;gap:6px}
+.exp-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.exp-card-top .who{display:flex;align-items:center;gap:8px}
+.exp-card-top .av{width:30px;height:30px;border-radius:8px;background:var(--surface-2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;color:var(--brand);flex:0 0 auto}
+.exp-card-top b{font-size:13px;line-height:1.35}
+.exp-card-top .brief{font-size:10.5px;color:var(--muted);margin-top:2px}
+.exp-del{flex:0 0 auto;border:0;background:none;color:var(--faint);cursor:pointer;padding:2px 4px;border-radius:6px;font-size:13px}
+.exp-del:hover{color:var(--danger,#d33);background:var(--surface-2)}
+.exp-fields{display:flex;flex-direction:column;gap:6px}
+.exp-field{display:flex;flex-direction:column;gap:3px}
+.exp-field label{font-size:10.5px;color:var(--muted)}
+.exp-field input,.exp-field textarea{font-size:12px;color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:6px 8px;background:var(--surface);font-family:inherit;outline:none;resize:vertical}
+.exp-field input:focus,.exp-field textarea:focus{border-color:var(--brand)}
+.exp-field textarea{min-height:52px;line-height:1.5}
+.exp-add{grid-column:1/-1;display:flex;align-items:center;justify-content:center;gap:6px;padding:10px;border:1px dashed var(--line);border-radius:11px;background:transparent;color:var(--muted);cursor:pointer;font-size:12px;font-family:inherit}
+.exp-add:hover{color:var(--brand);border-color:var(--brand)}
+.exp-empty{grid-column:1/-1}
+.exp-save-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
 /* ---------------- 资料库 ---------------- */
 .file-pick{cursor:pointer;display:inline-flex;align-items:center}
 .rag-hit{margin-top:10px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2)}
@@ -2025,6 +2071,32 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
       <span class="modal-x" id="ragClose">✕</span>
     </div>
     <div class="modal-body" id="ragBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="pluginsModal">
+  <div class="modal-box theme-box">
+    <div class="modal-head">
+      <div>
+        <h3>插件</h3>
+        <p>查看已部署的插件，开启或停用后即时生效。</p>
+      </div>
+      <span class="modal-x" id="pluginsClose">✕</span>
+    </div>
+    <div class="modal-body" id="pluginsBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="expertsModal">
+  <div class="modal-box theme-box">
+    <div class="modal-head">
+      <div>
+        <h3>专家</h3>
+        <p>管理参谋团的人设与视角。专家只做定性解读、不报数字，改完即时生效。</p>
+      </div>
+      <span class="modal-x" id="expertsClose">✕</span>
+    </div>
+    <div class="modal-body" id="expertsBody"></div>
   </div>
 </div>
 
@@ -3090,12 +3162,19 @@ const EXP_FIX = [
   { id: "livelihood", name: "民生保障参谋", avatar: "民", brief: "关注就业教育与民生实事", focus: "就业、教育、医疗、民生实事" },
 ];
 
+/* V4：参谋名单改跟随后端 /api/experts 返回的完整名单（可在专家管理面板增删改）。
+   不再用写死的 EXP_FIX —— 后端 experts.py 会把内置 6 位作为默认，用户在面板里
+   编辑后写进 data/experts.json，前端每次启动从这里拉最新名单。 */
 async function loadExperts() {
   try {
     const d = await (await fetch("/api/experts")).json();
-    EXP.list = EXP_FIX.slice();
-    EXP.max = 6;
-    EXP.ready = !!d.model_ready;
+    if (d && Array.isArray(d.experts) && d.experts.length) {
+      EXP.list = d.experts;
+    } else {
+      EXP.list = EXP_FIX.slice();
+    }
+    EXP.max = (d && d.max) || 6;
+    EXP.ready = !!(d && d.model_ready);
   } catch {
     EXP.list = EXP_FIX.slice();
     EXP.max = 6;
@@ -3145,9 +3224,10 @@ function renderExpertSelect() {
     EXP.list
       .map((e) => item(e.id, e.avatar, e.name, hintOf(e.id, e.focus), EXP.cur === e.id, "", e.brief || ""))
       .join("") +
-    // 参谋团只在真能一次叫上时才出现：否则点下去会静默漏人，用户以为叫了全组
-    (EXP.list.length > 1 && EXP.list.length <= EXP.max
-      ? item("__all", "团", "AI秘书团", hintOf("__all", `${EXP.list.length} 位参谋一起看，并邀请政府办公室协助`), EXP.cur === "__all", "sep", "邀请政府办公室进一步协助")
+    // 参谋团：名单多于 1 位就出现。一次会诊最多叫 max 位（与后端 MAX_PER_CALL 同源），
+    // 点下去会把前 max 位一起叫上，文案里写清楚，别让用户以为叫了全组却只回了几个。
+    (EXP.list.length > 1
+      ? item("__all", "团", "AI秘书团", hintOf("__all", `一次最多 ${EXP.max} 位参谋一起看，并邀请政府办公室协助`), EXP.cur === "__all", "sep", "邀请政府办公室进一步协助")
       : "");
 }
 
@@ -3191,12 +3271,21 @@ function slashQuery() {
 function slashItems() {
   const q = slashQuery();
   const all = EXP.list.map((e) => ({
-    id: e.id, avatar: e.avatar, name: e.name, hint: e.focus,
+    id: e.id, avatar: e.avatar, name: e.name, hint: e.focus, kind: "expert",
   }));
-  // 参谋团跟下拉保持同一条闸：叫不全的时候不列，免得点下去静默漏人
-  if (EXP.list.length > 1 && EXP.list.length <= EXP.max) {
-    all.push({ id: "__all", avatar: "团", name: "AI秘书团", hint: `${EXP.list.length} 位参谋一起看，并邀请政府办公室协助` });
+  // 参谋团跟下拉保持同一条闸：名单多于 1 位就列，一次最多叫 max 位
+  if (EXP.list.length > 1) {
+    all.push({ id: "__all", avatar: "团", name: "AI秘书团", hint: `一次最多 ${EXP.max} 位参谋一起看，并邀请政府办公室协助`, kind: "expert" });
   }
+  // 启用的插件也进斜杠：/二维码 直接点名调用
+  const plugins = (PLUGINS.plugin_list || []).filter((p) => p.enabled !== false);
+  plugins.forEach((p) => {
+    const tool = (p.tools && p.tools[0]) || "";
+    all.push({
+      id: "plugin:" + p.id, avatar: "⚙", name: p.name,
+      hint: (p.description || "") + (tool ? ` · ${tool}` : ""), kind: "plugin",
+    });
+  });
   if (!q) return all;
   // id 也参与匹配：打 /eco 就能命中，不必背中文全名
   return all.filter((it) => it.name.includes(q) || it.id.includes(q) || it.avatar === q);
@@ -3209,17 +3298,26 @@ function renderSlash() {
   if (SLASH.idx > SLASH.items.length - 1) SLASH.idx = Math.max(0, SLASH.items.length - 1);
 
   if (!SLASH.items.length) {
-    menu.innerHTML = `<div class="slash-empty">没有叫「${esc(slashQuery() || "")}」的参谋。<br>` +
+    menu.innerHTML = `<div class="slash-empty">没有叫「${esc(slashQuery() || "")}」的参谋或插件。<br>` +
       `换一个，或按 Esc 清掉斜杠后正常提问。</div>`;
     return;
   }
-  menu.innerHTML =
-    `<div class="slash-hd"><b>AI参谋</b><span>选中后由它来解读这条对话</span></div>` +
-    SLASH.items.map((it, i) =>
-      `<div class="slash-item ${i === SLASH.idx ? "on" : ""}" data-sid="${esc(it.id)}" title="${esc(it.hint)}">` +
-      `<i>${esc(it.avatar)}</i><span>${esc(it.name)}</span>` +
-      `${EXP.cur === it.id ? "<em>对话中</em>" : ""}</div>`).join("") +
-    `<div class="slash-foot">上下键选择 · Enter 确认 · Esc 关闭</div>`;
+  const experts = SLASH.items.filter((it) => it.kind !== "plugin");
+  const plugins = SLASH.items.filter((it) => it.kind === "plugin");
+  const row = (it, i) =>
+    `<div class="slash-item ${i === SLASH.idx ? "on" : ""}" data-sid="${esc(it.id)}" title="${esc(it.hint)}">` +
+    `<i>${esc(it.avatar)}</i><span>${esc(it.name)}</span>` +
+    `${it.kind === "plugin" ? "<em>插件</em>" : (EXP.cur === it.id ? "<em>对话中</em>" : "")}</div>`;
+  let html = "";
+  if (experts.length) {
+    html += `<div class="slash-hd"><b>AI参谋</b><span>选中后由它来解读这条对话</span></div>` +
+      experts.map(row).join("");
+  }
+  if (plugins.length) {
+    html += `<div class="slash-hd"><b>插件</b><span>选中后接着输入参数，直接调用</span></div>` +
+      plugins.map(row).join("");
+  }
+  menu.innerHTML = html + `<div class="slash-foot">上下键选择 · Enter 确认 · Esc 关闭</div>`;
 }
 
 function openSlash() {
@@ -3237,8 +3335,19 @@ function closeSlash() {
   if (menu) menu.hidden = true;
 }
 
-/* 选中 = 和下拉点同一项。再选一次已在对话中的那位 = 取消（语义在 selectExpert 里）。 */
+/* 选中 = 和下拉点同一项。再选一次已在对话中的那位 = 取消（语义在 selectExpert 里）。
+   选插件 = 把「/插件名 」填进输入框，让用户接着敲参数再发送。 */
 function pickSlash(id) {
+  if (String(id).startsWith("plugin:")) {
+    const pid = String(id).slice("plugin:".length);
+    const p = (PLUGINS.plugin_list || []).find((x) => x.id === pid);
+    const name = p ? p.name : pid;
+    $("#q").value = "/" + name + " ";
+    draftSave();
+    closeSlash();
+    $("#q").focus();
+    return;
+  }
   selectExpert(id);
   $("#q").value = "";
   draftSave();   // 程序清空不触发 input 事件，草稿得手动对齐，否则刷新后又冒出来
@@ -4416,6 +4525,17 @@ function renderSettings() {
   renderAboutPanel();
 }
 
+let PLUGINS = { available: false, plugins: 0, plugin_list: [], import_error: "", agent_error: "", plugins_dir: "", _q: "" };
+
+async function loadPlugins() {
+  try {
+    const d = await (await fetch("/api/plugins")).json();
+    if (d && d.ok !== false) { d._q = PLUGINS._q || ""; PLUGINS = d; }
+  } catch (_) {
+    PLUGINS = { available: false, plugins: 0, plugin_list: [], import_error: "无法连接后端", agent_error: "", plugins_dir: "", _q: PLUGINS._q || "" };
+  }
+}
+
 let RAG = { bases: [], active: null, stats: {} };
 
 async function loadRag() {
@@ -4584,6 +4704,215 @@ function renderGeneralPanel() {
       <kbd style="margin-left:8px">Esc</kbd><span>关闭浮层</span>
       <kbd style="margin-left:8px">Enter</kbd><span>发送问题</span>
     </div>`;
+}
+
+function openPluginsModal() {
+  $("#pluginsModal").classList.add("on");
+  loadPlugins().then(() => renderPluginsModal()).catch(() => renderPluginsModal());
+}
+function closePluginsModal() { $("#pluginsModal").classList.remove("on"); }
+
+function renderPluginsModal() {
+  const list = PLUGINS.plugin_list || [];
+  const avail = !!PLUGINS.available;
+  const q = (PLUGINS._q || "").trim().toLowerCase();
+
+  const filtered = q
+    ? list.filter((p) =>
+        (p.name || "").toLowerCase().includes(q) ||
+        (p.id || "").toLowerCase().includes(q) ||
+        (p.description || "").toLowerCase().includes(q)
+      )
+    : list;
+
+  const cards = filtered.map((p) => {
+    const on = p.enabled !== false;
+    const tools = (p.tools || []).map((t) => `<span class="mbadge">${esc(t)}</span>`).join("");
+    return `<div class="plg-card ${on ? "on" : "off"}" data-plg-id="${esc(p.id)}">
+      <div class="plg-card-top">
+        <b>${esc(p.name || p.id)}</b>
+        <button class="plg-sw" data-plg-toggle="${esc(p.id)}" title="${on ? "停用" : "启用"}" aria-pressed="${on}"></button>
+      </div>
+      ${p.description ? `<div class="plg-card-desc">${esc(p.description)}</div>` : ""}
+      ${tools ? `<div class="plg-card-tools">${tools}</div>` : ""}
+      <div class="plg-card-id">${esc(p.id)}${p.version ? ` · v${esc(p.version)}` : ""}</div>
+    </div>`;
+  }).join("");
+
+  const engineNote = avail
+    ? ""
+    : `<div class="hint" style="margin:0 0 10px">插件引擎未安装，问答照旧走规则与模型链路。</div>`;
+
+  const err = PLUGINS.agent_error || PLUGINS.import_error;
+  const errNote = (!avail && err)
+    ? `<div class="hint" style="margin:0 0 10px;color:var(--warn)">${esc(err)}</div>`
+    : "";
+
+  const dir = PLUGINS.plugins_dir || "";
+
+  $("#pluginsBody").innerHTML = `
+    ${engineNote}
+    ${errNote}
+    <div class="plg-search">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg>
+      <input id="plgSearch" placeholder="搜索插件" value="${esc(q)}">
+    </div>
+    <div class="plg-howto">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 8h.01"></path><path d="M11 12h1v4h1"></path></svg>
+      <span>在对话输入框输入 <code>/</code> 即可点名调用插件，接着敲参数回车发送。例如 <code>/单位换算 100 公里转英里</code>。</span>
+    </div>
+    <div class="plg-sec">
+      <b>会话插件</b>
+      <span class="plg-mode">标准模式（默认）</span>
+    </div>
+    <div class="plg-grid">
+      ${cards || `<div class="hint plg-empty" style="margin:0">${avail ? "没有匹配的插件。" : "还没有插件。"}</div>`}
+    </div>
+    ${dir ? `<div class="hint" style="margin-top:14px">插件目录：${esc(dir)}</div>` : ""}`;
+
+  // 搜索：输入即过滤
+  $("#plgSearch").oninput = (e) => {
+    PLUGINS._q = e.target.value;
+    renderPluginsModal();
+    $("#plgSearch").focus();
+  };
+
+  // 启停开关：点击切状态并落盘
+  document.querySelectorAll("[data-plg-toggle]").forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.dataset.plgToggle;
+      const card = btn.closest(".plg-card");
+      const curOn = card && card.classList.contains("on");
+      const target = !curOn;
+      // 先乐观切换，再请求后端；失败回滚
+      if (card) card.classList.toggle("on", target);
+      if (card) card.classList.toggle("off", !target);
+      try {
+        const d = await (await fetch("/api/plugins/toggle", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, enabled: target }),
+        })).json();
+        if (!d.ok) throw new Error(d.error || "切换失败");
+      } catch (e) {
+        toast(e.message || "切换失败");
+        if (card) card.classList.toggle("on", curOn);
+        if (card) card.classList.toggle("off", !curOn);
+      }
+    };
+  });
+}
+
+/* ---------- 专家管理 ---------- */
+// 编辑副本：打开面板时从 EXP.list 拷一份，改完点「保存」才整体 POST 回后端。
+let EXPERTS_DRAFT = [];
+
+function openExpertsModal() {
+  EXPERTS_DRAFT = JSON.parse(JSON.stringify(EXP.list || []));
+  $("#expertsModal").classList.add("on");
+  renderExpertsModal();
+}
+function closeExpertsModal() { $("#expertsModal").classList.remove("on"); }
+
+function renderExpertsModal() {
+  const list = EXPERTS_DRAFT;
+
+  const cards = list.map((e, i) => {
+    return `<div class="exp-card" data-exp-i="${i}">
+      <div class="exp-card-top">
+        <div class="who">
+          <span class="av">${esc(e.avatar || "专")}</span>
+          <div>
+            <b>${esc(e.name || e.id)}</b>
+            <div class="brief">${esc(e.brief || "")}</div>
+          </div>
+        </div>
+        <button class="exp-del" data-exp-del="${i}" title="删除">✕</button>
+      </div>
+      <div class="exp-fields">
+        <div class="exp-field">
+          <label>名字</label>
+          <input data-exp-f="name" value="${esc(e.name || "")}">
+        </div>
+        <div class="exp-field">
+          <label>头像（1-2 字）</label>
+          <input data-exp-f="avatar" value="${esc(e.avatar || "")}" maxlength="2">
+        </div>
+        <div class="exp-field">
+          <label>一句话简介（brief）</label>
+          <input data-exp-f="brief" value="${esc(e.brief || "")}">
+        </div>
+        <div class="exp-field">
+          <label>关注面（focus）</label>
+          <input data-exp-f="focus" value="${esc(e.focus || "")}">
+        </div>
+        <div class="exp-field">
+          <label>看问题方式（angle）</label>
+          <textarea data-exp-f="angle">${esc(e.angle || "")}</textarea>
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+
+  $("#expertsBody").innerHTML = `
+    <div class="exp-grid">
+      ${cards || `<div class="hint exp-empty">还没有专家，点下面「新增专家」。</div>`}
+      <button class="exp-add" id="expAdd">＋ 新增专家</button>
+    </div>
+    <div class="exp-save-bar">
+      <span class="hint" style="margin:0">改的是副本，点「保存」才写回并即时生效。</span>
+      <button class="mini primary" id="expSave">保存</button>
+    </div>`;
+
+  // 编辑即回写草稿
+  document.querySelectorAll("[data-exp-f]").forEach((inp) => {
+    inp.oninput = () => {
+      const i = Number(inp.closest("[data-exp-i]").dataset.expI);
+      const field = inp.dataset.expF;
+      if (EXPERTS_DRAFT[i]) EXPERTS_DRAFT[i][field] = inp.value;
+    };
+  });
+
+  // 删除
+  document.querySelectorAll("[data-exp-del]").forEach((btn) => {
+    btn.onclick = () => {
+      const i = Number(btn.dataset.expDel);
+      EXPERTS_DRAFT.splice(i, 1);
+      renderExpertsModal();
+    };
+  });
+
+  // 新增
+  $("#expAdd").onclick = () => {
+    EXPERTS_DRAFT.push({ id: "expert_" + Date.now(), name: "新专家", avatar: "专", brief: "", focus: "", angle: "" });
+    renderExpertsModal();
+  };
+
+  // 保存
+  $("#expSave").onclick = async () => {
+    // 从当前 DOM 再收集一次，确保最新
+    document.querySelectorAll(".exp-card").forEach((card) => {
+      const i = Number(card.dataset.expI);
+      card.querySelectorAll("[data-exp-f]").forEach((inp) => {
+        EXPERTS_DRAFT[i][inp.dataset.expF] = inp.value;
+      });
+    });
+    try {
+      const d = await (await fetch("/api/experts", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ experts: EXPERTS_DRAFT }),
+      })).json();
+      if (!d.ok) throw new Error(d.error || "保存失败");
+      EXP.list = d.experts || EXPERTS_DRAFT;
+      EXPERTS_DRAFT = JSON.parse(JSON.stringify(EXP.list));
+      // 当前选中角色被删了就退回
+      if (EXP.cur && EXP.cur !== "__all" && !EXP.list.some((x) => x.id === EXP.cur)) EXP.cur = null;
+      renderExpertSelect();
+      renderExpertsModal();
+      toast("专家已保存，即时生效");
+    } catch (e) {
+      toast(e.message || "保存失败");
+    }
+  };
 }
 
 function renderAboutPanel() {
@@ -4961,6 +5290,8 @@ const ACCT_ICON = {
   chat: '<path d="M21 11.5a8 8 0 01-8 8H7.5L3 22V12.5a8 8 0 018-8h2a8 8 0 018 7z"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
   power: '<path d="M12 3.5v8.5"/><path d="M6.8 7a7.5 7.5 0 1010.4 0"/>',
+  plug: '<path d="M12 3v4"/><path d="M9 5h6"/><path d="M7 7h10"/><path d="M8.5 7v3a3.5 3.5 0 003.5 3.5h0a3.5 3.5 0 003.5-3.5V7"/><path d="M12 13.5V20"/>',
+  users: '<circle cx="9" cy="8" r="3.4"/><path d="M3.5 20a5.5 5.5 0 0111 0"/><path d="M16 5.4a3.4 3.4 0 010 5.2"/><path d="M17.5 14.5a5.5 5.5 0 013 5"/>',
   user: '<circle cx="12" cy="8" r="3.4"/><path d="M5.5 20a6.5 6.5 0 0113 0"/>',
 };
 
@@ -4984,6 +5315,8 @@ function renderIdMenu() {
     settings: () => openSettings("model"),
     theme: () => openThemeModal(),
     rag: () => openRagModal(),
+    plugins: () => openPluginsModal(),
+    experts: () => openExpertsModal(),
     data: () => openSettings("general"),
     about: () => openSettings("about"),
     reset: () => resetLocalPrefs(),
@@ -4992,6 +5325,8 @@ function renderIdMenu() {
     { id: "settings", icon: "gear", name: "设置", hint: "Ctrl+," },
     { id: "theme", icon: "palette", name: "外观", hint: () => THEME.label() },
     { id: "rag", icon: "db", name: "资料库", hint: "上传文件供问答召回" },
+    { id: "plugins", icon: "plug", name: "插件", hint: "octop 插件与连接器" },
+    { id: "experts", icon: "users", name: "专家", hint: "管理参谋团的人设与视角" },
     { sep: 1 },
     { id: "data", icon: "db", name: "数据与存储", hint: `${threads} 个会话` },
     { id: "about", icon: "info", name: "关于", hint: "v0.2" },
@@ -7348,6 +7683,8 @@ async function boot() {
 
   // 模型配置 + 最近一次会话（没有会话就停在空态，不自动建空记录）
   await loadModels();
+  // 插件清单：斜杠命令 /插件 要列出可用插件，得在打开菜单前就位（不阻塞首屏）
+  loadPlugins().catch(() => {});
   // 示例要在渲染空态之前就位，否则首屏是「没有示例」，刷新一下才出现
   await loadExamples();
   await refreshThreads();
@@ -7763,6 +8100,10 @@ $("#tmClose").onclick = () => $("#themeModal").classList.remove("on");
 $("#themeModal").onclick = (e) => { if (e.target.id === "themeModal") $("#themeModal").classList.remove("on"); };
 $("#ragClose").onclick = () => $("#ragModal").classList.remove("on");
 $("#ragModal").onclick = (e) => { if (e.target.id === "ragModal") $("#ragModal").classList.remove("on"); };
+$("#pluginsClose").onclick = () => $("#pluginsModal").classList.remove("on");
+$("#pluginsModal").onclick = (e) => { if (e.target.id === "pluginsModal") $("#pluginsModal").classList.remove("on"); };
+$("#expertsClose").onclick = () => $("#expertsModal").classList.remove("on");
+$("#expertsModal").onclick = (e) => { if (e.target.id === "expertsModal") $("#expertsModal").classList.remove("on"); };
 
 /* ---------- 附件入口 ----------
    纯文本 → 浏览器 `FileReader` 读成字符串；`.xlsx` / `.docx` → POST 给后端解析成文本。

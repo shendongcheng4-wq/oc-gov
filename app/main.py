@@ -101,6 +101,32 @@ import rag as rag_mod  # noqa: E402
 import harness as harness_mod  # noqa: E402
 
 
+def _plugin_command(question: str) -> tuple[str, str] | None:
+    """识别「/插件名 参数」形式的显式插件调用。
+
+    返回 (plugin_id, 参数文本)；不是插件命令返回 None。斜杠全角半角都认。
+    只匹配「已启用」的插件，停用或未识别的都不拦，让问题照常走主链路。
+    """
+    q = (question or "").strip()
+    if not q or (q[0] != "/" and q[0] != "／"):
+        return None
+    rest = q[1:].strip()
+    if not rest:
+        return None
+    # 第一个空白之前是插件标识；之后是参数（可能为空）
+    parts = rest.split(None, 1)
+    token = parts[0].lower()
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    for p in harness_mod.list_plugins():
+        if not p.get("enabled", True):
+            continue
+        # 用 id、name 匹配；name 里可能带「·」或空格，也拿归一化后比一下
+        name_norm = (p.get("name") or "").strip().lower().replace("·", "").replace(" ", "")
+        if token == p["id"].lower() or token == name_norm or token == (p.get("name") or "").lower():
+            return p["id"], arg
+    return None
+
+
 def _harness_fallback(question: str, result: dict) -> dict | None:
     """问数/知识库/资料库都没命中（refused）时，用 octop_harness 引擎兜底。
 
@@ -137,6 +163,41 @@ def _harness_fallback(question: str, result: dict) -> dict | None:
                 "call": f"HarnessAgent.call({question!r})",
                 "status": "ok",
                 "summary": "octop_harness 引擎兜底回答",
+            }
+        ],
+    }
+
+
+def _run_plugin_command(plugin_id: str, arg: str, question: str) -> dict | None:
+    """执行「/插件名 参数」：只挂该插件的工具，把参数交给它回答。失败返回 None。"""
+    if not harness_mod.available():
+        return None
+    try:
+        import asyncio
+        ans = asyncio.run(harness_mod.run_plugin(plugin_id, arg))
+    except Exception:  # noqa: BLE001
+        return None
+    if not ans or not ans.get("text"):
+        return None
+    return {
+        "refused": False,
+        "question": question,
+        "planner": "harness",
+        "intent": "harness",
+        "headline": ans["text"],
+        "harness": {
+            "plugin_id": plugin_id,
+            "explicit": True,
+        },
+        "sources": [],
+        "notes": [],
+        "trace": [
+            {
+                "step": 1,
+                "tool": "harness.run_plugin",
+                "call": f"run_plugin({plugin_id!r}, {arg!r})",
+                "status": "ok",
+                "summary": f"显式调用插件 {plugin_id}",
             }
         ],
     }
@@ -811,6 +872,30 @@ class Handler(BaseHTTPRequestHandler):
                 request_cancel(turn_id)
                 return self._json({"ok": True})
 
+            if path == "/api/plugins/toggle":
+                plugin_id = str(body.get("id") or "").strip()
+                enabled = bool(body.get("enabled"))
+                if not plugin_id:
+                    return self._json({"ok": False, "error": "id_required"}, 400)
+                # 只允许切换「已经识别到的」插件，避免把任意字符串写进状态文件
+                known = {p["id"] for p in harness_mod.list_plugins()}
+                if plugin_id not in known:
+                    return self._json({"ok": False, "error": "plugin_not_found"}, 404)
+                harness_mod.set_enabled(plugin_id, enabled)
+                return self._json({"ok": True, "id": plugin_id, "enabled": enabled})
+
+            # 专家名单整体替换（增/删/改一体）。前端把编辑后的完整名单 POST 回来，
+            # 后端校验字段后整体落盘。id 留空 = 新增（这里给个兜底 id），
+            # 名单里缺了谁 = 删除。
+            if path == "/api/experts":
+                items = body.get("experts")
+                if not isinstance(items, list):
+                    return self._json({"ok": False, "error": "experts_required"}, 400)
+                if len(items) > 20:
+                    return self._json({"ok": False, "error": "too_many"}, 400)
+                saved = expert_mod.save_experts(items)
+                return self._json({"ok": True, "experts": saved})
+
             if path == "/api/models":
                 provider = modelcfg.upsert_provider(body)
                 return self._json(
@@ -1400,20 +1485,38 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             return self._json({"ok": False, "error": str(exc)}, 400)
 
-        result = ask_mod.ask(
-            question,
-            history=history,
-            model_ref=thread.get("model_ref"),
-            expert_ids=_expert_ids(body),
-            person_id=self._person(body),
-            known_metrics=chat.known_metrics(thread["id"]),
-            attachments=atts,
-        )
-        # 问数/知识库/资料库都没命中时，用 octop_harness 引擎（含插件工具）兜底。
-        # 只在装了 harness 且结果 refused 时才走，否则保持原结果不变。
-        fb = _harness_fallback(question, result)
-        if fb is not None:
-            result = fb
+        # 「/插件名 参数」：显式调用插件，优先于问数/知识库/资料库链路。
+        plugin_cmd = _plugin_command(question)
+        if plugin_cmd is not None:
+            plugin_id, arg = plugin_cmd
+            result = _run_plugin_command(plugin_id, arg, question)
+            if result is None:
+                # 引擎不可用或调用失败：回落到主链路，别把这条命令静默吞掉
+                result = ask_mod.ask(
+                    question,
+                    history=history,
+                    model_ref=thread.get("model_ref"),
+                    expert_ids=_expert_ids(body),
+                    person_id=self._person(body),
+                    known_metrics=chat.known_metrics(thread["id"]),
+                    attachments=atts,
+                )
+                result = _harness_fallback(question, result) or result
+        else:
+            result = ask_mod.ask(
+                question,
+                history=history,
+                model_ref=thread.get("model_ref"),
+                expert_ids=_expert_ids(body),
+                person_id=self._person(body),
+                known_metrics=chat.known_metrics(thread["id"]),
+                attachments=atts,
+            )
+            # 问数/知识库/资料库都没命中时，用 octop_harness 引擎（含插件工具）兜底。
+            # 只在装了 harness 且结果 refused 时才走，否则保持原结果不变。
+            fb = _harness_fallback(question, result)
+            if fb is not None:
+                result = fb
         result["planner_info"] = llm.llm_info()
         # 本轮上下文的裁剪统计。前端在用量行里写出来，让「它怎么把刚才的忘了」
         # 有一个可核对的解释，而不是让人怀疑系统不稳定。

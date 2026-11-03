@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -32,32 +33,64 @@ import llmclient  # noqa: E402
 # 接口的 max 和后端的截断都引用这一个常量，别在别处再写死数字。
 MAX_PER_CALL = 3
 
-# 三个专家的差别是**关注面**，不是取数逻辑：同一份数字，看的角度不同。
-EXPERTS: tuple[dict[str, str], ...] = (
+# 专家名单持久化到 data/experts.json（缺省回退到下面的内置默认）。
+EXPERTS_FILE = ROOT / "data" / "experts.json"
+
+# 六位专家（一期五大板块 + 总参谋）的差别是**关注面**，不是取数逻辑：
+# 同一份数字，看的角度不同。这里是内置默认，用户可在专家管理面板里增删改，
+# 编辑后写进 data/experts.json，下次启动优先读它。
+_DEFAULT_EXPERTS: tuple[dict[str, str], ...] = (
+    {
+        "id": "chief",
+        "name": "总参谋",
+        "avatar": "总",
+        "brief": "统筹五大板块，把握全局",
+        "focus": "统筹五大板块，先定看什么、再看怎么看",
+        "angle": "先把问题归到对应的板块，判断这是总量问题还是结构问题，再给最该盯的一两个风险点，不逐个罗列。",
+    },
     {
         "id": "economy",
-        "name": "经济参谋",
+        "name": "经济运行参谋",
         "avatar": "经",
+        "brief": "精通全市经济数值与局势",
         "focus": "工业、投资、财政、市场主体",
         "angle": "先看总量与增速是否匹配年度节奏，再看结构（投资/工业/消费）有没有拖后腿的单项。",
     },
     {
-        "id": "livelihood",
-        "name": "民生参谋",
-        "avatar": "民",
-        "focus": "12345 诉求、就业、民生实事",
-        "angle": "先看群众诉求的办理质量，再看就业与民生实事的兑现进度，注意「办结率高但满意度低」的组合。",
+        "id": "investment",
+        "name": "招商引资参谋",
+        "avatar": "商",
+        "brief": "熟悉在谈项目与签约落地",
+        "focus": "在谈项目、签约落地、开工转化",
+        "angle": "看项目的签约到开工转化是否顺畅，警惕「签约多、落地少」或「开工慢、要素保障不到位」的苗头。",
     },
     {
-        "id": "eco",
-        "name": "生态环境参谋",
-        "avatar": "环",
-        "focus": "空气质量、工业排放相关指标",
-        "angle": "把空气质量和工业增速放在一起看：两者同向要警惕，反向要说明代价。",
+        "id": "project",
+        "name": "重大项目参谋",
+        "avatar": "项",
+        "brief": "掌握项目进度与要素保障",
+        "focus": "重点项目进度、投资完成、要素保障",
+        "angle": "盯重点项目进度与投资完成是否同步，要素保障（用地、资金、审批）有没有卡点拖慢整体节奏。",
+    },
+    {
+        "id": "society",
+        "name": "社会治理参谋",
+        "avatar": "治",
+        "brief": "紧盯12345诉求与公共安全",
+        "focus": "12345 诉求、矛盾纠纷、公共安全",
+        "angle": "从诉求办理质量和矛盾纠纷趋势入手，注意「办结率高但重复投诉多」或安全类问题抬头这类信号。",
+    },
+    {
+        "id": "livelihood",
+        "name": "民生保障参谋",
+        "avatar": "民",
+        "brief": "关注就业教育与民生实事",
+        "focus": "就业、教育、医疗、民生实事",
+        "angle": "先看群众诉求的办理质量，再看就业与民生实事的兑现进度，注意「办结率高但满意度低」的组合。",
     },
 )
 
-_SYSTEM = """你是{name}，在市政府常务会上旁听，被市长点名说两句。
+_SYSTEM = """你是{name}（{brief}），在市政府常务会上旁听，被市长点名说两句。
 你关注：{focus}。你的看问题方式：{angle}
 
 硬性要求：
@@ -68,20 +101,80 @@ _SYSTEM = """你是{name}，在市政府常务会上旁听，被市长点名说�
 """
 
 
+# 哪些字段属于「专家身份」，持久化和对外输出都只保留这些。
+# brief 参与提示词但也可空；angle 是看问题方式，编辑面板的核心。
+_EXPERT_KEYS = ("id", "name", "avatar", "brief", "focus", "angle")
+
+
+def _load() -> list[dict[str, str]]:
+    """从 data/experts.json 读名单；没有或读坏就回退内置默认。"""
+    try:
+        if EXPERTS_FILE.is_file():
+            raw = json.loads(EXPERTS_FILE.read_text(encoding="utf-8"))
+            if isinstance(raw, list) and raw:
+                out = []
+                seen = set()
+                for e in raw:
+                    if not isinstance(e, dict) or not str(e.get("id") or "").strip():
+                        continue
+                    eid = str(e["id"]).strip()
+                    if eid in seen:
+                        continue
+                    seen.add(eid)
+                    item = {k: str(e.get(k) or "").strip() for k in _EXPERT_KEYS}
+                    if not item["name"]:
+                        item["name"] = eid
+                    out.append(item)
+                if out:
+                    return out
+    except Exception:  # noqa: BLE001
+        pass
+    return [dict(e) for e in _DEFAULT_EXPERTS]
+
+
 def all_experts() -> list[dict[str, str]]:
-    return [dict(e) for e in EXPERTS]
+    return _load()
 
 
 def find(eid: str | None) -> dict[str, str] | None:
-    for e in EXPERTS:
+    for e in _load():
         if e["id"] == eid:
             return dict(e)
     return None
 
 
+def save_experts(items: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """整体替换名单并落盘。校验字段后写 data/experts.json，返回规范化后的名单。"""
+    clean: list[dict[str, str]] = []
+    seen = set()
+    for e in items or []:
+        if not isinstance(e, dict):
+            continue
+        eid = str(e.get("id") or "").strip()
+        if not eid or eid in seen:
+            continue
+        seen.add(eid)
+        item = {k: str(e.get(k) or "").strip() for k in _EXPERT_KEYS}
+        if not item["name"]:
+            item["name"] = eid
+        if not item["focus"]:
+            item["focus"] = item["angle"] or "综合"
+        if not item["angle"]:
+            item["angle"] = item["focus"] or "从整体看趋势与风险"
+        clean.append(item)
+    try:
+        EXPERTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        EXPERTS_FILE.write_text(
+            json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return clean
+
+
 # 落库时只保留回放要用的字段：回看历史不需要知道「是谁算的」，
 # 存 model/model_ref 只会让 chats.json 白白变胖。
-META_KEYS = ("id", "name", "avatar", "focus", "ok", "text", "why")
+META_KEYS = ("id", "name", "avatar", "brief", "focus", "ok", "text", "why")
 
 
 def to_meta(views: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -154,6 +247,7 @@ def _interpret_one(
         "id": expert["id"],
         "name": expert["name"],
         "avatar": expert["avatar"],
+        "brief": expert.get("brief", ""),
         "focus": expert["focus"],
         "ok": False,
         "text": "",
