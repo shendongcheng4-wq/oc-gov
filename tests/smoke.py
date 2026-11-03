@@ -1732,6 +1732,31 @@ def test_rag() -> None:
     check("删除库成功", rag.delete_base(base["id"]) is True, "")
     check("库已从列表消失", all(b["id"] != base["id"] for b in rag.list_bases()), "")
 
+    # 接入问答链路：指标库、知识库都没命中时，问数走资料库检索
+    from metrics import ask as ask_mod
+
+    base2 = rag.create_base("政策文件库", "问答链路测试")
+    rag.upload_document(
+        base2["id"],
+        "海绵城市建设导则.txt",
+        "本市海绵城市建设导则明确：新建项目年径流总量控制率不低于75%，"
+        "透水铺装率不低于40%，下凹式绿地率不低于30%。".encode("utf-8"),
+    )
+    # 「海绵城市」不在指标字典、也不在知识库，只该命中资料库
+    r = ask_mod.ask("海绵城市建设的径流控制率要求是多少")
+    check("未命中指标时走资料库检索（intent=rag）", r.get("intent") == "rag", str(r.get("intent")))
+    check("资料库答案非拒答", r.get("refused") is False, "")
+    check("资料库答案带 rag 片段", bool(r.get("rag")), str(r.get("rag")))
+    if r.get("rag"):
+        joined = "".join(h["text"] for h in r["rag"])
+        check("资料库片段含原文「径流总量控制率」", "径流总量控制率" in joined, "")
+        check("资料库片段带文档名出处", bool(r["rag"][0].get("doc_name")), "")
+    # 边界：问一个三处都没有的问题，仍是拒答（不因资料库存在而改变）
+    r2 = ask_mod.ask("银河系一共有多少颗恒星")
+    check("三处都未命中仍拒答", r2.get("refused") is True, str(r2.get("refused")))
+    check("拒答不含 rag 片段", not r2.get("rag"), "")
+    rag.delete_base(base2["id"])
+
 
 def test_frontend_theme() -> None:
     """前端主题的静态约定。

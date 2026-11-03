@@ -31,6 +31,7 @@ import meetplan as meetplan_mod
 import mockdata as md
 import modelcfg
 import people as people_mod
+import rag as rag_mod
 
 # --------------------------------------------------------------------------
 # 指标匹配
@@ -678,6 +679,48 @@ def _ask_impl(
             for i, step in enumerate(kb["trace"], 1):
                 step["step"] = i
             return kb
+
+    # 资料库（通用文档 RAG）：指标没命中、知识库也没命中时，最后再查一遍上传的
+    # 政策文件/报告。它与知识库的分工：知识库只收系统自己产出的三类记录（口径、
+    # 督办、会议），资料库收的是用户上传的外部文档。顺序在拒答之前、知识库之后，
+    # 是为了不抢知识库的路 —— 系统内部记录比外部文档更权威。
+    #
+    # 边界继续守「模型不碰数字」：返回的永远是检索到的原文片段（带文档名/库名
+    # 出处），由代码拼装展示，不让模型转述。向量/bigram 只是「怎么找到对的那段」。
+    if not hits:
+        rag_hits = rag_mod.search([b["id"] for b in rag_mod.list_bases()], question)
+        if rag_hits:
+            trace.append(
+                {
+                    "step": len(trace) + 1,
+                    "tool": "rag.search",
+                    "call": f"rag.search(q={question!r})",
+                    "status": "ok",
+                    "summary": "命中资料库 " + "、".join(
+                        f"《{h['doc_name']}》" for h in rag_hits[:4]
+                    ),
+                }
+            )
+            return {
+                "refused": False,
+                "question": question,
+                "planner": planner,
+                "intent": "rag",
+                "headline": f"资料库里检索到 {len(rag_hits)} 段相关内容，原文如下。",
+                "rag": [
+                    {
+                        "kb_name": h["kb_name"],
+                        "doc_name": h["doc_name"],
+                        "text": h["text"],
+                        "score": h["score"],
+                        "method": h["method"],
+                    }
+                    for h in rag_hits
+                ],
+                "sources": [],
+                "notes": [],
+                "trace": trace,
+            }
 
     # 拒答：不编
     if not hits:

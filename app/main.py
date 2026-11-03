@@ -1327,6 +1327,7 @@ class Handler(BaseHTTPRequestHandler):
                 # 用户会以为系统"这次答不上就说没了"。每条约 40 字，可控。
                 "suggestions": (result.get("suggestions") or [])[:12],
                 "knowledge": knowledge_mod.to_meta(result.get("knowledge")),
+                "rag": result.get("rag") or [],
                 "expert_views": views,
                 # 建会草稿要跟着落库：回放时要能重新画出那张卡（含当时的假设与缺项），
                 # 只留一句 headline 的话，用户回看时不知道自己当时确认了什么

@@ -2629,6 +2629,20 @@ function kbBlock(items) {
   }).join("");
   return `<div class="kb-wrap">${rows}</div>`;
 }
+/* 资料库片段：问数/知识库都没命中时，从上传的政策文件里召回的原文。
+   和知识库条目一样守「带出处」——每段都标文档名和所属库，不折叠、不转述。 */
+function ragBlock(items) {
+  if (!items || !items.length) return "";
+  const rows = items.map((h) => {
+    const tx = String(h.text || "").trim();
+    const meta = [h.kb_name, h.doc_name].filter(Boolean).map((x) => esc(x)).join(" · ");
+    return `<div class="rag-hit">
+      <div class="rag-hit-meta">${meta}</div>
+      <div class="rag-hit-text">${esc(tx)}</div>
+    </div>`;
+  }).join("");
+  return `<div class="kb-wrap">${rows}</div>`;
+}
 
 /* 收藏的问答：当前身份收藏了哪几条。ids 用消息 id，星号据此点亮。
    数据来源是 /api/workspace 的 saved（登录态不在这一版，所以按演示身份各存各的）。 */
@@ -3011,6 +3025,7 @@ function aiBubble(r, ref) {
       ${chartBlock}
       ${meetBlock(r.meet_draft, ref)}
       ${kbBlock(r.knowledge)}
+      ${ragBlock(r.rag)}
       ${sugBlock}
       ${notesBlock}
       ${evBlock}
@@ -4008,7 +4023,7 @@ function renderUsageFoot() {
   el.title = THREAD_TOKENS ? "本会话所有轮次的模型用量合计（含失败调用）" : "";
 }
 
-const INTENT_CN = { value: "取值", trend: "走势", breakdown: "分解", compare: "对比", definition: "口径", knowledge: "依据", meet: "约会议" };
+const INTENT_CN = { value: "取值", trend: "走势", breakdown: "分解", compare: "对比", definition: "口径", knowledge: "依据", meet: "约会议", rag: "资料" };
 function intentLabel(i) { return INTENT_CN[i] || i || "—"; }
 
 /* 后端给的错误码 → 人话。原样抛 "empty_question" 等于没解释。 */
@@ -4087,6 +4102,8 @@ function historyView(m, threadId) {
     expert_views: meta.expert_views || [],
     // 知识库条目同理：切回历史对话时「依据」不能消失，否则答案就成了没出处的断言
     knowledge: meta.knowledge || [],
+    // 资料库片段同理：从政策文件召回的那段原文，刷新后不能凭空消失
+    rag: meta.rag || [],
     // 建会草稿同理：回放要能看出当时解析成了什么、哪些字段是推定的。
     // 已经建过会的，后端 annotate 会补上 meeting_id，卡片自动变成「已建会」。
     meet_draft: meta.meet_draft || null,
