@@ -427,6 +427,55 @@ def test_chat() -> None:
     check("删除后取不到", chat.get(t["id"]) is None, "")
 
 
+
+def test_memory() -> None:
+    """跨会话记忆：只记「关注了什么」，不记数值。
+
+    记忆层是可选的（octop-memory 没装就静默降级），所以这里先探明是否可用，
+    可用才跑断言；不可用时也要确认「无记忆不抛异常」这一条兜得住。
+    """
+    print("[5b] 跨会话记忆")
+
+    import memory as mem_mod
+
+    # 没装库时，record/background 都不该抛异常，且 background 返回空。
+    if not mem_mod._HAVE_MEMORY:
+        check("无记忆库时不抛异常", mem_mod.background("x") == [], "")
+        mem_mod.record("t", "x", {"metric_codes": [], "metric_names": []})
+        check("无记忆库时 record 静默", True, "")
+        return
+
+    def rec(thread, codes, names, q):
+        mem_mod.record(thread, q, {"metric_codes": codes, "metric_names": names})
+
+    # 工业问 3 次、GDP 2 次、环保 1 次，维度区县 2 次
+    rec("t1", ["GY_VA_GROWTH"], ["规模以上工业增加值增速"], "工业增加值增速多少")
+    rec("t2", ["GY_VA_GROWTH"], ["规模以上工业增加值增速"], "规上工业再问一次")
+    rec("t3", ["GY_VA_GROWTH"], ["规模以上工业增加值增速"], "工业增速按区县看")
+    rec("t4", ["GDP_TOTAL"], ["地区生产总值"], "GDP 多少")
+    rec("t5", ["GDP_TOTAL"], ["地区生产总值"], "地区生产总值再问")
+    rec("t6", ["AQI_GOOD_DAYS"], ["空气质量优良天数比例"], "空气优良天数")
+
+    bg = mem_mod.background("随便问点啥", limit=5)
+    check("有记忆时能召回", len(bg) == 1 and bg[0]["role"] == "system", str(bg))
+    text = bg[0]["content"] if bg else ""
+
+    # 频次优先：工业（3 次）应排在 GDP（2 次）之前
+    check("关注指标按频次排序", text.find("规模以上工业增加值增速") < text.find("地区生产总值"), text[:120])
+    # 维度归位
+    check("维度被记住", "区县" in text, text[:120])
+    # 主题归位：工业→宏观经济、环保→生态环境、GDP→宏观经济
+    check("主题被记住", "宏观经济" in text and "生态环境" in text, text[:120])
+
+    # 安全边界：跨会话背景跟 chat.context 同一条线，绝不能带数值
+    check("记忆背景不含数值", not re.search(r"\d+", text), text[:120])
+    check("记忆背景不含百分比", "%" not in text, text[:120])
+
+    # 问一个无关的宽泛问题，也能给背景（不因问句措辞漂移）
+    bg2 = mem_mod.background("你好", limit=5)
+    check("宽泛问句也召回背景", bool(bg2), "")
+
+
 def test_experts() -> None:
     """专家团：只解读、不报数。
 
@@ -2713,6 +2762,7 @@ def main() -> int:
     test_same_source()
     test_models()
     test_chat()
+    test_memory()
     test_workspace()
     test_people()
     test_experts()
