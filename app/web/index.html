@@ -1995,7 +1995,6 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
     </div>
     <div class="set-tabs">
       <button class="set-tab on" data-stab="model">模型与引擎</button>
-      <button class="set-tab" data-stab="rag">资料库</button>
       <button class="set-tab" data-stab="general">通用</button>
       <button class="set-tab" data-stab="about">关于</button>
     </div>
@@ -2013,6 +2012,19 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
       <span class="modal-x" id="tmClose">✕</span>
     </div>
     <div class="modal-body" id="tmBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="ragModal">
+  <div class="modal-box theme-box">
+    <div class="modal-head">
+      <div>
+        <h3>资料库</h3>
+        <p>上传政策文件、报告等，问答时召回相关原文片段。检索到的是原文、带出处，模型不转述数字。</p>
+      </div>
+      <span class="modal-x" id="ragClose">✕</span>
+    </div>
+    <div class="modal-body" id="ragBody"></div>
   </div>
 </div>
 
@@ -4393,15 +4405,11 @@ function openSettings(tab) {
     // 面板先出来再用最新数据刷一遍：拉模型列表要走网络，等它会让弹窗慢半拍
     loadModels().then(() => { if (SET_TAB === "model") renderSettings(); }).catch(() => {});
   }
-  if (SET_TAB === "rag") {
-    loadRag().then(() => { if (SET_TAB === "rag") renderSettings(); }).catch(() => {});
-  }
 }
 
 function renderSettings() {
   document.querySelectorAll(".set-tab").forEach((b) => b.classList.toggle("on", b.dataset.stab === SET_TAB));
   if (SET_TAB === "model") return renderModelPanel();
-  if (SET_TAB === "rag") return renderRagPanel();
   if (SET_TAB === "general") return renderGeneralPanel();
   renderAboutPanel();
 }
@@ -4416,6 +4424,12 @@ async function loadRag() {
   }
 }
 
+function openRagModal() {
+  $("#ragModal").classList.add("on");
+  loadRag().then(() => renderRagPanel()).catch(() => renderRagPanel());
+}
+function closeRagModal() { $("#ragModal").classList.remove("on"); }
+
 function renderRagPanel() {
   const bases = RAG.bases || [];
   const stats = RAG.stats || {};
@@ -4424,7 +4438,7 @@ function renderRagPanel() {
     ${b.description ? `<div class="prov-url">${esc(b.description)}</div>` : ""}
   </div>`).join("");
 
-  $("#mmBody").innerHTML = `
+  $("#ragBody").innerHTML = `
     <div class="set-row" style="border-bottom:0;padding-top:0">
       <div class="set-l"><b>通用文档检索</b><span>上传政策文件、报告等，问答时可召回相关原文片段。检索到的是原文、带出处，模型不转述数字。</span></div>
       <span class="set-v">${stats.bases || 0} 个库 · ${stats.documents || 0} 篇 · ${stats.chunks || 0} 块</span>
@@ -4475,7 +4489,7 @@ async function renderRagBasePanel(kbId) {
     <button class="mini" data-rag-del-doc="${esc(d.id)}">删除</button>
   </div>`).join("");
 
-  $("#mmBody").innerHTML = `
+  $("#ragBody").innerHTML = `
     <div class="set-row" style="padding-top:0">
       <div class="set-l"><b>${esc(base.name)}</b><span>${esc(base.description || "无说明")}</span></div>
       <button class="mini" id="rag_back">← 返回</button>
@@ -4967,6 +4981,7 @@ function renderIdMenu() {
   ACCT_ACTIONS = {
     settings: () => openSettings("model"),
     theme: () => openThemeModal(),
+    rag: () => openRagModal(),
     data: () => openSettings("general"),
     about: () => openSettings("about"),
     reset: () => resetLocalPrefs(),
@@ -4974,6 +4989,7 @@ function renderIdMenu() {
   const items = [
     { id: "settings", icon: "gear", name: "设置", hint: "Ctrl+," },
     { id: "theme", icon: "palette", name: "外观", hint: () => THEME.label() },
+    { id: "rag", icon: "db", name: "资料库", hint: "上传文件供问答召回" },
     { sep: 1 },
     { id: "data", icon: "db", name: "数据与存储", hint: `${threads} 个会话` },
     { id: "about", icon: "info", name: "关于", hint: "v0.2" },
@@ -7743,6 +7759,8 @@ $("#mtNew").onclick = newMeetingForm;
 $("#modelModal").onclick = (e) => { if (e.target.id === "modelModal") closeModelModal(); };
 $("#tmClose").onclick = () => $("#themeModal").classList.remove("on");
 $("#themeModal").onclick = (e) => { if (e.target.id === "themeModal") $("#themeModal").classList.remove("on"); };
+$("#ragClose").onclick = () => $("#ragModal").classList.remove("on");
+$("#ragModal").onclick = (e) => { if (e.target.id === "ragModal") $("#ragModal").classList.remove("on"); };
 
 /* ---------- 附件入口 ----------
    纯文本 → 浏览器 `FileReader` 读成字符串；`.xlsx` / `.docx` → POST 给后端解析成文本。
