@@ -1118,6 +1118,11 @@ html.embedded .drawer{top:0;height:100%}
 .test-out{font-size:11.5px;margin-top:8px;padding:6px 9px;border-radius:7px}
 .test-out.ok{background:var(--ok-bg);color:var(--ok);border:1px solid var(--ok-line)}
 .test-out.bad{background:var(--danger-bg);color:var(--danger);border:1px solid var(--danger-line)}
+/* ---------------- 资料库 ---------------- */
+.file-pick{cursor:pointer;display:inline-flex;align-items:center}
+.rag-hit{margin-top:10px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2)}
+.rag-hit-meta{font-size:11px;color:var(--muted);margin-bottom:5px}
+.rag-hit-text{font-size:12.5px;line-height:1.55;color:var(--ink);white-space:pre-wrap}
 /* ---------------- 会议助手 ---------------- */
 .mt-box{width:min(1120px,96vw);max-height:88vh}
 .mt-body{display:grid;grid-template-columns:236px 1fr;gap:0;flex:1;min-height:0}
@@ -1990,6 +1995,7 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
     </div>
     <div class="set-tabs">
       <button class="set-tab on" data-stab="model">模型与引擎</button>
+      <button class="set-tab" data-stab="rag">资料库</button>
       <button class="set-tab" data-stab="general">通用</button>
       <button class="set-tab" data-stab="about">关于</button>
     </div>
@@ -4370,13 +4376,148 @@ function openSettings(tab) {
     // 面板先出来再用最新数据刷一遍：拉模型列表要走网络，等它会让弹窗慢半拍
     loadModels().then(() => { if (SET_TAB === "model") renderSettings(); }).catch(() => {});
   }
+  if (SET_TAB === "rag") {
+    loadRag().then(() => { if (SET_TAB === "rag") renderSettings(); }).catch(() => {});
+  }
 }
 
 function renderSettings() {
   document.querySelectorAll(".set-tab").forEach((b) => b.classList.toggle("on", b.dataset.stab === SET_TAB));
   if (SET_TAB === "model") return renderModelPanel();
+  if (SET_TAB === "rag") return renderRagPanel();
   if (SET_TAB === "general") return renderGeneralPanel();
   renderAboutPanel();
+}
+
+let RAG = { bases: [], active: null, stats: {} };
+
+async function loadRag() {
+  try {
+    RAG = await (await fetch("/api/rag/bases")).json();
+  } catch (_) {
+    RAG = { bases: [], active: null, stats: {} };
+  }
+}
+
+function renderRagPanel() {
+  const bases = RAG.bases || [];
+  const stats = RAG.stats || {};
+  const cards = bases.map((b) => `<div class="prov" data-rag-base="${esc(b.id)}" style="cursor:pointer">
+    <div class="prov-hd"><b>${esc(b.name)}</b><span class="mbadge">${b.doc_count} 篇</span><span class="mbadge">${b.chunk_count} 块</span></div>
+    ${b.description ? `<div class="prov-url">${esc(b.description)}</div>` : ""}
+  </div>`).join("");
+
+  $("#mmBody").innerHTML = `
+    <div class="set-row" style="border-bottom:0;padding-top:0">
+      <div class="set-l"><b>通用文档检索</b><span>上传政策文件、报告等，问答时可召回相关原文片段。检索到的是原文、带出处，模型不转述数字。</span></div>
+      <span class="set-v">${stats.bases || 0} 个库 · ${stats.documents || 0} 篇 · ${stats.chunks || 0} 块</span>
+    </div>
+    <div class="set-row" style="border-top:0">
+      <div class="set-l"><b>向量化</b><span>装了 fastembed 走本地 ONNX 语义检索；没装自动退回关键词检索，功能照常。</span></div>
+      <span class="set-v ${stats.embedding ? "" : "hint"}">${stats.embedding ? "本地向量已启用" : "关键词检索（未装向量依赖）"}</span>
+    </div>
+    ${cards || `<div class="hint" style="margin:0 0 6px">还没有资料库。</div>`}
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+      <b style="font-size:12.5px">新建资料库</b>
+      <div class="form-grid">
+        <label>名称<input id="rag_name" placeholder="例如：营商环境政策"></label>
+        <label class="full">说明（可选）<input id="rag_desc" placeholder="放什么文件，供谁查"></label>
+      </div>
+      <div class="prow-acts"><button class="mini" id="rag_create">创建</button></div>
+    </div>`;
+
+  $("#rag_create").onclick = async () => {
+    const name = ($("#rag_name").value || "").trim();
+    if (!name) return toast("名称不能为空");
+    const d = await (await fetch("/api/rag/bases", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, description: ($("#rag_desc").value || "").trim() }),
+    })).json();
+    if (!d.ok) return toast(d.error || "创建失败");
+    await loadRag();
+    RAG.active = d.base;
+    renderRagPanel();
+    toast(`已创建「${name}」`);
+  };
+
+  document.querySelectorAll("[data-rag-base]").forEach((el) => {
+    el.onclick = () => {
+      const id = el.dataset.ragBase;
+      renderRagBasePanel(id);
+    };
+  });
+}
+
+async function renderRagBasePanel(kbId) {
+  const d = await (await fetch(`/api/rag/bases/${encodeURIComponent(kbId)}`)).json();
+  if (!d.ok) return renderRagPanel();
+  const base = d.base;
+  const docs = d.documents || [];
+  const docRows = docs.map((d) => `<div class="set-row" style="padding:7px 0">
+    <div class="set-l"><b>${esc(d.name)}</b><span>${d.chunk_count} 块 · ${d.embedded ? "已向量化" : "关键词"}</span></div>
+    <button class="mini" data-rag-del-doc="${esc(d.id)}">删除</button>
+  </div>`).join("");
+
+  $("#mmBody").innerHTML = `
+    <div class="set-row" style="padding-top:0">
+      <div class="set-l"><b>${esc(base.name)}</b><span>${esc(base.description || "无说明")}</span></div>
+      <button class="mini" id="rag_back">← 返回</button>
+    </div>
+    <div class="set-row">
+      <div class="set-l"><b>上传文档</b><span>支持 md/txt/csv/tsv/json/html/docx/xlsx，单文件不超过 9MB。</span></div>
+      <label class="mini file-pick">选择文件<input type="file" id="rag_file" multiple style="display:none"></label>
+    </div>
+    ${docRows || `<div class="hint">还没有文档，先上传一份。</div>`}
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+      <b style="font-size:12.5px">在这个库里检索</b>
+      <div class="form-grid">
+        <label class="full"><input id="rag_q" placeholder="例如：老旧小区改造的完成目标是多少"></label>
+      </div>
+      <div class="prow-acts"><button class="mini" id="rag_search">检索</button></div>
+      <div id="rag_out"></div>
+    </div>`;
+
+  $("#rag_back").onclick = () => { RAG.active = null; renderRagPanel(); };
+
+  $("#rag_file").onchange = async (e) => {
+    const files = [...(e.target.files || [])];
+    for (const f of files) {
+      const buf = await f.arrayBuffer();
+      const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+      const d = await (await fetch(`/api/rag/bases/${encodeURIComponent(kbId)}/upload`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: f.name, data: b64, content_type: f.type }),
+      })).json();
+      toast(d.ok ? `已入库「${f.name}」` : (d.error || "上传失败"));
+    }
+    await loadRag();
+    renderRagBasePanel(kbId);
+  };
+
+  $("#rag_search").onclick = async () => {
+    const q = ($("#rag_q").value || "").trim();
+    if (!q) return toast("先输入要查的内容");
+    const out = $("#rag_out");
+    out.innerHTML = `<div class="test-out">检索中…</div>`;
+    const d = await (await fetch(`/api/rag/bases/${encodeURIComponent(kbId)}/search?q=${encodeURIComponent(q)}`)).json();
+    if (!d.ok) { out.innerHTML = `<div class="test-out bad">${esc(d.error)}</div>`; return; }
+    if (!d.hits.length) { out.innerHTML = `<div class="test-out">没有召回相关片段。</div>`; return; }
+    out.innerHTML = d.hits.map((h) => `<div class="rag-hit">
+      <div class="rag-hit-meta">${esc(h.doc_name)} · 相关度 ${h.score.toFixed(3)} · ${esc(h.method === "vector" ? "向量" : "关键词")}</div>
+      <div class="rag-hit-text">${esc(h.text)}</div>
+    </div>`).join("");
+  };
+
+  document.querySelectorAll("[data-rag-del-doc]").forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.dataset.ragDelDoc;
+      if (!confirm("删除这份文档？")) return;
+      const d = await (await fetch(`/api/rag/bases/${encodeURIComponent(kbId)}/doc?doc=${encodeURIComponent(id)}`, { method: "DELETE" })).json();
+      if (!d.ok) return toast(d.error || "删除失败");
+      await loadRag();
+      renderRagBasePanel(kbId);
+    };
+  });
 }
 
 function renderGeneralPanel() {

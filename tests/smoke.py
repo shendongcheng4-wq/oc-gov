@@ -1671,6 +1671,68 @@ def test_docx_parse() -> None:
     check("芯片能显示 docx 的段数", "paras" in html, "")
 
 
+def test_rag() -> None:
+    """通用文档 RAG：上传 → 切块 → 索引 → 检索，全链路可核。
+
+    这里最值钱的两条：检索结果必须**逐字来自上传的原文**（不是模型转述），
+    且向量化不可用时**静默降级到 bigram**，功能不崩。
+    """
+    print("\n[20] 资料库（通用文档 RAG）")
+    import rag
+
+    # 向量化不可用是常态（没装 fastembed），先确认降级路径存在
+    check("rag 模块可导入", hasattr(rag, "search"), "")
+    check("未装向量依赖时 embedding_available=False", rag.embedding_available() is False, "")
+
+    # 建库
+    base = rag.create_base("测试资料库", "用于冒烟测试")
+    check("建库返回 id", bool(base.get("id")), str(base))
+    check("库列表包含新库", any(b["id"] == base["id"] for b in rag.list_bases()), "")
+
+    # 上传一个 txt 文档
+    body = (
+        "关于推进城市更新工作的实施意见。\n"
+        "一、总体目标：到2026年底完成老旧小区改造120个，惠及居民约15万户。\n"
+        "二、重点任务：加快市政管网更新改造，推进海绵城市建设。\n"
+        "三、保障措施：建立市级统筹、区级落实的工作机制，纳入年度考核。"
+    )
+    doc = rag.upload_document(base["id"], "城市更新实施意见.txt", body.encode("utf-8"))
+    check("上传文档成功", bool(doc.get("id")), str(doc))
+    check("文档切块数 > 0", int(doc.get("chunk_count") or 0) > 0, str(doc.get("chunk_count")))
+    check("降级模式 embedded=False", doc.get("embedded") is False, str(doc.get("embedded")))
+
+    # 检索：bigram 降级路径
+    hits = rag.search([base["id"]], "老旧小区改造完成多少")
+    check("降级检索能命中", len(hits) > 0, str(hits))
+    if hits:
+        joined = "".join(h["text"] for h in hits)
+        check("命中片段含原文「老旧小区改造」", "老旧小区改造" in joined, "")
+        check("命中片段带出处（文档名）", bool(hits[0].get("doc_name")), "")
+        check("检索方法标记为 bigram", hits[0].get("method") == "bigram", str(hits[0].get("method")))
+
+    # 检索结果必须是原文，不允许凭空多出数字
+    all_text = "".join(h["text"] for h in hits)
+    check("检索片段不含原文没有的数字", "999" not in all_text, "")
+
+    # 上传 docx（复用 docparse，确认标准库解析也能进 RAG）
+    docx_body = (
+        "<w:p><w:t>关于老旧小区改造的补充通知</w:t></w:p>"
+        "<w:p><w:t>到2026年底再完成改造30个小区。</w:t></w:p>"
+    )
+    doc2 = rag.upload_document(base["id"], "补充通知.docx", _mini_docx(docx_body))
+    check("docx 文档能进库", bool(doc2.get("id")), str(doc2))
+
+    # 空库/空问句的边界
+    check("空问句返回空", rag.search([base["id"]], "   ") == [], "")
+    check("不存在的库返回空", rag.search(["kb_nonexistent"], "老旧小区") == [], "")
+
+    # 删除文档与库
+    check("删除文档成功", rag.delete_document(base["id"], doc["id"]) is True, "")
+    check("文档已从列表消失", all(d["id"] != doc["id"] for d in rag.list_documents(base["id"])), "")
+    check("删除库成功", rag.delete_base(base["id"]) is True, "")
+    check("库已从列表消失", all(b["id"] != base["id"] for b in rag.list_bases()), "")
+
+
 def test_frontend_theme() -> None:
     """前端主题的静态约定。
 
@@ -2777,6 +2839,7 @@ def main() -> int:
     test_attach_entry()
     test_book_parse()
     test_docx_parse()
+    test_rag()
     test_frontend_theme()
     test_frontend_sidebar()
     test_frontend_thread_switch()

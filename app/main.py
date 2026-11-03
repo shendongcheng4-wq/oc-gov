@@ -97,6 +97,7 @@ import briefdoc as brief_mod  # noqa: E402
 import knowledge as knowledge_mod  # noqa: E402
 import experts as expert_mod  # noqa: E402
 import meetplan as meetplan_mod  # noqa: E402
+import rag as rag_mod  # noqa: E402
 
 
 def request_cancel(turn_id: str) -> None:
@@ -570,6 +571,62 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 )
 
+            # ---- 资料库（通用文档 RAG）----
+            # 只读检索：返回的是上传文档里的原文片段，不是模型生成的答案。
+            if path == "/api/rag":
+                qs = parse_qs(urlparse(self.path).query)
+                q = str((qs.get("q") or [""])[0]).strip()
+                ids = [str(x).strip() for x in (qs.get("kb") or []) if str(x).strip()]
+                try:
+                    k = max(1, min(20, int((qs.get("k") or [str(rag_mod.DEFAULT_K)])[0])))
+                except ValueError:
+                    k = rag_mod.DEFAULT_K
+                if not q:
+                    return self._json({"ok": False, "error": "q_required"}, 400)
+                if not ids:
+                    ids = [b["id"] for b in rag_mod.list_bases()]
+                hits = rag_mod.search(ids, q, k=k)
+                return self._json(
+                    {
+                        "ok": True,
+                        "query": q,
+                        "total": len(hits),
+                        "vector": rag_mod.embedding_available(),
+                        "hits": hits,
+                    }
+                )
+
+            if path == "/api/rag/bases":
+                return self._json({"ok": True, "bases": rag_mod.list_bases(), "stats": rag_mod.stats()})
+
+            if path == "/api/rag/bases/new":
+                return self._json({"ok": True, "stats": rag_mod.stats()})
+
+            parts = _parts(path, "/api/rag/bases/")
+            if len(parts) == 1:
+                base = rag_mod.get_base(parts[0])
+                if base is None:
+                    return self._json({"ok": False, "error": "base_not_found"}, 404)
+                return self._json(
+                    {
+                        "ok": True,
+                        "base": {
+                            "id": base["id"],
+                            "name": base["name"],
+                            "description": base.get("description") or "",
+                            "created_at": base.get("created_at"),
+                        },
+                        "documents": rag_mod.list_documents(base["id"]),
+                    }
+                )
+            if len(parts) == 2 and parts[1] == "search":
+                qs = parse_qs(urlparse(self.path).query)
+                q = str((qs.get("q") or [""])[0]).strip()
+                if not q:
+                    return self._json({"ok": False, "error": "q_required"}, 400)
+                hits = rag_mod.search([parts[0]], q)
+                return self._json({"ok": True, "query": q, "total": len(hits), "hits": hits})
+
             if path.startswith("/api/metric/"):
                 code = path.rsplit("/", 1)[-1].upper()
                 detail = wb.metric_detail(code)
@@ -732,7 +789,40 @@ class Handler(BaseHTTPRequestHandler):
                 modelcfg.set_active(ref)
                 return self._json({"ok": True, "active": modelcfg.active_ref()})
 
-            if path == "/api/threads":
+            # ---- 资料库（通用文档 RAG）----
+            if path == "/api/rag/bases":
+                name = str(body.get("name") or "").strip()
+                if not name:
+                    return self._json({"ok": False, "error": "name_required"}, 400)
+                base = rag_mod.create_base(name, body.get("description") or "")
+                return self._json({"ok": True, "base": base, "bases": rag_mod.list_bases()})
+
+            parts = _parts(path, "/api/rag/bases/")
+            if len(parts) == 2 and parts[1] == "upload":
+                base = rag_mod.get_base(parts[0])
+                if base is None:
+                    return self._json({"ok": False, "error": "base_not_found"}, 404)
+                name = str(body.get("name") or "未命名").strip()[:120] or "未命名"
+                b64 = body.get("data")
+                if not isinstance(b64, str) or not b64.strip():
+                    return self._json({"ok": False, "error": "文件是空的"}, 400)
+                if len(b64) > rag_mod.MAX_DOC_BYTES * 4 // 3 + 4096:
+                    return self._json({"ok": False, "error": "文件超过 9MB"}, 400)
+                try:
+                    blob = base64.b64decode(b64, validate=False)
+                except (ValueError, TypeError):
+                    return self._json({"ok": False, "error": "base64 解不开，文件可能在传输中损坏"}, 400)
+                if len(blob) > rag_mod.MAX_DOC_BYTES:
+                    return self._json({"ok": False, "error": "文件超过 9MB"}, 400)
+                try:
+                    doc = rag_mod.upload_document(parts[0], name, blob, content_type=str(body.get("content_type") or ""))
+                except ValueError as exc:
+                    return self._json({"ok": False, "error": str(exc)}, 400)
+                except LookupError as exc:
+                    return self._json({"ok": False, "error": str(exc)}, 404)
+                return self._json({"ok": True, "doc": doc, "documents": rag_mod.list_documents(parts[0])})
+
+            # ---- 会话 ----
                 thread = chat.create(
                     title=body.get("title"),
                     model_ref=body.get("model_ref") or modelcfg.active_ref(),
@@ -939,6 +1029,18 @@ class Handler(BaseHTTPRequestHandler):
             parts = _parts(path, "/api/meetings/")
             if len(parts) == 1:
                 return self._delete_ok(meetings.delete(parts[0]))
+
+            # ---- 资料库：删文档（库/文档两级）----
+            parts = _parts(path, "/api/rag/bases/")
+            if len(parts) == 1:
+                return self._delete_ok(rag_mod.delete_base(parts[0]))
+            if len(parts) == 2 and parts[1] == "doc":
+                # 文档 id 在查询串里：/api/rag/bases/<kb>/doc?doc=<id>
+                qs = parse_qs(urlparse(self.path).query)
+                doc_id = str((qs.get("doc") or [""])[0]).strip()
+                if not doc_id:
+                    return self._delete_ok(False, error="doc_required")
+                return self._delete_ok(rag_mod.delete_document(parts[0], doc_id))
 
             self.send_error(404)
         except Exception as exc:  # noqa: BLE001
