@@ -50,6 +50,7 @@ import struct
 from pathlib import Path
 from typing import Any
 
+import embedding
 import store
 
 # ── 目录 ──────────────────────────────────────────────────────────────────
@@ -74,50 +75,31 @@ _MAX_PREVIEW_CHARS = 12000                # 单个文档参与切块的最大字
 
 # ── 向量化：懒加载 + 降级 ────────────────────────────────────────────────
 #
-# 优先 fastembed（自带 ONNX 运行时 + 自动下载中文 embedding 模型），
-# 次选裸 onnxruntime。都没有就 _HAVE_EMBED = False，检索退回 bigram。
-try:
-    from fastembed import TextEmbedding  # noqa: F401
+# 复用 core/embedding.py 的共享向量化（fastembed + bge-small-zh-v1.5，
+# 内网离线加载）。不可用就 _HAVE_EMBED = False，检索退回 bigram。
+_HAVE_FASTEMBED = embedding.embedding_available()
 
-    _HAVE_FASTEMBED = True
-except Exception:  # noqa: BLE001
-    _HAVE_FASTEMBED = False
-
-_EMBED = None
 _HAVE_EMBED = False
 
 
 def _embed_model():
-    """懒加载一个中文 embedding 模型。失败返回 None（调用方降级）。"""
-    global _EMBED, _HAVE_EMBED
-    if _HAVE_EMBED:
-        return _EMBED
-    if not _HAVE_FASTEMBED:
-        return None
-    try:
-        from fastembed import TextEmbedding
+    """懒加载一个中文 embedding 模型。失败返回 None（调用方降级）。
 
-        _EMBED = TextEmbedding(model_name="BAAI/bge-small-zh-v1.5")
-        _HAVE_EMBED = True
-        return _EMBED
-    except Exception:  # noqa: BLE001 —— 下载失败/网络不通都当「没有向量化」
-        return None
+    直接委托共享模块的实例，不再自己缓存一份。
+    """
+    global _HAVE_EMBED
+    model = embedding._embed_model()
+    _HAVE_EMBED = model is not None
+    return model
 
 
 def embedding_available() -> bool:
-    return _HAVE_FASTEMBED
+    return embedding.embedding_available()
 
 
 def _embed(texts: list[str]) -> list[list[float]] | None:
     """把一串文本变成向量。不可用返回 None。"""
-    model = _embed_model()
-    if model is None:
-        return None
-    try:
-        vecs = list(model.embed(texts))
-        return [list(v) for v in vecs]
-    except Exception:  # noqa: BLE001
-        return None
+    return embedding.embed(texts)
 
 
 # ── bigram 降级检索（与 knowledge.py 同一套思路） ─────────────────────────
@@ -487,6 +469,13 @@ def delete_document(kb_id: str, doc_id: str) -> bool:
 
 # ── 检索 ──────────────────────────────────────────────────────────────────
 
+# 向量余弦相似度召回下限。与 knowledge.py 同一套判断：bge-small-zh 对
+# 「短查询 vs 长片段」有个 0.3~0.5 的背景相似度，语义不沾边也落在里面
+# （实测「银河系有多少颗恒星」与「海绵城市导则」余弦 0.378，误召回导致
+# 问数把「拒答」误判成「命中资料库」）。真命中都在 0.6 以上。定 0.55，
+# 低于它不召回，宁可说没有也不硬凑。
+MIN_VECTOR_SIM = 0.55
+
 
 def search(
     kb_ids: list[str],
@@ -510,6 +499,8 @@ def search(
         doc_by_id = {d["id"]: d for d in base["documents"]}
         if query_vec is not None:
             hits = _Index(kb_id).search(query_vec[0], k=k)
+            # 向量路设下限：语义不沾边的背景相似度不进结果
+            hits = [h for h in hits if h["score"] >= MIN_VECTOR_SIM]
         else:
             hits = _bigram_search(kb_id, q, k=k)
         for h in hits:

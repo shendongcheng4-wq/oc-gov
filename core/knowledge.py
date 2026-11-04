@@ -29,9 +29,11 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
+import embedding
 import mockdata as md
 
 import ledger
@@ -86,6 +88,15 @@ _TIME_BG = {
 
 # 命中阈值。低于它的不进结果，宁可说「没有相关记录」也不硬凑。
 MIN_SCORE = 0.18
+
+# 向量余弦相似度的召回下限。bge-small-zh 对「短查询 vs 长文档」会有一个
+# 0.40~0.53 的「背景相似度」——语义完全不沾边的条目也落在这个区间（实测：
+# 「进出口数据」与「停车难专项治理」余弦 0.52，「社会消费品零售总额」与
+# 「规模以上工业增加值」0.52）。而真命中（语义相关）都在 0.60 以上（「停车难」
+# →0.74、「空气质量」→0.65、带时间词的「上个月固定资产投资增速」→0.79）。
+# 所以定 0.55：挡掉全部背景相似，同时给「蓝天保卫战→空气质量」这种同义改写
+# （实测 0.60）留出余量。
+MIN_VECTOR_SIM = 0.55
 
 
 def _norm(text: str) -> str:
@@ -463,14 +474,18 @@ def index(person: dict[str, Any] | None = None, domain: dict[str, Any] | None = 
 # --------------------------------------------------------------------------
 
 
-def score(query: str, entry: dict[str, Any]) -> float:
-    """一条命中的分数。分母是问句的二字组数量，所以分值就是「问句被覆盖了多少」。
+def _lexical_score(query: str, entry: dict[str, Any]) -> float:
+    """bigram 覆盖率得分。分母是问句的二字组数量，所以分值就是「问句被覆盖了多少」。
 
     除了覆盖率还要卡**命中个数**：只对上一个「建设」二字组就算相关，等于把
     「火星基地建设情况」也匹配到某个指标上——它确实含「建设」，但问的不是这件事。
     但门槛不能一刀切：「上次开会说了什么」只有 4 个二字组，去掉「什么」后能对上的
     就只有「会议」一个，硬要 2 个就等于把最自然的一种问法挡在门外。所以按问句长度
     缩放——长问句（≥5 个二字组）至少要命中 2 个，短的命中 1 个即可。
+
+    这一路是**向量不可用时的兜底**。它的先天缺陷是「通用词虚高」——「数据」
+    这类政务文档高频词会命中一堆无关条目（「进出口数据」召回「停车难」「平台数据
+    接入」就是这个毛病）。向量可用时走 `_vector_score`，这一路只在降级时用。
     """
     doc = _bigrams(f"{entry['title']}{entry['text']}{entry.get('quote') or ''}")
     variants = _variants(query)
@@ -490,24 +505,49 @@ def score(query: str, entry: dict[str, Any]) -> float:
     if base <= 0:
         return 0.0
 
+    return round(base, 4)
+
+
+def _hard_signals(query: str, entry: dict[str, Any]) -> float:
+    """术语 / 单位 / 编号 / 标题这些「硬信号」加分。
+
+    与 bigram 覆盖率无关——它们是明确的字符串命中，比「字面碰巧相似」可信得多：
+    指标别名命中、责任单位点名、台账/会议编号出现在问句里，都是用户意图的强证据。
+    向量检索和 bigram 检索**都要**叠这一层，所以单独抽出来共用。
+    """
+    variants = _variants(query)
     low = str(query).lower()
-    # 术语命中：指标别名 +0.55。别名比字面相似可靠得多——用户念「规上工业」，
+    add = 0.0
+
+    # 术语命中：指标别名。别名比字面相似可靠得多——用户念「规上工业」，
     # 指标名里一个字都没有。
     for term, code in terms().items():
         if term and any(term in v for v in variants):
             if entry["kind"] == "metric" and entry["id"] == code:
-                base += 0.55
+                add += 0.55
             break
     if unit_hit(query, entry.get("unit") or ""):
-        base += 0.30
+        add += 0.30
     if entry["kind"] == "oversight" and entry["id"].lower() in low:
-        base += 1.0
+        add += 1.0
     if entry["kind"] in ("meeting", "decision") and entry["id"].split("#")[0].lower() in low:
-        base += 1.0
+        add += 1.0
     title_bg = _bigrams(entry["title"])
     if title_bg and any(title_bg <= _bigrams(v) for v in variants if _bigrams(v)):
-        base += 0.15
-    return round(min(base, 2.0), 4)
+        add += 0.15
+    return round(add, 4)
+
+
+def score(query: str, entry: dict[str, Any]) -> float:
+    """一条命中的总分数 = bigram 覆盖率 + 硬信号加分。
+
+    保留原签名是为了不破坏外部调用（tests 与 `search_in` 的降级路径），
+    内部就是 `_lexical_score + _hard_signals`。
+    """
+    base = _lexical_score(query, entry)
+    if base <= 0:
+        return 0.0
+    return round(min(base + _hard_signals(query, entry), 2.0), 4)
 
 
 # 同分时的阅读次序：先看这件事现在怎么样，再看它是谁定的，最后看背景。
@@ -521,23 +561,71 @@ def search_in(entries: list[dict[str, Any]], query: str, limit: int = 6) -> list
 
     单独拆出来是为了参谋团：三位参谋各查一次，但索引只需要建一遍。
     重建三次在几十条数据上感觉不出来，等台账上千条就是三倍的白等。
+
+    检索分两路：
+    - **向量可用**：用 embedding 的余弦相似度当主信号，叠 `_hard_signals`
+      （术语/单位/编号/标题）。语义相似能挡住 bigram 的「通用词虚高」——问
+      「进出口数据」不会再因为「数据」二字召回「停车难」「平台数据接入」。
+    - **向量不可用**：退回原 bigram 覆盖率 + 硬信号，行为与以前完全一致。
     """
     q = str(query or "").strip()
     if not q:
         return []
     low = q.lower()
-    hits = []
+
+    vec_scores = _vector_scores(q, entries) if embedding.embedding_available() else None
+    hits: list[dict[str, Any]] = []
     for entry in entries:
-        s = score(q, entry)
-        if s >= MIN_SCORE:
-            # 问句里点了名的单位要往上提。同分时靠 title 字符序决定谁在前是纯偶然，
-            # 会让「问生态环境局的事、第一条却是发改委的」这种结果排在最显眼的位置。
-            hits.append({**entry, "score": s, "unit_hit": bool(entry.get("unit") and unit_hit(low, entry["unit"]))})
+        hard = _hard_signals(q, entry)
+        if vec_scores is not None:
+            # 向量分（0~1 的余弦）＋硬信号。向量分设一个下限，语义上完全不沾边的
+            # 条目即使硬信号勉强命中也不放行——「数据」这种通用词不会再擦线进来。
+            v = vec_scores.get(entry["id"], 0.0)
+            if v < MIN_VECTOR_SIM:
+                continue
+            s = round(min(v + hard, 2.0), 4)
+        else:
+            # bigram 兜底：保留原 threshold 语义
+            s = score(q, entry)
+            if s < MIN_SCORE:
+                continue
+        hits.append(
+            {**entry, "score": s, "unit_hit": bool(entry.get("unit") and unit_hit(low, entry["unit"]))}
+        )
+
     # 两遍排序：先按次级键（时间新、标题）定序，再按主键（单位命中、分数、类型次序）。
     # 一遍写不出「主键升序、次级键降序」，稳定排序正好用来做分层。
     hits.sort(key=lambda e: (str(e.get("when") or ""), e["title"]), reverse=True)
     hits.sort(key=lambda e: (not e["unit_hit"], -e["score"], _KIND_ORDER.get(e["kind"], 9)))
     return hits[:limit]
+
+
+def _vector_scores(query: str, entries: list[dict[str, Any]]) -> dict[str, float]:
+    """给每条 entry 算向量余弦相似度，key 是 entry id。
+
+    注意 entries 里 metric/oversight/meeting 的 id 可能撞车？不会——metric 是
+    指标 code（如 GY_VA_GROWTH），oversight 是 DB 编号，meeting 是 MT 编号，
+    天然不重复。真撞了也只影响一条的召回，不影响正确性。
+    """
+    # 每条 entry 的可检索文本：标题 + 正文 + 引句，和 bigram 用同一份语料
+    texts = [f"{e['title']}{e['text']}{e.get('quote') or ''}" for e in entries]
+    qv = embedding.embed([query])
+    dv = embedding.embed(texts)
+    if not qv or not dv:
+        return {}
+
+    q = qv[0]
+    qnorm = math.sqrt(sum(x * x for x in q))
+    if qnorm == 0:
+        return {}
+    out: dict[str, float] = {}
+    for e, vec in zip(entries, dv):
+        if len(vec) != len(q):
+            continue
+        norm = math.sqrt(sum(x * x for x in vec))
+        sim = 0.0 if norm == 0 else sum(a * b for a, b in zip(q, vec)) / (qnorm * norm)
+        out[e["id"]] = sim
+    return out
 
 
 def search(

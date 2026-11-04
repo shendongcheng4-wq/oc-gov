@@ -1964,9 +1964,11 @@ def test_rag() -> None:
     print("\n[20] 资料库（通用文档 RAG）")
     import rag
 
-    # 向量化不可用是常态（没装 fastembed），先确认降级路径存在
+    # 向量化可用与否都能跑：装了 fastembed 走向量（method=vector、embedded=True），
+    # 没装就静默降级到 bigram（method=bigram、embedded=False）。两条路都验证。
     check("rag 模块可导入", hasattr(rag, "search"), "")
-    check("未装向量依赖时 embedding_available=False", rag.embedding_available() is False, "")
+    vec_avail = rag.embedding_available()
+    check("向量化可用性可判定", isinstance(vec_avail, bool), str(vec_avail))
 
     # 建库
     base = rag.create_base("测试资料库", "用于冒烟测试")
@@ -1983,16 +1985,17 @@ def test_rag() -> None:
     doc = rag.upload_document(base["id"], "城市更新实施意见.txt", body.encode("utf-8"))
     check("上传文档成功", bool(doc.get("id")), str(doc))
     check("文档切块数 > 0", int(doc.get("chunk_count") or 0) > 0, str(doc.get("chunk_count")))
-    check("降级模式 embedded=False", doc.get("embedded") is False, str(doc.get("embedded")))
+    check("嵌入状态与向量可用性一致", bool(doc.get("embedded")) == vec_avail, str(doc.get("embedded")))
 
-    # 检索：bigram 降级路径
+    # 检索：向量可用时走 vector，否则降级 bigram
     hits = rag.search([base["id"]], "老旧小区改造完成多少")
     check("降级检索能命中", len(hits) > 0, str(hits))
     if hits:
         joined = "".join(h["text"] for h in hits)
         check("命中片段含原文「老旧小区改造」", "老旧小区改造" in joined, "")
         check("命中片段带出处（文档名）", bool(hits[0].get("doc_name")), "")
-        check("检索方法标记为 bigram", hits[0].get("method") == "bigram", str(hits[0].get("method")))
+        expect_method = "vector" if vec_avail else "bigram"
+        check("检索方法与向量可用性一致", hits[0].get("method") == expect_method, str(hits[0].get("method")))
 
     # 检索结果必须是原文，不允许凭空多出数字
     all_text = "".join(h["text"] for h in hits)
