@@ -5062,6 +5062,7 @@ function renderModelPanel() {
         <label class="full">API Key（只存本机，不会提交到任何第三方）<input id="f_key" type="password" placeholder="sk-..."></label>
         <label class="full">模型 ID（逗号分隔）<input id="f_models" placeholder="deepseek-chat, deepseek-flash"></label>
         <label class="full">上下文窗口（token，可选）<input id="f_window" placeholder="如 8192 / 32768，留空按 8k 兜底"></label>
+        <label class="full" style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="f_llamacpp" style="width:auto"> 本地 llama.cpp 服务（如 llama-server，会自动关掉思维链加速）</label>
       </div>
       <div class="prow-acts">
         <button class="mini" id="f_save">保存</button>
@@ -5158,6 +5159,7 @@ function bindModelPanel() {
       const key = (box.querySelector("#f_key").value || "").trim();
       const models = (box.querySelector("#f_models").value || "").split(",").map((s) => s.trim()).filter(Boolean);
       const winRaw = (box.querySelector("#f_window").value || "").trim();
+      const llamacpp = box.querySelector("#f_llamacpp") ? box.querySelector("#f_llamacpp").checked : false;
       let win = null;
       if (winRaw) {
         const k = /^(\d+)\s*[kK千]?$/.exec(winRaw);
@@ -5167,7 +5169,7 @@ function bindModelPanel() {
       if (!name || !base || !key || !models.length) return toast("名称、Base URL、Key、至少一个模型都要填");
       const d = await (await fetch("/api/models", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, base_url: base, api_key: key, models: models.map((id) => ({ id, context_window: win })) }),
+        body: JSON.stringify({ name, base_url: base, api_key: key, llamacpp, models: models.map((id) => ({ id, context_window: win })) }),
       })).json();
       if (!d.ok) return toast(d.error || "保存失败");
       await loadModels();
@@ -5373,7 +5375,7 @@ function renderIdMenu() {
     { id: "settings", icon: "gear", name: "设置", hint: "Ctrl+," },
     { id: "theme", icon: "palette", name: "外观", hint: () => THEME.label() },
     { id: "rag", icon: "db", name: "资料库", hint: "上传文件供问答召回" },
-    { id: "plugins", icon: "plug", name: "插件", hint: "octop 插件与连接器" },
+    { id: "plugins", icon: "plug", name: "插件", hint: "插件与连接器" },
     { id: "experts", icon: "users", name: "专家", hint: "管理参谋团的人设与视角" },
     { sep: 1 },
     { id: "data", icon: "db", name: "数据与存储", hint: `${threads} 个会话` },

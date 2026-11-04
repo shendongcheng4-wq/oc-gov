@@ -171,6 +171,12 @@ def chat_json(
         "response_format": {"type": "json_object"},
         "messages": messages,
     }
+    if conn.get("llamacpp"):
+        # 本地 llama.cpp 推理模型默认走思维链，一次结构化抽取能慢到 5-17 秒、
+        # 多轮甚至 24 秒，贴着调用方的 timeout。关掉思考后降到 2-5 秒，够用。
+        # 这个字段是 llama.cpp 专属扩展，云端 OpenAI 兼容服务不认，所以只在
+        # provider 标记了 llamacpp 时才加。
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     if max_tokens:
         payload["max_tokens"] = max_tokens
 
@@ -262,6 +268,8 @@ def chat_text(
         "temperature": temperature,
         "messages": messages,
     }
+    if conn.get("llamacpp"):
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     if max_tokens:
         payload["max_tokens"] = max_tokens
 

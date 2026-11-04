@@ -269,6 +269,7 @@ def resolve(ref: str | None = None) -> dict[str, Any] | None:
                     "model": m["id"],
                     "context_window": m.get("context_window"),
                     "max_output_tokens": m.get("max_output_tokens"),
+                    "llamacpp": bool(p.get("llamacpp")),
                 }
 
     # 显式 ref 没解析出来，退到第一个可用模型
@@ -286,6 +287,7 @@ def resolve(ref: str | None = None) -> dict[str, Any] | None:
                 "model": m["id"],
                 "context_window": m.get("context_window"),
                 "max_output_tokens": m.get("max_output_tokens"),
+                "llamacpp": bool(p.get("llamacpp")),
             }
 
     # 最后退到环境变量（locals.env 没被迁移时的兜底）
@@ -307,6 +309,7 @@ def resolve(ref: str | None = None) -> dict[str, Any] | None:
             "model": mid,
             "context_window": None,
             "max_output_tokens": None,
+            "llamacpp": False,
         }
     return None
 
@@ -382,6 +385,9 @@ def _clean_provider(payload: dict[str, Any], existing: dict[str, Any] | None = N
         base.setdefault("api_key", "")
 
     base["enabled"] = bool(payload.get("enabled", base.get("enabled", True)))
+    # llamacpp 标记：本地 llama.cpp/llama-server 服务（OpenAI 兼容但支持 chat_template_kwargs
+    # 这类非标准扩展）。请求层据此给推理模型关掉思维链，避免本地小模型把时间花在 thinking 上。
+    base["llamacpp"] = bool(payload.get("llamacpp", base.get("llamacpp", False)))
     base["note"] = str(payload.get("note") or base.get("note") or "")
     base["models"] = _clean_models(payload.get("models", base.get("models")))
     base.setdefault("created_at", _now())
