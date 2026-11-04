@@ -270,6 +270,8 @@ def _oversight_entries(person: dict[str, Any]) -> list[dict[str, Any]]:
                 # 台账没有公文式原文，最后一笔办理经过就是可核的那句话
                 "quote": _last_event(events),
                 "unit": item["assignee"],
+                # 协办单位也算落在域内：协办的那家才是真在办这事的人
+                "units": [item["assignee"], *(item.get("co_assignees") or [])],
                 "ref": {"type": "oversight", "id": item["id"]},
                 "source": {
                     "department": item["assignee"],
@@ -300,6 +302,9 @@ def _meeting_entries(person: dict[str, Any]) -> list[dict[str, Any]]:
                 # 原文就是正文，不另给引句：前端会判重，与其让它判，不如这里就不给
                 "quote": "",
                 "unit": full.get("host") or "",
+                # 会议的主持人（常常是「常务副市长」这种职务）不对应任何部门，
+                # 只看 host 等于三域都读不到会。参会单位才是「这场会和谁有关」。
+                "units": [full.get("host") or "", *(full.get("attendees") or [])],
                 "ref": {"type": "meeting", "id": full["id"]},
                 "source": {
                     "department": full.get("host") or "—",
@@ -332,6 +337,7 @@ def _meeting_entries(person: dict[str, Any]) -> list[dict[str, Any]]:
                     + "。",
                     "quote": it.get("quote") or "",
                     "unit": it.get("assignee") or "",
+                    "units": [it.get("assignee") or ""],
                     "ref": {"type": "meeting", "id": full["id"]},
                     "source": {
                         "department": it.get("assignee") or "—",
@@ -345,11 +351,111 @@ def _meeting_entries(person: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def index(person: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def _unit_bare(name: str) -> str:
+    """去掉括号里的补充说明。
+
+    「市政务服务和数据管理局（12345 热线中心）」和台账里写的
+    「市政务服务和数据管理局」是同一个单位，但字面差着 11 个字。
+    不先归一，这两个写法永远对不上。
+    """
+    return re.sub(r"（[^）]*）|\([^)]*\)", "", name or "").strip()
+
+
+# 部门简称 → 标准名（都不带行政级别前缀）。
+#
+# 这张表是被数据逼出来的，不是设计出来的：台账 assignee 写「市发改委」
+# 「市市场监管局」，而 `md.METRICS` 的 department 写的是「市发展和改革委员会」
+# 「市市场监督管理局」。这些缩写靠字面推不出来（「发改委」和「发展和改革委员会」
+# 没有一个共同的前缀），只能显式列。
+#
+# 不归一的后果不是报错，而是参谋域里**一条事项都读不到**，界面显示
+# 「本域内无相关记录」—— 看起来像库里空着，实际是词没对上。
+_UNIT_ALIAS = {
+    "发改委": "发展和改革委员会",
+    "市场监管局": "市场监督管理局",
+    "城管局": "城市管理局",
+    "住建局": "住房和城乡建设局",
+    "大数据局": "数据局",
+}
+
+
+def _unit_key(name: str) -> str:
+    """单位的归一形式：去括号、去行政级别前缀、查别名表。
+
+    只用于**归属判断**，不用于展示 —— 界面上仍然显示台账里的原始写法。
+    """
+    s = _unit_bare(name)
+    for p in _LEVEL_PREFIX:
+        if s.startswith(p) and len(s) > len(p) + 1:
+            s = s[len(p) :]
+            break
+    return _UNIT_ALIAS.get(s, s)
+
+
+def _unit_related(unit: str, units: set[str]) -> bool:
+    """条目的责任单位是否落在某个参谋域的单位集合里。
+
+    判的是**前缀**，不是任意包含，这一点是被一次真实的串域逼出来的：
+    经济参谋的「市统计局」如果按包含判，「国家统计局本市调查队」里就含「统计局」，
+    于是民生参谋管的失业率事项会跑进经济参谋的材料里。前缀方向还能对上简称
+    （台账写「生态环境局」、域里写「市生态环境局」），包含方向不能。
+    """
+    if not unit or not units:
+        return False
+    mine = {v for v in (_unit_key(x) for x in unit_variants(unit)) if v}
+    for u in units:
+        theirs = {v for v in (_unit_key(x) for x in unit_variants(u)) if v}
+        for a in mine:
+            for b in theirs:
+                if a == b:
+                    return True
+                short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+                # 差 4 个字以内且短的是长的前缀：够「生态环境局 / 市生态环境局」
+                # 这种带行政级别前缀的简称，不够「统计局 / 国家统计局本市调查队」。
+                if long_.startswith(short) and len(long_) - len(short) <= 4:
+                    return True
+    return False
+
+
+def in_domain(entry: dict[str, Any], domain: dict[str, Any] | None) -> bool:
+    """一条记录是否落在某个参谋的域内。
+
+    指标条目按**代码**归属，不按部门：一个指标只能有一个参谋读，否则口径会被
+    两个域各引一半，又回到「同一场会两个说法」的老问题上。
+    事项/会议条目按**责任单位**归属，因为它们本来就不按指标分类。
+
+    域为空表示不限，但这只是给外部调用留的兜底 —— `EXPERTS` 里每位都必须写
+    domain，参谋团没有「全域参谋」这种角色。
+    """
+    if not domain:
+        return True
+    codes = set(domain.get("codes") or ())
+    units = set(domain.get("units") or ())
+    if not codes and not units:
+        return True
+    if entry.get("kind") == "metric":
+        return entry.get("id") in codes
+    # 事项和会议都可能挂多个单位：督办有协办，会议有参会方。只看主办单位的话，
+    # 「常务副市长主持、生态环境局参加」的会三个域都读不到 —— 而那恰恰是
+    # 参谋最该看的东西。所以用 units 列表，任意一个命中就算落在域内。
+    cands = list(entry.get("units") or [])
+    if not cands and entry.get("unit"):
+        cands = [entry["unit"]]
+    return any(_unit_related(u, units) for u in cands)
+
+
+def index(person: dict[str, Any] | None = None, domain: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """建立索引。调用方每次检索都会重建——数据量小（几十到几百条），
-    换来的是「台账刚改完就能搜到」，不用处理缓存失效。"""
+    换来的是「台账刚改完就能搜到」，不用处理缓存失效。
+
+    `domain` 是参谋的关心范围（见 `in_domain`）。**先按身份收窄、再按域收窄**，
+    顺序不能反：域是「他关心什么」，身份是「他能看什么」，能看的永远优先。
+    """
     person = person or {}
-    return _metric_entries() + _oversight_entries(person) + _meeting_entries(person)
+    rows = _metric_entries() + _oversight_entries(person) + _meeting_entries(person)
+    if domain:
+        rows = [r for r in rows if in_domain(r, domain)]
+    return rows
 
 
 # --------------------------------------------------------------------------
@@ -410,14 +516,18 @@ def score(query: str, entry: dict[str, Any]) -> float:
 _KIND_ORDER = {"oversight": 0, "decision": 1, "metric": 2, "meeting": 3}
 
 
-def search(query: str, person: dict[str, Any] | None = None, limit: int = 6) -> list[dict[str, Any]]:
-    """检索。返回按分数降序的条目，每条都带 source 与 quote。"""
+def search_in(entries: list[dict[str, Any]], query: str, limit: int = 6) -> list[dict[str, Any]]:
+    """在一份**已经建好的**索引里检索。
+
+    单独拆出来是为了参谋团：三位参谋各查一次，但索引只需要建一遍。
+    重建三次在几十条数据上感觉不出来，等台账上千条就是三倍的白等。
+    """
     q = str(query or "").strip()
     if not q:
         return []
     low = q.lower()
     hits = []
-    for entry in index(person):
+    for entry in entries:
         s = score(q, entry)
         if s >= MIN_SCORE:
             # 问句里点了名的单位要往上提。同分时靠 title 字符序决定谁在前是纯偶然，
@@ -428,6 +538,19 @@ def search(query: str, person: dict[str, Any] | None = None, limit: int = 6) -> 
     hits.sort(key=lambda e: (str(e.get("when") or ""), e["title"]), reverse=True)
     hits.sort(key=lambda e: (not e["unit_hit"], -e["score"], _KIND_ORDER.get(e["kind"], 9)))
     return hits[:limit]
+
+
+def search(
+    query: str,
+    person: dict[str, Any] | None = None,
+    limit: int = 6,
+    domain: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """检索。返回按分数降序的条目，每条都带 source 与 quote。
+
+    `domain` 传进来就只在那个参谋的域内找（见 `index`）。
+    """
+    return search_in(index(person, domain), query, limit)
 
 
 answer_kinds = {"metric": "指标口径", "oversight": "督办事项", "meeting": "会议记录", "decision": "会议议定"}

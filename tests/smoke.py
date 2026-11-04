@@ -406,6 +406,84 @@ def test_chat() -> None:
         str(stats),
     )
 
+    # token 估算必须按字符类型分档。同一个系数套中英文，必有一种错得离谱：
+    # 按汉字的价算英文会高估两倍多，表现是「本来能带上的轮次被当成超额裁掉」，
+    # 而界面只会显示「前 N 轮已裁掉」，看不出是算贵了。等长对比才有意义 ——
+    # 比同内容长度，英文本来就该更短。
+    zh = chat._est_tokens("规上工业增加值增速")     # 9 个汉字
+    en = chat._est_tokens("growthrat")             # 9 个拉丁字符
+    check("等长文本里英文估算不到中文一半", en * 2 < zh, f"zh={zh} en={en}")
+    check("空文本也至少算 1 token", chat._est_tokens("") == 1, "")
+
+    # framing 必须在场：chat template 给每条消息加的角色标记与分隔符，
+    # 不会因为内容短就消失。这里按和 context() 完全相同的口径重算一遍，
+    # 防止以后有人改动其中一侧而漏掉另一侧。
+    expect = 0
+    for m in thread["messages"]:
+        if m["role"] == "user":
+            text = (m.get("content") or "").strip()
+        elif m["role"] == "assistant":
+            text = (m.get("content") or "").strip() or chat._summary(m.get("meta"))
+        else:
+            continue
+        expect += chat._est_tokens(text) + chat._MESSAGE_FRAMING_TOKENS
+    check(
+        "上下文 token 统计含每条消息的 framing 开销",
+        stats.get("tokens") == expect,
+        f"{stats.get('tokens')} != {expect}",
+    )
+
+    # 预算按「模型窗口 × 比例」算，不再写死 600。钉住两件事：
+    # 窗口变大预算要跟着变；窗口没填必须落到兜底值而不是 0。
+    check("预算随窗口放大", chat.history_budget(65_536) > chat.history_budget(8_192), "")
+    check("窗口缺失时回落到兜底预算", chat.history_budget(None) >= 600, str(chat.history_budget(None)))
+
+    # 分段统计：只报「历史用了多少」看不出大头是固定的系统提示。
+    seg: dict = {}
+    chat.context(t["id"], out=seg, window=8_192, system_text="你是意图解析器")
+    check(
+        "分段统计带系统段、窗口与合计",
+        bool(seg.get("system"))
+        and seg.get("window") == 8_192
+        and seg.get("total") == seg["system"] + seg["tokens"],
+        str(seg),
+    )
+
+    # 内网兜底：窗口没填时按 8k 算。这个方向上的错是不对称的 —— 高估会把
+    # prompt 撑爆、请求直接被拒；低估只是少带几轮。所以只能宁小勿大。
+    check("窗口缺失时按 8k 兜底", chat.model_window(None) == 8_192, str(chat.model_window(None)))
+
+    # 材料和历史抢同一个窗口：材料占掉的额度必须从历史预算里扣，
+    # 否则就是「历史算着没超、合起来超了」。
+    check(
+        "材料占用从历史预算里扣",
+        chat.history_budget(8_192, reserved=1_000) == chat.history_budget(8_192) - 1_000,
+        str(chat.history_budget(8_192, reserved=1_000)),
+    )
+    check("无材料时不占额度", chat.clip_materials([], 8_192) == ([], 0), "")
+
+    # 3 万字材料约 1.9 万 token，在 8k 模型上一份就撑爆窗口。旧代码按字符截
+    # （合计 3 万字），跟模型是谁完全无关 —— 撑爆后会被当成普通模型故障退回
+    # 规则解析，用户只看到答案变糙。
+    huge = [{"name": "材料.txt", "text": "政务材料正文" * 2_000, "chars": 12_000, "truncated": False}]
+    clipped, cost = chat.clip_materials(huge, 8_192)
+    check(
+        "材料按窗口裁剪并标记截断",
+        cost <= int(8_192 * 0.25)
+        and clipped[0]["truncated"] is True
+        and len(clipped[0]["text"]) < len(huge[0]["text"]),
+        f"cost={cost} chars={len(clipped[0]['text']) if clipped else 0}",
+    )
+
+    seg2: dict = {}
+    chat.context(t["id"], out=seg2, window=8_192, system_text="意图解析器", reserved=700)
+    check(
+        "分段统计把材料计入合计",
+        seg2.get("reserved") == 700
+        and seg2.get("total") == seg2["system"] + seg2["tokens"] + 700,
+        str(seg2),
+    )
+
     # 预算压到极小：至少保最近一轮，并把裁掉的轮数如实报出来
     tight: dict = {}
     chat.context(t["id"], token_budget=1, out=tight)
@@ -417,14 +495,59 @@ def test_chat() -> None:
     # 不传 out 时不能炸（老调用方还在用两参数形式）
     check("不传出参时不报错", isinstance(chat.context(t["id"], token_budget=1), list), "")
 
-    # 安全边界：回灌给模型的历史不能带数值，否则模型下一轮更可能复述数字
+    # 回灌策略：原文，含数值（对齐 octop）。
+    # 这条断言以前是反过来的 ——「摘要不能带数字」。改成原文之后，它要守的是
+    # 「回灌的和用户看到的是同一句话」：一旦有人又换回模板摘要，指代解析就退回
+    # 到「我取值了」这种没有信息量的句子，而界面上看不出任何异常。
     assistant_ctx = ctx[1]["content"]
-    check("摘要不含百分比/小数", not re.search(r"\d+\.\d+|\d+\s*%", assistant_ctx), assistant_ctx)
-    check("摘要不含原始答案", "8.9" not in assistant_ctx, assistant_ctx)
+    check(
+        "历史回灌的是上一轮原文",
+        assistant_ctx == "2026年9月全市规模以上工业增加值增速为 8.9%",
+        assistant_ctx,
+    )
+    check("回灌原文保留数值", "8.9" in assistant_ctx, assistant_ctx)
+
+    # 兜底路径仍在：没有正文的消息才走模板摘要，且模板本身不带数值。
+    fallback = chat._summary({"intent": "value", "metric_names": ["规模以上工业增加值增速"]})
+    check(
+        "无正文时退回模板摘要且不含数值",
+        not re.search(r"\d+\.\d+|\d+\s*%", fallback) and "具体数值见界面" in fallback,
+        fallback,
+    )
 
     check("清理不匹配前缀返回 0", chat.clear_model_refs(prefix="nonexistent/") == 0, "")
     check("删除会话", chat.delete(t["id"]) is True, "")
     check("删除后取不到", chat.get(t["id"]) is None, "")
+
+    # known_metrics 现在是「本会话 + 本身份历史会话」双来源：跨会话档案要能
+    # 接住「昨天那个工业增速」。只传 thread_id 仍只回本会话（旧行为不变）；
+    # 传 owner 后能扫到别的会话，且 owner 不同互不串味。
+    ta = chat.create(owner="mayor")
+    chat.append(ta["id"], "assistant", "x", meta={"metric_names": ["规上工业增加值增速"]})
+    tb = chat.create(owner="mayor")
+    chat.append(tb["id"], "assistant", "x", meta={"metric_names": ["固定资产投资增速"]})
+    tc = chat.create(owner="deputy")
+    chat.append(tc["id"], "assistant", "x", meta={"metric_names": ["社会消费品零售总额增速"]})
+
+    check(
+        "本会话指标 + 身份历史会话指标合并去重",
+        chat.known_metrics(tb["id"], owner="mayor") == ["固定资产投资增速", "规上工业增加值增速"],
+        str(chat.known_metrics(tb["id"], owner="mayor")),
+    )
+    check(
+        "owner 过滤防串味（副市长看不到市长的指标）",
+        "社会消费品零售总额增速" not in chat.known_metrics(tb["id"], owner="mayor"),
+        str(chat.known_metrics(tb["id"], owner="mayor")),
+    )
+    check(
+        "只传 thread_id 仍只回本会话",
+        chat.known_metrics(ta["id"]) == ["规上工业增加值增速"],
+        str(chat.known_metrics(ta["id"])),
+    )
+
+    chat.delete(ta["id"])
+    chat.delete(tb["id"])
+    chat.delete(tc["id"])
 
 
 
@@ -534,6 +657,146 @@ def test_experts() -> None:
     check("模型回了数字则整段丢弃", dirty["ok"] is False and not dirty["text"], str(dirty)[:90])
     check("丢弃时写明原因", "数字" in (dirty["why"] or ""), str(dirty.get("why")))
 
+    # ---- 参谋的知识域：读得到自己那几块，读不到别人的 ----
+    #
+    # 这段的由来：参谋团原本根本不读知识库（experts.py 没有 import knowledge），
+    # 只在指标问数之后补一句「怎么看」。而知识库那条路径返回时 metric_names 和
+    # 方向信号都是空的 —— 参谋手上只剩一句问话，仍然硬说三句。
+    # 现在每位参谋按 domain 读自己域内的记录，这里卡的是「域有没有真的分开」。
+    import ask as ask_mod
+    import knowledge as kb_mod
+    import mockdata as md_mod
+    import people as people_mod
+
+    mayor = people_mod.meta("mayor")
+    for e in roster:
+        if e["id"] == "chief":
+            # 总参谋统筹不绑域：依据由分管参谋各自提供，给他绑一份大杂烩
+            # 反而违背「一个指标只归一位参谋」。对他是「必须没有」而不是「必须有」。
+            check("总参谋不绑域", not e.get("domain"), str(e.get("domain"))[:40])
+            continue
+        dom = e.get("domain") or {}
+        check(f"{e['id']} 有知识域", bool(dom.get("codes") or dom.get("units")), str(dom)[:60])
+        bad = [c for c in (dom.get("codes") or []) if c not in md_mod.METRICS]
+        check(f"{e['id']} 的指标代码都存在", not bad, str(bad))
+
+    # 一个指标只能属于一位参谋。两边都认的话，同一份口径被两个域各引一半，
+    # 又回到「同一场会两个说法」—— 那正是当初把专家挡在取数之外的原因。
+    seen: dict[str, str] = {}
+    dup = []
+    for e in roster:
+        for c in (e.get("domain") or {}).get("codes") or []:
+            if c in seen:
+                dup.append(f"{c}:{seen[c]}/{e['id']}")
+            seen[c] = e["id"]
+    check("指标不跨域重复归属", not dup, str(dup))
+
+    idx_all = kb_mod.index(mayor)
+    by_id = {e["id"]: e for e in roster}
+
+    # 不属于关注面的参谋不发言。实测三位一起叫上、问工业加空气质量时，
+    # 民生参谋会逐字复述经济与生态的观点 —— 同一段话印三遍，
+    # 而市长会以为真有三个人在会诊。方向信号是全组共享的，这是它能复述的原因，
+    # 也是它不该复述的原因。
+    check(
+        "越界指标不硬评（民生参谋 vs 工业+空气）",
+        ex._out_of_scope(by_id["livelihood"], ["GY_VA_GROWTH", "AQI_GOOD_DAYS"]),
+        "",
+    )
+    check(
+        "相关指标照常发言（生态参谋 vs 空气）",
+        not ex._out_of_scope(by_id["eco"], ["GY_VA_GROWTH", "AQI_GOOD_DAYS"]),
+        "",
+    )
+    check("没有指标代码时不判相关性", not ex._out_of_scope(by_id["eco"], []), "")
+
+    steps2: list[dict] = []
+    v_skip = ex.interpret(
+        {
+            "question": "工业加空气",
+            "metric_names": ["规模以上工业增加值增速", "空气质量优良天数比例"],
+            "metric_codes": ["GY_VA_GROWTH", "AQI_GOOD_DAYS"],
+            "facts": [],
+        },
+        ["livelihood"],
+        on_step=lambda name, data: steps2.append(data),
+    )[0]
+    check("越界参谋被标记跳过", v_skip.get("skipped") is True, str(v_skip)[:90])
+    check("跳过的参谋仍报 done", [s["phase"] for s in steps2] == ["start", "done"], str(steps2))
+    check("跳过时写明原因", "不是" in (v_skip.get("why") or ""), str(v_skip.get("why")))
+    eco_metrics = {
+        x["id"] for x in idx_all if x["kind"] == "metric" and kb_mod.in_domain(x, by_id["eco"]["domain"])
+    }
+    check("生态域只含空气质量指标", eco_metrics == {"AQI_GOOD_DAYS"}, str(eco_metrics))
+    liv_units = {x.get("unit") for x in idx_all if x["kind"] != "metric" and kb_mod.in_domain(x, by_id["livelihood"]["domain"])}
+    check("民生域读不到生态环境局的事项", "市生态环境局" not in liv_units, str(liv_units)[:80])
+
+    # 简称/全称的归一。台账写「市发改委」、指标字典写「市发展和改革委员会」，
+    # 不归一的话经济参谋的督办条目是 0 条，而界面只会显示「本域内无记录」。
+    check("简称能归到全称（发改委）", kb_mod._unit_related("市发改委", {"市发展和改革委员会"}), "")
+    check("简称能归到全称（市场监管局）", kb_mod._unit_related("市市场监管局", {"市市场监督管理局"}), "")
+    # 但「统计局」不能把「国家统计局本市调查队」带进来 —— 那样民生参谋管的
+    # 失业率事项会跑进经济参谋的材料里，而错位的归类比没有更糟
+    check("相近的单位不串域", not kb_mod._unit_related("国家统计局本市调查队", {"市统计局"}), "")
+    check(
+        "带括号的单位名仍能对上",
+        kb_mod._unit_related("市政务服务和数据管理局", {"市政务服务和数据管理局（12345 热线中心）"}),
+        "",
+    )
+
+    # 域内检索：问句和域无关时返回空，而不是拿别的域凑数
+    refs = ask_mod._expert_refs(
+        "规上工业增加值增速",
+        {"metric_names": ["规模以上工业增加值增速"]},
+        "mayor",
+        ["economy", "eco"],
+    )
+    check("域内检索：经济域有记录", bool(refs.get("economy")), str(refs.get("economy"))[:60])
+    check("域内检索：无关的域返回空", refs.get("eco") == [], str(refs.get("eco"))[:60])
+    check(
+        "域内检索不越界（生态域看不到工业指标）",
+        not [r for r in (refs.get("eco") or []) if r.get("kind") == "metric"],
+        str(refs.get("eco"))[:60],
+    )
+
+    # 白名单只放行**标题**里的数字：记录名是专有名词，正文里的数字才是要拦的东西
+    allow = ex._allowed_numeric_tokens(["规模以上工业增加值增速"], ["市政府第14次常务会议"])
+    check("记录标题里的数字不误判", ex._has_forbidden_number("第 14 次常务会要求加强巡查", allow) is False, "")
+    check("记录正文里的数字照样拦", ex._has_forbidden_number("巡查覆盖 96%", allow) is True, "")
+
+    # 端到端：记录要真的进 prompt，而不是只存在 refs 里当好听的话
+    # （专家输出已改纯文本 chat_text —— 推理模型的 content 不会再被 JSON 模式吃掉）
+    old_chat2 = ex.llmclient.chat_text
+    old_avail2 = ex.llmclient.available
+    seen_prompt: list[str] = []
+
+    def _capture(*a, **k):
+        seen_prompt.append(a[1] if len(a) > 1 else "")
+        return {"text": "结构偏弱，需要盯住后半程", "model": "stub"}
+
+    ex.llmclient.available = lambda: True
+    ex.llmclient.chat_text = _capture
+    try:
+        v = ex.interpret(
+            {"question": "规上工业增速怎么样", "metric_names": ["规模以上工业增加值增速"], "facts": []},
+            ["economy"],
+            refs_by_expert={"economy": refs["economy"]},
+        )[0]
+    finally:
+        ex.llmclient.chat_text = old_chat2
+        ex.llmclient.available = old_avail2
+    prompt_txt = seen_prompt[0] if seen_prompt else ""
+    check("记录进了 prompt", "可参考的记录" in prompt_txt and "指标口径" in prompt_txt, prompt_txt[:100])
+    check("无数字的解读正常产出", v["ok"] is True, str(v)[:80])
+    check("解读带依据条目", bool(v.get("refs")), str(v.get("refs"))[:80])
+    check("依据只留回放字段", all(set(r) == set(ex.REF_META_KEYS) for r in v["refs"]), str(v["refs"])[:80])
+    # 域内没记录时不能省掉这一段：省了模型会以为自己漏看了什么，反而更爱编
+    check(
+        "空域也明写没有记录",
+        "本域内没有相关记录" in ex._refs_block([]),
+        ex._refs_block([])[:60],
+    )
+
     # 没模型时必须给出原因，而不是抛异常或编一段
     old = ex.llmclient.available
     ex.llmclient.available = lambda: False
@@ -573,8 +836,18 @@ def test_experts() -> None:
                 "brief": "精通全市经济数值与局势",
                 "focus": "工业",
                 "ok": True,
+                "skipped": False,
                 "text": "增速偏高，结构偏弱",
                 "why": "",
+                "refs": [
+                    {
+                        "kind": "metric",
+                        "kind_label": "指标口径",
+                        "id": "GY_VA_GROWTH",
+                        "title": "规模以上工业增加值增速",
+                        "ref": {"type": "metric", "id": "GY_VA_GROWTH"},
+                    }
+                ],
                 "model": "deepseek-flash",
                 "model_ref": "deepseek/deepseek-chat",
             }
@@ -582,6 +855,7 @@ def test_experts() -> None:
     )
     check("落库保留全部回放字段", set(kept[0]) == set(ex.META_KEYS), str(kept[0]))
     check("落库丢掉模型细节", "model" not in kept[0] and "model_ref" not in kept[0], str(kept[0]))
+    check("依据随解读一起落库", len(kept[0].get("refs") or []) == 1, str(kept[0].get("refs"))[:80])
     check("无解读时裁成空列表", ex.to_meta(None) == [] and ex.to_meta([]) == [], "")
 
     # 端到端：落一轮回答后重读历史，专家解读还在（回看不该凭空少一段）
@@ -590,7 +864,8 @@ def test_experts() -> None:
     again = chat.get(th["id"]) or {}
     back = ((again.get("messages") or [{}])[0].get("meta") or {}).get("expert_views") or []
     check("重读历史仍带专家解读", len(back) == 1 and back[0].get("name") == "经济运行参谋", str(back)[:90])
-    # 且这份东西不能污染模型上下文（_summary 只取 指标名/意图/拒答）
+    # 且这份东西不能污染模型上下文：回灌的是 content，专家解读只在 meta 里。
+    # 一旦有人图省事把 meta 也拼进回灌文本，模型就会开始复述参谋的观点。
     ctx = chat.context(th["id"])
     check("专家解读不进模型上下文", all("增速偏高" not in m.get("content", "") for m in ctx), str(ctx)[:90])
     chat.delete(th["id"])
@@ -599,6 +874,13 @@ def test_experts() -> None:
     # （下拉菜单最后一项与该身份的标签必须同名，不然同一群人两个叫法）。
     # 这两条是产品口径，改坏了页面照样能跑，只能在这里卡住。
     html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    # 依据要看得见：参谋说「压力仍在」，用户第一反应是「你凭什么这么说」。
+    # 这三条卡的分别是「显示了」「能点回出处」「旧数据不假装检索过」。
+    check("专家卡片显示依据", 'class="ev-refs"' in html, "")
+    check("依据可跳回出处", 'data-kbref="${esc(key)}"' in html, "")
+    check("旧数据不伪造检索", "const hasRefs = Array.isArray(v.refs);" in html, "")
+    check("越界与故障分开显示", ".ev.skip{" in html and 'v.skipped ? "skip" : "off"' in html, "")
+    check("依据随导出走", "- 依据：${rf}" in html, "")
     check("默认态不留「不召唤」占位", '>不召唤</b>' not in html and '"不召唤"' not in html, "")
     check("空态不占位（:empty 隐藏）", ".es-name:empty" in html and ".es-state:empty" in html, "")
     check("全组叫 AI秘书团", 'return "AI秘书团"' in html and 'item("__all", "团", "AI秘书团"' in html, "")

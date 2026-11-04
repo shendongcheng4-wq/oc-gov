@@ -600,7 +600,8 @@ class Handler(BaseHTTPRequestHandler):
                         "experts": expert_mod.all_experts(),
                         "max": expert_mod.MAX_PER_CALL,
                         "model_ready": expert_mod.llmclient.available(),
-                        "rule": "专家只给解读，不报数字；解读里出现数字会被整段丢弃。",
+                        "rule": "专家只给解读，不报数字；解读里出现数字会被整段丢弃。"
+                        "参谋会检索本域内的记录作为依据，但记录里的数字同样不许复述。",
                     }
                 )
 
@@ -1373,9 +1374,34 @@ class Handler(BaseHTTPRequestHandler):
             chat.set_model_ref(thread["id"], pinned)
             thread = chat.get(thread["id"]) or thread
 
-        # 先取历史再落本条，否则当前问题会在 history 和 messages 里各出现一次
+        # 先取历史再落本条，否则当前问题会在 history 和 messages 里各出现一次。
+        # 预算按会话钉住那个模型的窗口算（chat.history_budget），系统段用量把本轮
+        # system 文本一起递进去 —— 界面要能显示「系统占 1100、历史占 850」，
+        # 只报一个总数看不出大头其实是固定的系统提示。
         ctx: dict = {}
-        history = chat.context(thread["id"], out=ctx)
+        conn = modelcfg.resolve(pinned)
+        window = (conn or {}).get("context_window")
+        system_text = llm.system_prompt_text()
+
+        # 材料要按窗口再裁一遍：_attachments 那层「合计 3 万字」是请求体安全线，
+        # 跟模型是谁无关。8k 的内网模型上，3 万字中文约 1.9 万 token，一份就能
+        # 把窗口撑爆，而失败会被当成普通模型故障最终退回规则解析 —— 用户只看到
+        # 答案突然变糙，不知道是自己传的文件太大。裁完的占用要从历史里扣，
+        # 两者抢的是同一个窗口。
+        atts, att_tokens = chat.clip_materials(atts, window)
+
+        def _read_history() -> list[dict[str, str]]:
+            # 出参是同一个 dict，重取前先清空，否则上一次的 dropped/tokens 会残留
+            ctx.clear()
+            return chat.context(
+                thread["id"],
+                out=ctx,
+                window=window,
+                system_text=system_text,
+                reserved=att_tokens,
+            )
+
+        history = _read_history()
 
         # 重试：可能停在两种状态上，都要认成"同一轮重来"而不是新的一问：
         #   1) 上一轮失败：只落了 user 消息，最后一条就是这次的问题；
@@ -1400,7 +1426,7 @@ class Handler(BaseHTTPRequestHandler):
                 # 「已停止」占位让位给这次真正的答案
                 chat.drop_last(thread["id"])
                 # 重取一次：上一条已经撤了，统计要跟着变，否则会多算一整轮
-                history = chat.context(thread["id"], out=ctx)
+                history = _read_history()
             if history and history[-1].get("role") == "user":
                 history = history[:-1]
         else:
@@ -1429,7 +1455,8 @@ class Handler(BaseHTTPRequestHandler):
         info = result.get("planner_info") or {}
         # 专家解读要跟着落库，否则回看历史时那段凭空消失 —— 现在专家是「对话中」
         # 的常驻角色，缺失比以前的临时勾选更刺眼。裁剪规则见 experts.to_meta：
-        # 只留回放字段，且这些字段绝不会进模型上下文（core/chat.py 的 _summary 只取三项）。
+        # 只留回放字段。模型上下文回灌的是 headline 原文（core/chat.py），
+        # 所以这些回放字段只要不混进 content，就不会进模型。
         views = expert_mod.to_meta(result.get("expert_views"))
         return chat.append(
             thread_id,
@@ -1486,6 +1513,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "error": str(exc)}, 400)
 
         # 「/插件名 参数」：显式调用插件，优先于问数/知识库/资料库链路。
+        # known_metrics 带 owner：跨会话记忆按身份取（昨天问过的指标今天接着问），
+        # 见 chat.known_metrics —— 只传 thread_id 时退回本会话。
         plugin_cmd = _plugin_command(question)
         if plugin_cmd is not None:
             plugin_id, arg = plugin_cmd
@@ -1498,7 +1527,9 @@ class Handler(BaseHTTPRequestHandler):
                     model_ref=thread.get("model_ref"),
                     expert_ids=_expert_ids(body),
                     person_id=self._person(body),
-                    known_metrics=chat.known_metrics(thread["id"]),
+                    known_metrics=chat.known_metrics(
+                        thread["id"], owner=self._person(body)
+                    ),
                     attachments=atts,
                 )
                 result = _harness_fallback(question, result) or result
@@ -1509,7 +1540,9 @@ class Handler(BaseHTTPRequestHandler):
                 model_ref=thread.get("model_ref"),
                 expert_ids=_expert_ids(body),
                 person_id=self._person(body),
-                known_metrics=chat.known_metrics(thread["id"]),
+                known_metrics=chat.known_metrics(
+                    thread["id"], owner=self._person(body)
+                ),
                 attachments=atts,
             )
             # 问数/知识库/资料库都没命中时，用 octop_harness 引擎（含插件工具）兜底。
@@ -1597,7 +1630,7 @@ class Handler(BaseHTTPRequestHandler):
                 on_step=step,
                 expert_ids=_expert_ids(body),
                 person_id=self._person(body),
-                known_metrics=chat.known_metrics(thread["id"]),
+                known_metrics=chat.known_metrics(thread["id"], owner=self._person(body)),
                 attachments=atts,
                 should_stop=lambda: cancel_requested(turn_id),
             )

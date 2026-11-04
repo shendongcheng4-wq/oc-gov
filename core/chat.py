@@ -7,17 +7,27 @@
 - **流式过程中不写库**，一轮结束后一次性 append（user + assistant 两条）。
   octop 也是这个策略：几百次小写入除了拖慢磁盘没别的好处。
 
-## 回灌给模型的历史里为什么没有数字
+## 回灌策略：完整原文（对齐 octop）
 
-`context()` 拼给模型的 assistant 摘要**只有指标名和意图，不含任何数值**。
-这是本项目的安全边界：模型一旦在上下文里看见「8.9%」，下一轮就更可能在自然语言
-里复述甚至改动这个数字。
+`context()` 把 user 和 assistant 的 `content` **原样**回灌，包括上一轮答案里的
+数值。这与 octop 一致：多轮对话里模型看到的是自己上一轮真正说过的话，而不是
+一句「我取值了，数值见界面」的模板复述 —— 后者信息密度低到几乎不产生指代价值。
 
-真正给人看的 headline 存在消息的 `content` 里，只在界面上渲染，永远不进模型。
+代价必须写在明处：**历史里从此有数字了**。防线因此上移到输出侧：
+
+- `experts` 的数字闸仍丢弃任何含数值的解读（`_has_forbidden_number`）；
+- planner 只允许输出 JSON 计划，没有正文出口，数值由 `mockdata` 返回后由程序
+  拼装，模型碰不到。
+
+也就是说：数字出现在**上下文**里是接受的，出现在**新生成的结论**里不行。
+
+老数据、拒答、中止这类没有正文的消息才退回 `_summary()` 的模板（不含数值）——
+它们本来就没有可回灌的原文。
 """
 
 from __future__ import annotations
 
+import re
 import secrets
 import time
 from typing import Any
@@ -28,18 +38,127 @@ FILE = "chats"
 VERSION = 1
 MAX_TITLE = 24
 
-# 多轮上下文预算。一轮问答（问题 + 不含数值的摘要）约 40-60 token，
-# 600 大概够 10 轮；真超了就先丢最老的那轮。这个数比"6 条消息"更接近真实约束：
-# 一条问题可以很长，按条数算等于让长问题挤掉整整一轮。
-_CONTEXT_TOKENS = 600
+# ── token 估算 ────────────────────────────────────────────────────────
+#
+# 以前是 `len × 0.6`，一个系数包打天下。对纯中文勉强够用（BPE 里汉字约
+# 1 字符 = 0.62 token），但用户粘一段英文材料、或问句里带几个指标 code 时，
+# 按汉字价算英文会高估两倍多 —— 本来能带上的轮次被白扔掉，而界面上只显示
+# 「前 N 轮已裁掉」，看不出是我们算贵了。
+#
+# 系数对齐 octop 的 context_usage.py（那边还多一档 JSON，这里用不上：
+# 进上下文的是问句和回答原文，没有 tool schema 那种密集结构）。
+_CJK = re.compile(
+    r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff66-\uff9f\uac00-\ud7af]"
+)
+_CJK_CHARS_PER_TOKEN = 1.6     # 汉字 / 假名 / 谚文：约 1 字符 0.62 token
+_LATIN_CHARS_PER_TOKEN = 4.0   # 拉丁字母与符号：约 4 字符 1 token
+
+# 每条消息还有角色标记与分隔符，chat template 都会加。20 条消息就是 80 token ——
+# 不记的话每一轮都在悄悄超支。
+_MESSAGE_FRAMING_TOKENS = 4
+
+# ── 上下文预算 ────────────────────────────────────────────────────────
+#
+# 以前写死 600。这个数是拍的，而且错得有点离谱：光 system prompt 加指标目录
+# 本身就有 1100 token（`llm.system_prompt_text()` 实测），历史预算比系统提示
+# 还小 —— 模型窗口九成以上空着，却在第 10 轮就开始丢上下文。
+#
+# 现在按「模型窗口 × 比例」算，与 octop 同构（那边也是窗口比例，只是把 85%
+# 用作压缩触发线）。窗口来自 modelcfg 的 `context_window`，没填就用兜底值。
+#
+# 兜底值取 8192 而不是 128k：政务内网基本是本地部署的小模型，8k / 16k / 32k
+# 常见，128k 罕见。而且这个方向上的错是不对称的 —— **高估会把 prompt 撑爆，
+# 请求直接被服务端拒掉；低估只是少带几轮历史**。所以兜底宁小勿大，窗口真的
+# 大就在模型配置里把 `context_window` 填上。
+_FALLBACK_WINDOW = 8_192
+
+# 历史最多占窗口的这个比例，剩下留给 system prompt、输出和估算误差。
+# octop 在 85% 处触发压缩回收；这里还没有压缩，取一半更稳 ——
+# 压缩落地后再把这条线抬到 0.85。
+_HISTORY_RATIO = 0.5
+
+# 兜底下限：再小的窗口也至少给这么多，否则一轮问答都放不下。
+_MIN_BUDGET = 600
+
+# 参考材料最多占窗口的这个比例。材料放在 user 消息里，和历史抢同一个窗口，
+# 所以它不是一个独立额度，算历史预算时要先扣掉（见 `history_budget`）。
+_MATERIAL_SHARE = 0.25
 
 # 会话搜索最多给几条。多到几十条时用户也不会往下翻，不如让他改词。
 _SEARCH_LIMIT = 40
 
 
 def _est_tokens(text: str) -> int:
-    """汉字粗估 0.6 token/字。不追求准，只追求"永远不低估长度"。"""
-    return max(1, int(len(str(text or "")) * 0.6))
+    """按字符类型分档粗估 token 数。
+
+    不追求准（真值只有 tokenizer 知道），追求「分类之后不系统性偏高或偏低」：
+    同一个系数套中英文，必然对其中一种错得离谱。
+    """
+    s = str(text or "")
+    if not s:
+        return 1
+    cjk = len(_CJK.findall(s))
+    other = len(s) - cjk
+    return max(1, int(cjk / _CJK_CHARS_PER_TOKEN + other / _LATIN_CHARS_PER_TOKEN))
+
+
+def model_window(window: int | None = None) -> int:
+    """把调用方递进来的窗口规格化：没填、为 0 或非法，一律用兜底值。
+
+    单独成函数是为了让「兜底是多少」只有一处定义 —— 附件裁剪和预算计算都要
+    知道这个数，两边各写一个 8192，改的时候必漏一处。
+    """
+    win = int(window) if isinstance(window, (int, float)) and window and window > 0 else 0
+    return win or _FALLBACK_WINDOW
+
+
+def history_budget(window: int | None = None, reserved: int = 0) -> int:
+    """把模型窗口换算成本轮可用的历史预算。
+
+    策略集中在这一处，调用方只负责把 modelcfg 里的 `context_window` 递进来 ——
+    否则每个调用点各写一个数字，又会退回「拍一个数」的老问题。
+
+    `reserved` 是本轮已经被别的东西占掉的额度（目前只有参考材料）。材料放在
+    user 消息里，和历史抢的是同一个窗口，不扣就会「历史算着没超、合起来超了」。
+    """
+    total = max(_MIN_BUDGET, int(model_window(window) * _HISTORY_RATIO))
+    return max(_MIN_BUDGET, total - max(0, int(reserved)))
+
+
+def clip_materials(
+    items: list[dict[str, Any]], window: int | None = None
+) -> tuple[list[dict[str, Any]], int]:
+    """按模型窗口裁剪本轮参考材料，返回 (裁剪后的材料, 估算 token)。
+
+    `app/main.py` 那层已经按「单份 1.2 万字、合计 3 万字」截过一遍，但那是
+    **请求体安全线**，跟模型是谁无关。真正的约束是窗口：3 万字中文约 1.9 万
+    token，在 8k 的内网小模型上，一份材料单独就能把窗口撑爆。
+
+    撑爆的后果还特别隐蔽：请求失败会被当成普通模型故障，走「重试 → 换模型 →
+    退回规则解析」，用户只看到答案忽然变粗糙，不知道是自己传的文件太大。
+    所以这里必须按窗口截，而不是按字符数截。
+    """
+    if not items:
+        return [], 0
+
+    cap = max(400, int(model_window(window) * _MATERIAL_SHARE))
+    kept: list[dict[str, Any]] = []
+    used = 0
+    for item in items:
+        text = str(item.get("text") or "")
+        cost = _est_tokens(text)
+        if used + cost > cap:
+            if kept:
+                break
+            # 单份就超额度：按比例截开头，而不是整份丢掉 —— 材料的前半段
+            # 通常才是正文，后半段多是附表。
+            keep = max(200, int(len(text) * cap / max(1, cost)))
+            text = text[:keep]
+            item = {**item, "text": text, "chars": len(text), "truncated": True}
+            cost = _est_tokens(text)
+        kept.append(item)
+        used += cost
+    return kept, used
 
 
 def _now() -> int:
@@ -318,9 +437,11 @@ def clear_model_refs(prefix: str) -> int:
 
 
 def _summary(meta: dict[str, Any] | None) -> str:
-    """把上一条回答压成一句不含数值的摘要。
+    """把一条没有正文的回答压成一句不含数值的摘要。
 
-    只保留「问了哪几个指标、什么意图」，数字一律剔除 —— 见模块开头的说明。
+    **这是兜底，不是主路径**。有 `content` 的消息一律回灌原文（见 `context`），
+    只有老数据、空 headline 这类拿不到正文的消息才走这里。它仍然不带数值，
+    因为唯一能保证「这些字没有数字」的办法是模板化 —— 而它现在只剩这一职责。
     """
     if not meta:
         return "（上一轮没有可用的摘要）"
@@ -355,33 +476,53 @@ def _summary(meta: dict[str, Any] | None) -> str:
 def context(
     thread_id: str | None,
     token_budget: int | None = None,
-    max_turns: int = 10,
+    max_turns: int = 200,
     out: dict[str, Any] | None = None,
+    *,
+    window: int | None = None,
+    system_text: str = "",
+    reserved: int = 0,
 ) -> list[dict[str, str]]:
-    """取最近若干轮对话，转成 OpenAI messages 格式，供意图解析参考指代。
+    """取历史对话，转成 OpenAI messages 格式，供意图解析参考指代。
 
-    按 **token 预算** 取，不按条数：原来写死 `[:-6]`（3 轮），第 4 轮开始
-    「那上个月呢」「跟去年比呢」这类指代就断，而问数天生是长会话。
-    现在从尾部按「一轮」（user + assistant 成对）往回收，超出预算就停。
+    **回灌的是原文**：assistant 的 `content` 一字不改地进上下文，包括里面的
+    数值。这是对齐 octop 的做法 —— 模型看到的是自己上一轮真正说过的话，
+    指代（「那上个月呢」「再拆开看」）才有可解析的落点。模板摘要那套已经
+    退成兜底，只用于没有正文的老数据。
 
-    预算按字符数粗估（中文约 0.6 token/字），宁可少带一轮，也不要让 prompt
-    超长被服务端拒掉 —— 少一轮最多少理解一个指代，超长是整个问题都答不了。
+    **预算按「模型窗口 × 比例」算**（`history_budget`），不按条数、也不再
+    写死 600。`window` 由调用方从 modelcfg 的 `context_window` 递进来；
+    不传就用兜底窗口。`max_turns` 默认放到 200 —— 真正起约束的是预算，
+    轮数上限只是防死循环的保险丝（octop 那边根本不设轮数）。
 
-    `out` 给定时回填本轮裁剪的统计（总轮数 / 用了多少 / 裁掉多少）。界面要
-    把这件事说出来：上下文被裁而用户不知道，表现上就是「它怎么把刚才说的忘了」，
-    而用户唯一能做的判断是「系统不靠谱」。用出参而不是改返回值，是为了不动
-    已有的调用方（同 degraded 的出参风格）。
+    `out` 给定时回填本轮的分段统计（总轮数 / 用了多少 / 裁掉多少 / 系统段 /
+    窗口）。界面要把这件事说出来：上下文被裁而用户不知道，表现上就是
+    「它怎么把刚才说的忘了」，而用户唯一能做的判断是「系统不靠谱」。
+    用出参而不是改返回值，是为了不动已有的调用方（同 degraded 的出参风格）。
     """
     def _report(**kw: Any) -> None:
         if out is not None:
             out.update(kw)
 
+    win = model_window(window)
+    # 系统段由调用方把本轮 system 文本传进来，这里用同一套分档估算 ——
+    # 让调用方自己数 token，就等于把估算规则复制一份出去，迟早两边不一致。
+    sys_used = _est_tokens(system_text) if system_text else 0
+    # 材料占掉的额度不算在历史里，但确实占窗口，所以从预算里扣
+    reserved = max(0, int(reserved or 0))
+    # 空会话也要给全字段：界面按同一套键渲染，缺一个就是空白或 KeyError
+    empty = dict(
+        turns_total=0, turns_used=0, dropped=0, tokens=0,
+        budget=history_budget(win, reserved), window=win, system=sys_used,
+        reserved=reserved, total=sys_used + reserved,
+    )
+
     if not thread_id:
-        _report(turns_total=0, turns_used=0, dropped=0, tokens=0, budget=0)
+        _report(**empty)
         return []
     thread = get(thread_id)
     if not thread:
-        _report(turns_total=0, turns_used=0, dropped=0, tokens=0, budget=0)
+        _report(**empty)
         return []
 
     entries: list[tuple[str, str]] = []
@@ -390,7 +531,10 @@ def context(
         if role == "user":
             entries.append(("user", (msg.get("content") or "").strip()))
         elif role == "assistant":
-            entries.append(("assistant", _summary(msg.get("meta"))))
+            # 原文回灌，数值照带。只有拿不到正文的消息（老数据、空 headline）
+            # 才退回模板摘要 —— 那种消息本来就没有可回灌的内容。
+            text = (msg.get("content") or "").strip()
+            entries.append(("assistant", text or _summary(msg.get("meta"))))
 
     # 成对：assistant 紧跟 user 才算一轮；落单的（比如上一轮被停止）自己算一轮
     turns: list[list[tuple[str, str]]] = []
@@ -404,13 +548,15 @@ def context(
             i -= 1
     turns.reverse()
 
-    budget = _CONTEXT_TOKENS if token_budget is None else int(token_budget)
+    budget = history_budget(win, reserved) if token_budget is None else int(token_budget)
     picked: list[list[tuple[str, str]]] = []
     used = 0
     for turn in reversed(turns):
         if len(picked) >= max_turns:
             break
-        cost = sum(_est_tokens(text) for _, text in turn)
+        # framing 也要算：chat template 给每条消息加的那点开销不会因为
+        # 内容短就消失，一轮两条就是 8 token。
+        cost = sum(_est_tokens(text) + _MESSAGE_FRAMING_TOKENS for _, text in turn)
         # 至少带最近一轮：一句“那上个月呢”没有上一轮就完全没法解析
         if picked and used + cost > budget:
             break
@@ -424,6 +570,10 @@ def context(
         dropped=len(turns) - len(picked),
         tokens=used,
         budget=budget,
+        window=win,
+        system=sys_used,
+        reserved=reserved,
+        total=sys_used + reserved + used,
     )
 
     return [
@@ -433,26 +583,56 @@ def context(
     ]
 
 
-def known_metrics(thread_id: str | None, limit: int = 12) -> list[str]:
-    """本会话至今涉及过的指标名（按时间先后，去重）。
+def known_metrics(
+    thread_id: str | None = None,
+    owner: str | None = None,
+    limit: int = 12,
+) -> list[str]:
+    """涉及过的指标名（按时间先后，去重），给 planner 的「常驻记忆」。
 
-    给 planner 的「常驻记忆」：历史窗口会被预算截断，但「这个指标」指谁
-    这件事不该跟着一起被截掉。只取名字，不取数值 —— 与 context 的安全边界一致。
+    历史窗口会被预算截断，但「这个指标」指谁这件事不该跟着一起被截掉。
+    只取名字，不取数值 —— 与 context 的安全边界一致。
+
+    两个来源，按优先级合并：
+    1. 本会话（`thread_id` 给定时）：正在聊的上下文，最先带上；
+    2. 本身份的历史会话（`owner` 给定时）：跨会话档案，解决「昨天那个工业
+       增速」这种隔天指代。按 `updated_at` 从新到旧扫，新会话的指标排前面。
+
+    `owner` 过滤天然防串味：别人的会话不会进别人的记忆。只传 thread_id 时
+    行为与旧版完全一致（只回本会话），旧调用方不受影响。
     """
-    if not thread_id:
-        return []
-    thread = get(thread_id)
-    if not thread:
-        return []
+    def _names_of(t: dict[str, Any] | None) -> list[str]:
+        out: list[str] = []
+        if not t:
+            return out
+        for msg in reversed(t.get("messages") or []):
+            meta = msg.get("meta") or {}
+            for name in reversed(meta.get("metric_names") or []):
+                name = str(name or "").strip()
+                if name and name not in out:
+                    out.append(name)
+        out.reverse()
+        return out
 
     names: list[str] = []
-    for msg in reversed(thread.get("messages") or []):
-        meta = msg.get("meta") or {}
-        for name in reversed(meta.get("metric_names") or []):
-            name = str(name or "").strip()
-            if name and name not in names:
-                names.append(name)
-    names.reverse()
+
+    if thread_id:
+        names = _names_of(get(thread_id))
+
+    if owner:
+        owner_key = str(owner).strip()
+        threads = sorted(
+            (t for t in _cfg()["threads"] if (t.get("owner") or "") == owner_key),
+            key=lambda t: t.get("updated_at") or 0,
+            reverse=True,
+        )
+        for t in threads:
+            if t.get("id") == thread_id:
+                continue  # 本会话已经收过了，不重复扫
+            for name in _names_of(t):
+                if name not in names:
+                    names.append(name)
+
     return names[-limit:] if limit else names
 
 

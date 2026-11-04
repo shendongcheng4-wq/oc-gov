@@ -412,6 +412,43 @@ def _codes_from_result(result: dict[str, Any]) -> list[str]:
     return codes
 
 
+def _expert_refs(
+    question: str,
+    result: dict[str, Any],
+    person_id: str | None,
+    expert_ids: list[str] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """每位参谋能读到的那几条知识库记录：`{专家 id: [条目]}`。
+
+    **索引只建一次。** 三位参谋各查一次，但台账是同一份，建三遍纯属白等——
+    现在几十条感觉不出来，等台账上千条就是三倍。所以先按身份建全域索引，
+    再逐域过滤。顺序不能反：身份是「他能看什么」，域是「他关心什么」，
+    能看的永远优先。
+
+    检索句用「问句 + 指标名」而不是只用问句：问「经济形势怎么样」这种泛问句，
+    光靠问句在口径条目上一个二字组都命中不了；加上指标名，至少能稳定命中
+    《XX 口径》那一条，参谋才不至于两手空空。
+
+    检索不到就返回空列表，由 `experts._refs_block` 如实写「本域内无记录」。
+    这里不兜底去全域找 —— 让经济参谋拿河道巡查的记录来发挥，比让它闭嘴糟得多。
+    """
+    ids = [str(x) for x in (expert_ids or [])][: experts_mod.MAX_PER_CALL]
+    if not ids:
+        return {}
+    person = people_mod.meta(person_id)
+    terms = " ".join([str(question or "")] + [str(n) for n in (result.get("metric_names") or [])])
+    entries = knowledge_mod.index(person)
+    out: dict[str, list[dict[str, Any]]] = {}
+    for eid in ids:
+        expert = experts_mod.find(eid)
+        if expert is None:
+            continue
+        domain = expert.get("domain")
+        scoped = [e for e in entries if knowledge_mod.in_domain(e, domain)]
+        out[eid] = knowledge_mod.search_in(scoped, terms, experts_mod.REF_LIMIT)
+    return out
+
+
 class TurnCancelled(Exception):
     """用户在客户端点了「停止」。
 
@@ -470,7 +507,9 @@ def ask(
             for i, item in enumerate(result.get("trace") or [], 1):
                 item["step"] = i
 
-            # 给会话层用的结构化摘要：只有指标名，不含数值（见 core/chat.py 的说明）
+            # 给会话层用的结构化标签：只有指标名，不含数值。
+            # 注意这不是回灌内容 —— 回灌的是 headline 原文（见 core/chat.py），
+            # 这两个字段只是给 known_metrics 和界面用的索引。
             codes = _codes_from_result(result)
             result["metric_codes"] = codes
             result["metric_names"] = [md.METRICS[c]["name"] for c in codes]
@@ -487,7 +526,11 @@ def ask(
             check()
             if expert_ids:
                 result["expert_views"] = experts_mod.interpret(
-                    result, expert_ids, model_ref, on_step=step
+                    result,
+                    expert_ids,
+                    model_ref,
+                    on_step=step,
+                    refs_by_expert=_expert_refs(question, result, person_id, expert_ids),
                 )
         except TurnCancelled as exc:
             exc.usage = llmclient.summarize(usage_sink)

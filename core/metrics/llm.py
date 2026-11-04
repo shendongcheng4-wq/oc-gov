@@ -7,9 +7,10 @@
 连接参数由 `core/modelcfg.py` 解析（多 provider × 多模型、`provider/model` 标识、
 三层回退）。本模块只负责「把计划问出来」，不关心凭据存在哪。
 
-多轮：`plan(..., history=[...])` 会把最近的对话摘要作为前缀消息带上，让模型理解
-"那上个月呢""换成区县看"这类指代。历史里的 assistant 摘要是**不含数值**的
-（见 core/chat.py 的说明），所以模型不会因为看过数字而倾向复述数字。
+多轮：`plan(..., history=[...])` 会把历史原文作为前缀消息带上，让模型理解
+"那上个月呢""换成区县看"这类指代。历史里的 assistant 内容是**上一轮的原文，
+含数值**（见 core/chat.py 的说明）。这不影响数值可信度：模型仍然只有 JSON
+计划这一个出口，取不到也不会生成数值 —— 数字的来源始终是 mockdata。
 
 模型不可用时 `available()` 返回 False，ask.py 自动退回规则解析。
 """
@@ -17,6 +18,7 @@
 from __future__ import annotations
 
 import re
+import time
 
 import llmclient
 import mockdata as md
@@ -230,6 +232,21 @@ def _verify_material_refs(
     return out
 
 
+def system_prompt_text(today_iso: str | None = None) -> str:
+    """本轮 system 消息的静态部分（含指标目录，不含 known_metrics 与材料）。
+
+    上下文的分段统计要用它：`chat.context(system_tokens=...)` 需要一个
+    「系统段占了多少」的数字。没有这个数，界面只能报「历史用了 850 token」，
+    看不出总占用里的大头其实是固定的系统提示 —— 而那部分多少轮都不变。
+    """
+    stamp = today_iso or time.strftime("%Y-%m-%d")
+    return (
+        SYSTEM_PROMPT
+        + _catalog_prompt()
+        + f"\n\n今天是 {stamp}。最新可得期为 {md.latest_available()}。"
+    )
+
+
 def plan(
     question: str,
     today_iso: str,
@@ -246,20 +263,17 @@ def plan(
 
     # 历史条数由 core/chat.context 按 token 预算裁好，这里不再二次截断 ——
     # 原来写死 [-8:] 等于把上层的预算算完又砍回 4 轮，改预算也不会有效果。
-    # known_metrics 是跨轮「已经问过哪些指标」的落水石：历史窗口再短，
-    # 这句「那去年呢」也知道「那」指的是什么。
+    # known_metrics 是「已经问过哪些指标」的落水石：历史被裁短、甚至换了
+    # 一个新会话时，这句「那去年呢」仍然知道「那」指的是什么。
     memory = ""
     if known_metrics:
         memory = (
-            "\n\n本会话此前已经涉及这些已注册指标（用户说「这个 / 它 / 再拆开看」时可沿用）：\n"
+            "\n\n此前已经涉及这些已注册指标（用户说「这个 / 它 / 昨天那个 / 再拆开看」时可沿用）：\n"
             + "\n".join(f"- {name}" for name in known_metrics[:12])
         )
 
     out = llmclient.chat_json(
-        SYSTEM_PROMPT
-        + _catalog_prompt()
-        + memory
-        + f"\n\n今天是 {today_iso}。最新可得期为 {md.latest_available()}。",
+        system_prompt_text(today_iso) + memory,
         _materials_prompt(attachments or []) + ("\n\n用户的问题：\n" if attachments else "") + question,
         history=history or [],
         model_ref=model_ref,

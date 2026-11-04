@@ -657,8 +657,15 @@ html.ask-fold .ask-rail{display:flex}
 .ev-head b{font-size:11.5px;color:var(--ink)}
 .ev-head span{font-size:10px;color:var(--faint)}
 .ev p{margin:0;font-size:12px;line-height:1.72;color:var(--ink-2)}
+.ev-refs{margin-top:4px;font-size:10.5px;line-height:1.65;color:var(--faint)}
+.ev-ref.link{color:var(--brand);cursor:pointer}
+.ev-ref.link:hover{text-decoration:underline}
 .ev.off{background:var(--surface-2);border-style:dashed}
 .ev.off p{color:var(--faint);font-size:11px}
+/* 「这事不归他管」和「模型没给出来」是两回事：前者是正常结果，后者是故障。
+   都用虚线灰框的话，一次正常的分工会被当成系统坏了。 */
+.ev.skip{background:var(--surface-2);border-style:solid}
+.ev.skip p{color:var(--muted);font-size:11.5px}
 .ev.off .ev-head i{background:var(--chip-bg)}
 
 /* ---------- 建会草稿卡 ----------
@@ -1105,6 +1112,8 @@ html.embedded .drawer{top:0;height:100%}
 }
 .mchip:hover{border-color:var(--brand)}
 .mchip.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand);font-weight:600}
+.mwin{font-size:9.5px;margin-left:6px;padding:0 5px;border-radius:9px;background:var(--brand-soft);color:var(--brand);font-weight:600}
+.mwin.dim{background:transparent;color:var(--muted);font-weight:400}
 .prow-acts{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
 .form-grid label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted)}
@@ -3028,11 +3037,28 @@ function aiBubble(r, ref) {
   const degBlock = degradedNote(r.degraded);
 
   // 专家解读：失败的项也显示（写清为什么没给），免得"召唤了却没反应"
-  const evs = (r.expert_views || []).map((v) => `
-    <div class="ev ${v.ok ? "" : "off"}">
+  // 依据那行有三个状态，不能合并：
+  //   refs 是数组且非空 → 读了这几条（可点回台账/会议）
+  //   refs 是空数组     → 查了，本域内确实没有；此时参谋只凭方向信号说话
+  //   refs 不存在       → 改版前落库的老消息，那时候根本没接知识库，什么都不显示
+  // 把后两者混成一句「暂无记录」，等于给旧数据编了一个它没做过的检索。
+  const evs = (r.expert_views || []).map((v) => {
+    const hasRefs = Array.isArray(v.refs);
+    const refItems = (v.refs || []).map((x) => {
+      const jump = x.ref && (x.ref.type === "oversight" || x.ref.type === "meeting");
+      const key = jump ? `${x.ref.type}:${x.ref.id}` : "";
+      return `<span class="ev-ref${jump ? " link" : ""}"${jump ? ` data-kbref="${esc(key)}"` : ""}>${esc(x.kind_label || "记录")}「${esc(x.title || "")}」</span>`;
+    }).join("");
+    const refLine = !hasRefs
+      ? ""
+      : `<div class="ev-refs">依据：${refItems || "本域内暂无记录，只按方向信号判断"}</div>`;
+    return `
+    <div class="ev ${v.ok ? "" : v.skipped ? "skip" : "off"}">
       <div class="ev-head"><i>${esc(v.avatar)}</i><b>${esc(v.name)}</b><span>${esc(v.focus)}</span></div>
       <p>${esc(v.ok ? v.text : v.why || "未给出解读")}</p>
-    </div>`).join("");
+      ${refLine}
+    </div>`;
+  }).join("");
   const evBlock = evs ? `<div class="ev-wrap">${evs}</div>` : "";
 
   const traceItems = (r.trace || []).map((t) => `
@@ -3054,15 +3080,20 @@ function aiBubble(r, ref) {
       : `<span>服务端未回传用量</span>`;
   // 上下文透明度：这一轮到底带进去几轮、裁掉了几轮。
   // 以前这件事完全不可见 —— 用户问到第十几轮，模型突然接不上「那上个月呢」，
-  // 唯一的解释是「这系统不太行」。而真实原因是 600 token 的预算只够带最近 10 轮。
-  // 说出来，用户就能自己决定把主体讲清楚，而不是反复重问。
+  // 唯一的解释是「这系统不太行」。现在预算按模型窗口算（core/chat.py 的
+  // history_budget），超出窗口比例才裁；裁了就必须说出来，用户才能决定把主体讲清楚。
   const c = r.context || {};
   const ctxWarn = Number(c.dropped) > 0;
+  // 分段用量：系统提示是固定成本，不分开写就会变成「历史占了 1700」，
+  // 而真正的大头常常是那 1100 的指标目录 —— 用户看不出多问几轮几乎不额外花钱。
+  const seg = c.window
+    ? `系统 ${c.system || 0} + 历史 ${c.tokens || 0}${c.reserved ? ` + 材料 ${c.reserved}` : ""} = ${c.total || 0}，窗口 ${c.window}（${Math.round(((c.total || 0) / c.window) * 100)}%）`
+    : `约 ${c.tokens || 0}/${c.budget || 0} token`;
   const ctxTip = !c.turns_total
     ? ""
     : ctxWarn
-      ? `本轮带入了最近 ${c.turns_used} 轮，更早的 ${c.dropped} 轮已不在上下文里（约 ${c.tokens}/${c.budget} token）。说「它 / 那个数」可能指错，需要把主体讲清楚。`
-      : `本轮带入了全部 ${c.turns_total} 轮对话（约 ${c.tokens}/${c.budget} token）`;
+      ? `本轮带入了最近 ${c.turns_used} 轮，更早的 ${c.dropped} 轮已不在上下文里。${seg}。说「它 / 那个数」可能指错，需要把主体讲清楚。`
+      : `本轮带入了全部 ${c.turns_total} 轮对话。${seg}`;
   const ctxSpan = c.turns_total
     ? `<span class="ai-ctx${ctxWarn ? " warn" : ""}" title="${esc(ctxTip)}">上下文 ${c.turns_used}/${c.turns_total} 轮${ctxWarn ? ` · 前 ${c.dropped} 轮已裁掉` : ""}</span>`
     : "";
@@ -3961,7 +3992,13 @@ function answerMd(r, question, stamp) {
   const evs = r.expert_views || [];
   if (evs.length) {
     L.push("**专家解读**", "");
-    evs.forEach((v) => L.push(`- **${v.name || ""}**（${v.focus || ""}）：${v.ok ? v.text : (v.why || "未给出解读")}`));
+    evs.forEach((v) => {
+      L.push(`- **${v.name || ""}**（${v.focus || ""}）：${v.ok ? v.text : (v.why || "未给出解读")}`);
+      // 依据要跟着导出走：材料一旦离开这个页面，"他凭什么这么说"就再也查不到了，
+      // 而这份 Markdown 是要拿去写汇报的，比屏幕上的一次性阅读更需要出处。
+      const rf = (v.refs || []).map((x) => `${x.kind_label || "记录"}「${x.title || ""}」`).join("、");
+      if (rf) L.push(`  - 依据：${rf}`);
+    });
     L.push("");
   }
 
@@ -4991,7 +5028,10 @@ function renderModelPanel() {
       const ref = `${p.name}/${m.id}`;
       const on = ref === active ? "on" : "";
       const off = m.enabled && m.chat ? "" : "（不参与对话）";
-      return `<button class="mchip ${on}" data-pick="${esc(ref)}">${esc(m.id)}${off ? `<span style="opacity:.6">${off}</span>` : ""}</button>`;
+      const win = m.context_window
+        ? `<span class="mwin" title="上下文窗口 ${m.context_window} token">${m.context_window % 1000 === 0 ? (m.context_window / 1000) + "k" : m.context_window}</span>`
+        : `<span class="mwin dim" title="未设窗口，按 8k 兜底">窗口?</span>`;
+      return `<button class="mchip ${on}" data-pick="${esc(ref)}">${esc(m.id)}${off ? `<span style="opacity:.6">${off}</span>` : ""}${win}</button>`;
     }).join("");
 
     return `<div class="prov ${p.enabled ? "" : "off"}">
@@ -5021,6 +5061,7 @@ function renderModelPanel() {
         <label>Base URL<input id="f_url" placeholder="https://api.deepseek.com/v1"></label>
         <label class="full">API Key（只存本机，不会提交到任何第三方）<input id="f_key" type="password" placeholder="sk-..."></label>
         <label class="full">模型 ID（逗号分隔）<input id="f_models" placeholder="deepseek-chat, deepseek-flash"></label>
+        <label class="full">上下文窗口（token，可选）<input id="f_window" placeholder="如 8192 / 32768，留空按 8k 兜底"></label>
       </div>
       <div class="prow-acts">
         <button class="mini" id="f_save">保存</button>
@@ -5116,10 +5157,17 @@ function bindModelPanel() {
       const base = (box.querySelector("#f_url").value || "").trim();
       const key = (box.querySelector("#f_key").value || "").trim();
       const models = (box.querySelector("#f_models").value || "").split(",").map((s) => s.trim()).filter(Boolean);
+      const winRaw = (box.querySelector("#f_window").value || "").trim();
+      let win = null;
+      if (winRaw) {
+        const k = /^(\d+)\s*[kK千]?$/.exec(winRaw);
+        if (!k) return toast("窗口要填纯数字（如 32768），或带 k 的简写（如 32k）");
+        win = parseInt(k[1], 10) * (winRaw.toLowerCase().includes("k") || winRaw.includes("千") ? 1000 : 1);
+      }
       if (!name || !base || !key || !models.length) return toast("名称、Base URL、Key、至少一个模型都要填");
       const d = await (await fetch("/api/models", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, base_url: base, api_key: key, models: models.map((id) => ({ id })) }),
+        body: JSON.stringify({ name, base_url: base, api_key: key, models: models.map((id) => ({ id, context_window: win })) }),
       })).json();
       if (!d.ok) return toast(d.error || "保存失败");
       await loadModels();
