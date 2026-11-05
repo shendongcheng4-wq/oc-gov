@@ -6630,7 +6630,9 @@ function dcCounts() {
 }
 
 function dcTools() {
-  const d = DC.doc;
+  // 栏位决定看到哪一份材料：红头栏位下汇报的「N 节 · 期次」不属于当前纸面
+  const onGov = DC.tab === "bulletin";
+  const d = onGov ? null : DC.doc;
   const badge = !d
     ? DC.gov
       ? `<span class="mbadge ok">红头公文 · 已按公文格式排版</span>`
@@ -6650,11 +6652,13 @@ function dcTools() {
     <button class="mini" id="dcCopy" ${(d || DC.gov) ? "" : "disabled"}>复制 Markdown</button>
     <button class="mini" id="dcDown" ${(d || DC.gov) ? "" : "disabled"}>下载 .md</button>
     <button class="mini" id="dcPrint" ${(d || DC.gov) ? "" : "disabled"}>打印</button>
-    ${DC.busy ? `<span class="dt-state">生成中…</span>` : ""}
+    ${DC.busy && !onGov ? `<span class="dt-state">生成中…</span>` : ""}
   `;
 }
 
 function dcActiveMarkdown() {
+  // 复制/下载跟着当前栏位走：红头栏位下不能把汇报的 Markdown 复制出去
+  if (DC.tab === "bulletin") return DC.gov ? DC.gov.md : "";
   if (DC.doc && DC.doc.markdown) return DC.doc.markdown;
   if (DC.gov) return DC.gov.md;
   return "";
@@ -6727,6 +6731,14 @@ function dcBlock(b) {
 
 function dcRenderPaper() {
   const p = $("#dcPaper"), d = DC.doc;
+  // 红头栏位只画红头。切到督办通报后，汇报/落实那边迟到的结果不能再往纸上画 ——
+  // 否则用户填着四要素，纸面自己跳回「溧阳市工作汇报」。
+  if (DC.tab === "bulletin") {
+    if (DC.gov) return dcRenderBulletinPaper();
+    p.className = "doc-paper blank";
+    p.textContent = "填好左侧四项要素，点「套用红头 · 生成公文」。";
+    return;
+  }
   if (!d) {
     p.className = "doc-paper blank";
     p.textContent = DC.gov ? "" : "左侧挑一个写作助手：工作汇报选期次、会议落实选会议、督办通报填要素套红头。";
@@ -6827,6 +6839,11 @@ async function openDocModal() {
   }
   dcRenderSide();
   dcTools();
+  if (DC.tab === "bulletin") {
+    // 停在红头栏位时不该在背后跑一次汇报生成（结果也没地方显示）
+    dcRenderPaper();
+    return;
+  }
   if (DC.doc) dcRenderPaper();
   else {
     dcRenderPaper(); // 先铺空纸，别让弹窗中间留一块纯白什么都不说
@@ -6868,7 +6885,7 @@ function dcFallbackCopy(text, done) {
 }
 
 function dcDownload() {
-  const d = DC.doc;
+  const d = DC.tab === "bulletin" ? null : DC.doc; // 文件名跟着当前栏位走
   const md = dcActiveMarkdown();
   if (!md) return;
   const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
@@ -6893,11 +6910,14 @@ $("#dcSide").onclick = (e) => {
     DC.tab = id;
     if (id === "report") { DC.cfg.kind = "report"; dcRenderSide(); return dcGenerate(); }
     if (id === "minutes") { DC.cfg.kind = "minutes"; dcRenderSide(); return dcGenerate(); }
-    // bulletin：不请求服务器，纸面停在红头公文或待填提示
+    // bulletin：不请求服务器，纸面停在红头公文或待填提示。
+    // 先作废在飞的汇报/落实请求 —— 否则几秒后它落地时会把纸面抢回「工作汇报」，
+    // 用户看到的就是「刚点督办通报，界面自己跳走了」。
+    DC.seq += 1;
+    DC.busy = false;
     dcRenderSide();
-    if (DC.gov) return dcRenderBulletinPaper();
-    $("#dcPaper").className = "doc-paper blank";
-    $("#dcPaper").textContent = "填好左侧四项要素，点「套用红头 · 生成公文」。";
+    dcRenderPaper();
+    dcTools();
     return;
   }
   if (e.target.id === "dcGo") return dcGenerate();
