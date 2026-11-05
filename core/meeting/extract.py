@@ -219,11 +219,14 @@ def verify_item(
                         break
 
     # —— 闸 2：数字 ——
+    # 按「独立数字 token」匹配，而不是子串匹配：否则标题里的「3」会被误判成
+    # 出现在原文的「23 日」里（"3" in "23" 为 True），数字闸门就漏报了。
+    src_digits = set(_DIGITS.findall(src))
     for field, value in (("title", title), ("standard", standard)):
         if field in manual:
             confirmed.append(field)
             continue
-        missing = sorted({d for d in _DIGITS.findall(value) if d not in src})
+        missing = sorted({d for d in _DIGITS.findall(value) if d not in src_digits})
         if missing:
             issues.append(
                 {
