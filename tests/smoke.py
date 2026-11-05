@@ -1194,6 +1194,59 @@ def test_knowledge() -> None:
     check("只对上一个通用词不算命中", kb.answer("火星基地建设情况", mayor)["refused"], "")
     check("无关问题不硬凑", kb.answer("今天晚上吃什么", mayor)["refused"], "")
 
+    # 向量分卡在阈值下沿时的消歧规则。这里是整段唯一不依赖模型文件的地方：
+    # 直接把 `_vector_scores` 换成假的，所以装没装 fastembed、模型有没有下载，
+    # 断言结果都一样。
+    #
+    # 背景（都是实测值）：「上次开会定了什么」对正确的常务会议记录余弦 0.540，
+    # 对无关的「平台数据接入」0.528，差 0.012 —— 单一阈值必然误伤一边。所以
+    # 灰度区（0.50~0.55）改成要求字面佐证：前者问句二字组覆盖 0.50，后者只落在
+    # 「数据」这个通用词上覆盖 0.25。
+    gray_entries = [
+        {
+            "id": "gray-yes",
+            "title": "市政府第14次常务会议",
+            "text": "会议议定：由市住建局牵头完成管线迁改和路面恢复，验收标准为管线全部入地。",
+            "kind": "meeting",
+            "unit": "",
+            "quote": "",
+            "when": "2026-11-02",
+        },
+        {
+            "id": "gray-no",
+            "title": "城市运行管理服务平台数据接入",
+            "text": "平台接入各条线业务数据，完成数据归集与共享交换。",
+            "kind": "oversight",
+            "unit": "",
+            "quote": "",
+            "when": "2026-11-02",
+        },
+    ]
+    orig_scores, orig_avail = kb._vector_scores, kb.embedding.embedding_available
+    kb.embedding.embedding_available = lambda: True  # type: ignore[assignment]
+    kb._vector_scores = lambda q, es: {  # type: ignore[assignment]
+        "gray-yes": 0.540,
+        "gray-no": 0.528,
+    }
+    try:
+        g_hits = kb.search_in(gray_entries, "上次开会定了什么")
+        g_ids = {h["id"] for h in g_hits}
+    finally:
+        kb._vector_scores = orig_scores  # type: ignore[assignment]
+        kb.embedding.embedding_available = orig_avail  # type: ignore[assignment]
+    check("灰度区：向量分勉强 + 字面强力佐证 → 放行", "gray-yes" in g_ids, str(g_ids))
+    check("灰度区：向量分勉强但只有通用词 → 挡住", "gray-no" not in g_ids, str(g_ids))
+
+    # 向量分连灰度区都进不去时，字面分再高也不放行（这条挡的是「调低阈值救召回」）
+    kb.embedding.embedding_available = lambda: True  # type: ignore[assignment]
+    kb._vector_scores = lambda q, es: {"gray-yes": 0.434, "gray-no": 0.434}  # type: ignore[assignment]
+    try:
+        g_low = kb.search_in(gray_entries, "上次开会定了什么")
+    finally:
+        kb._vector_scores = orig_scores  # type: ignore[assignment]
+        kb.embedding.embedding_available = orig_avail  # type: ignore[assignment]
+    check("灰度区以下一律不召回（字面再强也不行）", not g_low, str([h["id"] for h in g_low]))
+
     # 身份收窄：住建局那件只在市长眼里，局长看不到
     ids_bureau = {e["id"] for e in kb.index(bureau) if e["kind"] == "oversight"}
     check("知识库按身份收窄", b["item_id"] not in ids_bureau, f"局长索引里有 {b['item_id']}")
@@ -2717,10 +2770,17 @@ def test_http(port: int | None = None) -> None:
     except (urllib.error.URLError, OSError):
         fixture_mid = ""
 
-    # 问数接口：事项类问题由知识库接住，且不掺数值
+    # 问数接口：事项类问题由知识库接住，且不掺数值。
+    #
+    # 问句点名夹具会议（「冒烟测试临时会议定了什么」）而不是「上次开会定了什么」：
+    # 后者对任意会议记录的余弦都在 0.44~0.54 之间，能不能过召回线取决于本地还剩
+    # 哪些真实会议数据——本机有「市政府第14次常务会议」时能过，干净环境就红。
+    # 点名版实测向量 0.82 / 字面 0.88，两种检索模式都稳过，断言才不赌阈值。
+    # 顺带它是唯一会在命中时走完整响应序列化的用例，`score` 是 numpy.float32
+    # 时这里会 500（json 编码不了），所以这条同时守着那个类型。
     req = urllib.request.Request(
         base + "/api/ask",
-        data=json.dumps({"question": "上次开会定了什么", "person": "mayor"}).encode("utf-8"),
+        data=json.dumps({"question": "冒烟测试临时会议定了什么", "person": "mayor"}).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
@@ -2728,6 +2788,7 @@ def test_http(port: int | None = None) -> None:
         kask = json.loads(r.read().decode("utf-8"))
     if fixture_mid:
         check("POST /api/ask 事项问题走知识库", kask.get("intent") == "knowledge", str(kask.get("intent")))
+        check("知识库命中后响应可 JSON 序列化", bool(kask.get("knowledge")), str(kask.get("knowledge"))[:80])
     else:
         print("  SKIP  问数走知识库用例需要先建夹具会议（未设 OCGOV_PASSWORD？）")
     check("知识库答案不带数值", not (kask.get("facts") or []), str(kask.get("facts"))[:60])
