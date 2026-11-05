@@ -44,15 +44,20 @@ KPI_CODES = ["GDP_TOTAL", "GY_VA_GROWTH", "BUDGET_REV", "FAI_GROWTH"]
 
 
 def _fmt_yoy(result: dict[str, Any]) -> tuple[str, str, str]:
-    """返回 (展示文本, 方向, 说明)。方向用于上色：涨为红、跌为绿（国内习惯）。"""
-    kind = result.get("kind", "rate")
-    if kind == "total":
+    """返回 (展示文本, 方向, 说明)。方向用于上色：涨为红、跌为绿（国内习惯）。
+
+    分岔看**单位**而不是 `kind`：比率类（%）的同比是百分点差，其余（亿元/户/项）
+    是增长率。以前看 `kind`，而 `kind` 只有几个指标显式写了 "total"，`户` 这类
+    就会落进「百分点差」分支，写成「同比 +490 pct」—— 490 户变成 490 个百分点。
+    这条规则和 ask._yoy_text、briefdoc._yoy_text 是同一套。
+    """
+    if (result.get("unit") or "") != "%":
         pct = result.get("yoy_pct")
         if pct is None:
             return "同比 —", "flat", ""
         arrow = "↑" if pct >= 0 else "↓"
         tone = "up" if pct > 0 else ("down" if pct < 0 else "flat")
-        return f"同比 {arrow} {abs(pct):.1f}%", tone, "按现价总量计算的同比增速"
+        return f"同比 {arrow} {abs(pct):.1f}%", tone, "总量为现价，增速按可比价计算"
     delta = result.get("yoy")
     if delta is None:
         return "同比 —", "flat", ""

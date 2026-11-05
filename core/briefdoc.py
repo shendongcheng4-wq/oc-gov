@@ -119,12 +119,14 @@ def _yoy_text(r: dict[str, Any]) -> str:
 
     百分比类指标（增速、比率）的「同比」是百分点差；总量类指标（亿元、户、项）
     才是「同比增长 x%」。这两种说法在材料里混用，读的人会直接算错。
+
+    真实年度值（如实测 GDP）只有可比价增速、没有上年同期绝对量，`yoy` 为
+    None —— 这时候总量类指标照样能出「同比增长 x%」，不能因为 `yoy` 空着
+    就退成「—」。所以先按单位分岔，再看各自那个字段。
     """
-    v = r.get("yoy")
-    if v is None:
-        return "—"
     if r.get("unit") == "%":
-        return ask_mod.delta_text(v, "%", "同比")
+        v = r.get("yoy")
+        return ask_mod.delta_text(v, "%", "同比") if v is not None else "—"
     p = r.get("yoy_pct")
     if p is None:
         return "—"

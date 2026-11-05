@@ -613,7 +613,7 @@ def query_metric(
         "caveats": METRICS[code]["caveats"],
     }
 
-    # 真实值覆盖：只覆盖「当期大数」三个字段（value / yoy / source），
+    # 真实值覆盖：只覆盖「当期大数」（value / 增速 / source），
     # 走势 series 保持 mock（真实年度值没有月度走势，历史曲线仍用演示序列）。
     # 历史期次（period 明确指定且非最新）不覆盖 —— 那是演示序列的地盘。
     try:
@@ -626,7 +626,12 @@ def query_metric(
         result["value"] = _round(real["value"], code)
         result["period"] = f"{real['year']}-12"
         result["period_label"] = f"{real['year']}年（全年）"
-        result["yoy"] = real["yoy"]
+        # yoy 是「绝对增量」（亿元/户/项），公报只给了可比价增速，没给上年同期
+        # 绝对量，算不出来 —— 只能置空，增速放 yoy_pct。
+        # 曾经把百分比直接写进 yoy，问数按绝对增量读，GDP 就被写成
+        # 「同比增加 5 亿元」。也不能拿总量和增速反推上年数：
+        # 总量是现价、增速是可比价，两者不能相互推算（见指标的 caveats）。
+        result["yoy"] = None
         result["yoy_pct"] = real["yoy"]
         result["yoy_note"] = "可比价增速"
         rs = realdata.real_source(code)

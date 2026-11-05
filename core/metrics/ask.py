@@ -192,6 +192,26 @@ def _delta_text(delta: float | None, unit: str, label: str) -> str:
     return f"{label}{verb} {abs(delta):g} {suffix}".strip()
 
 
+def _yoy_text(result: dict[str, Any], label: str = "") -> str:
+    """同比怎么说，取决于指标是「总量」还是「比率」。
+
+    比率类（unit == "%"）的同比是**百分点差**，直接用 yoy；
+    总量类（亿元/户/项/个）的同比是**增长率**，在 yoy_pct 里。
+    真实值（如实测年度 GDP）只有可比价增速、没有上年同期绝对量，yoy 为 None，
+    这时不能退回绝对增量，也不能拿总量除增速反推 —— 现价与可比价不能相互推算。
+
+    这条规则和 workbench._fmt_yoy、briefdoc._yoy_text 是同一套，三处别各写一份。
+    """
+    if (result.get("unit") or "") == "%":
+        return _delta_text(result.get("yoy"), "%", label)
+    pct = result.get("yoy_pct")
+    if pct is None:
+        return ""
+    if pct == 0:
+        return f"{label}持平"
+    return f"{label}{'增长' if pct > 0 else '下降'} {abs(pct):g}%"
+
+
 def _source_brief(source: dict[str, Any]) -> dict[str, Any]:
     return {
         # 前端点来源胶囊要用它打开口径抽屉。老会话的 meta 里没这个字段，
@@ -965,7 +985,7 @@ def _ask_impl(
 
     delta_bits = [
         _delta_text(result["mom"], result["unit"], "环比"),
-        _delta_text(result["yoy"], result["unit"], "同比"),
+        _yoy_text(result, "同比"),
     ]
     # 「全市」+「市重大项目…」会拼成「全市市重大项目」，指标名自带「市」时不再加前缀
     scope = "" if result["name"].startswith("市") else "全市"
@@ -982,8 +1002,12 @@ def _ask_impl(
     ]
     if result["mom"] is not None:
         facts.append({"label": "环比", "value": _delta_text(result["mom"], result["unit"], ""), "raw": result["mom"]})
-    if result["yoy"] is not None:
-        facts.append({"label": "同比", "value": _delta_text(result["yoy"], result["unit"], ""), "raw": result["yoy"]})
+    yoy_bit = _yoy_text(result, "")
+    if yoy_bit:
+        # raw 给专家链判方向用（只要正负），跟着「哪一路取的值」走：
+        # 比率类是百分点差、总量类是增长率，别把两者混成同一个数
+        raw_yoy = result.get("yoy") if result.get("unit") == "%" else result.get("yoy_pct")
+        facts.append({"label": "同比", "value": yoy_bit, "raw": raw_yoy})
 
     # 时序类额外再取一次序列（单值查询只返回一期）
     payload: dict[str, Any] = {
