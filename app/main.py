@@ -99,6 +99,10 @@ import experts as expert_mod  # noqa: E402
 import meetplan as meetplan_mod  # noqa: E402
 import rag as rag_mod  # noqa: E402
 import harness as harness_mod  # noqa: E402
+import auth  # noqa: E402
+import audit  # noqa: E402
+import authz  # noqa: E402
+import directory  # noqa: E402
 
 
 def _plugin_command(question: str) -> tuple[str, str] | None:
@@ -438,12 +442,20 @@ class Handler(BaseHTTPRequestHandler):
         return data if isinstance(data, dict) else {}
 
     def _person(self, body: dict | None = None) -> str:
-        """当前身份：请求头 > 请求体 > 查询串 > 默认。
+        """当前身份：session（可信）> 请求头/请求体/查询串（演示）> 默认。
 
-        这是个**演示身份**，不是登录态 —— 谁都能声称自己是市长。所有涉及身份的
-        写操作都只能落到 core/people 的白名单里，未知 id 一律回落到默认身份，
-        避免一个过期 localStorage 把数据写到不存在的键上。
+        第三批的身份统一：有有效 session 就用 session 里的身份 —— 这是后端签发、
+        前端改不了的。没有 session 才回落到旧的 X-Person-Id 头（演示身份，谁都能
+        声称），保持「打开就能看」的体验。这样登录后，工作台/日程/通知/知识库/材料
+        这些读口的身份就统一到不可伪造的 session 上，读收窄全面生效；未登录的
+        纯演示浏览不受影响。
+
+        写操作不走这里（走 _require → _session_scope），这里是读口的身份来源。
         """
+        s = self._session_scope()
+        if s is not None:
+            pid = str(s.get("person") or "")
+            return people.resolve(pid)
         pid = str(self.headers.get("X-Person-Id") or "").strip()
         if not pid and isinstance(body, dict):
             pid = str(body.get("person") or "").strip()
@@ -454,6 +466,58 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pid = ""
         return people.resolve(pid)
+
+    def _session_scope(self) -> dict | None:
+        """从请求里读 session，返回授权用的 scope（含 person/role/units）。
+
+        凭据从两个头里找，按顺序：`Authorization: Bearer <sid>` 或 `X-Session: <sid>`。
+        没有有效 session 返回 None —— 这和 `_person()` 的「回落默认身份」是本质区别：
+        写操作需要的是「能证明的身份」，不是「前端声称的身份」。
+
+        返回的 scope 是 directory.person_scope 的形状，直接喂 authz.can。
+        """
+        sid = ""
+        auth_h = str(self.headers.get("Authorization") or "").strip()
+        if auth_h.lower().startswith("bearer "):
+            sid = auth_h[7:].strip()
+        if not sid:
+            sid = str(self.headers.get("X-Session") or "").strip()
+        if not sid:
+            return None
+        s = auth.resolve(sid)
+        if s is None:
+            return None
+        return directory.person_scope(s.get("person") or "")
+
+    def _require(self, action: str, resource: dict | None = None) -> tuple[dict | None, bool, str]:
+        """写操作鉴权闸门。返回 (scope, allowed, reason)。
+
+        没有 session → (None, False, 未登录)。有 session 但越权 → (scope, False, reason)。
+        调用方拿到 allowed=False 要立即 401/403，绝不落到业务层。
+        """
+        scope = self._session_scope()
+        if scope is None:
+            return None, False, "未登录：请先在右上角登录身份。"
+        allowed, reason = authz.can(scope, action, resource)
+        return scope, allowed, reason
+
+    def _read_scope(self) -> tuple[str | None, set[str] | None]:
+        """读收窄用的 (pid, scope)。和写操作不同，读是「有身份就收窄、没身份保持现状」。
+
+        - 有有效 session：返回 (person_id, scope)。scope 是责任单位集合；
+          市领导（is_citywide）返回 None = 全量，局长/分管领导返回 set(units)。
+        - 没有 session：返回 (None, None) = 不收窄，保持演示全量现状。
+
+        这样第一批「写口子必须 session」落地后，读这一批是渐进式：登录了的人
+        只能看到分管范围的账，没登录的（纯演示浏览）仍能看到全量，不打断现有体验。
+        """
+        scope = self._session_scope()
+        if scope is None:
+            return None, None
+        if scope.get("is_citywide"):
+            return scope.get("person"), None
+        units = set(scope.get("units") or ())
+        return scope.get("person"), (units or None)
 
     def _serve_file(self, path: Path, content_type: str) -> None:
         if not path.exists():
@@ -593,6 +657,9 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 )
 
+            if path == "/api/auth/whoami":
+                return self._whoami()
+
             if path == "/api/experts":
                 return self._json(
                     {
@@ -614,6 +681,7 @@ class Handler(BaseHTTPRequestHandler):
                     window = max(0, min(30, int((q.get("window") or ["5"])[0])))
                 except ValueError:
                     window = 5
+                _pid, scope = self._read_scope()
                 return self._json(
                     {
                         "ok": True,
@@ -621,9 +689,10 @@ class Handler(BaseHTTPRequestHandler):
                             status=(q.get("status") or [""])[0] or None,
                             assignee=(q.get("assignee") or [""])[0] or None,
                             only_risk=(q.get("only_risk") or [""])[0] in ("1", "true", "yes"),
+                            scope=scope,
                         ),
-                        "stats": ov.stats(),
-                        "scan": ov.scan(window),
+                        "stats": ov.stats(scope),
+                        "scan": ov.scan(window, scope=scope),
                         "statuses": ov.STATUSES,
                         "today": ov.today().isoformat(),
                     }
@@ -631,7 +700,8 @@ class Handler(BaseHTTPRequestHandler):
 
             parts = _parts(path, "/api/oversight/")
             if len(parts) == 1:
-                one = ov.detail(parts[0])
+                _pid, scope = self._read_scope()
+                one = ov.detail(parts[0], scope=scope)
                 if one is None:
                     return self._json({"ok": False, "error": "item_not_found", "item_id": parts[0]}, 404)
                 return self._json({"ok": True, "item": one})
@@ -850,6 +920,12 @@ class Handler(BaseHTTPRequestHandler):
             )
 
         try:
+            if path == "/api/auth/login":
+                return self._login(body)
+
+            if path == "/api/auth/logout":
+                return self._logout()
+
             if path == "/api/attachments/parse":
                 return self._parse_attachments(body)
 
@@ -1039,17 +1115,32 @@ class Handler(BaseHTTPRequestHandler):
 
             # ---- 督办台账 ----
             if path == "/api/oversight":
+                # 建档（交办）是写操作，必须登录 + 有权限。资源单位取 assignee ∪ co_assignees。
+                co = [str(x) for x in (body.get("co_assignees") or []) if str(x).strip()]
+                assignee = str(body.get("assignee") or "").strip()
+                scope, allowed, why = self._require(
+                    authz.OVERSIGHT_CREATE, {"units": tuple([assignee] + co)}
+                )
+                if not allowed:
+                    audit.user_event(
+                        scope.get("person") if scope else None, "access.denied",
+                        target="oversight.create", payload={"reason": why},
+                    )
+                    return self._json({"ok": False, "error": why}, 403)
                 res = ov.create_item(
                     title=str(body.get("title") or ""),
-                    assignee=str(body.get("assignee") or ""),
+                    assignee=assignee,
                     deadline=str(body.get("deadline") or ""),
                     standard=str(body.get("standard") or ""),
                     source=str(body.get("source") or "市政府办交办"),
                     source_ref=str(body.get("source_ref") or ""),
-                    co_assignees=[str(x) for x in (body.get("co_assignees") or [])],
+                    co_assignees=co,
                     priority=str(body.get("priority") or "一般"),
-                    actor=str(body.get("actor") or "市政府办"),
+                    # actor 由登录身份定，不再信前端字符串
+                    actor=scope["person"],
                 )
+                audit.user_event(scope["person"], "oversight.create",
+                                 target=res.get("item_id"), payload={"ok": res.get("ok")})
                 return self._json(res, 200 if res.get("ok") else 400)
 
             if path == "/api/oversight/urge":
@@ -1091,6 +1182,12 @@ class Handler(BaseHTTPRequestHandler):
             # 正文必填；这条是「确认草稿建待召开的会」，正文必须为空。
             # 两个语义塞一个入口，将来谁看一眼都分不清哪个字段对哪种会有效。
             if path == "/api/meetplan":
+                # 对话里约会议是写操作，需登录 + 领导权限。
+                scope, allowed, why = self._require(authz.MEETING_COMMIT)
+                if not allowed:
+                    audit.user_event(scope.get("person") if scope else None, "access.denied",
+                                     target="meeting.commit", payload={"reason": why})
+                    return self._json({"ok": False, "error": why}, 403)
                 draft = body.get("draft") or {}
                 if not isinstance(draft, dict):
                     return self._json({"ok": False, "error": "draft 必须是对象"}, 400)
@@ -1100,8 +1197,11 @@ class Handler(BaseHTTPRequestHandler):
                     message_id=str(body.get("message_id") or ""),
                     # 谁约的记成身份职务（「市长」），不是 internal id：
                     # 这条要显示在会议详情里给人看，myor/mayor 那种值没用
-                    actor=str(body.get("actor") or people.meta(self._person(body)).get("post") or ""),
+                    actor=str(body.get("actor") or people.meta(scope["person"]).get("post") or ""),
                 )
+                audit.user_event(scope["person"], "meeting.commit",
+                                 target=(res.get("meeting") or {}).get("id") if res.get("ok") else None,
+                                 payload={"ok": res.get("ok")})
                 if not res.get("ok"):
                     return self._json(res, 400)
                 res["meeting"] = meetings.brief(res["meeting"])
@@ -1110,6 +1210,12 @@ class Handler(BaseHTTPRequestHandler):
 
             # ---- 会议助手 ----
             if path == "/api/meetings":
+                # 建会议（粘纪要）是写操作，需登录 + 领导权限。
+                scope, allowed, why = self._require(authz.MEETING_COMMIT)
+                if not allowed:
+                    audit.user_event(scope.get("person") if scope else None, "access.denied",
+                                     target="meeting.create", payload={"reason": why})
+                    return self._json({"ok": False, "error": why}, 403)
                 meeting = meetings.create(
                     title=str(body.get("title") or ""),
                     text=str(body.get("text") or ""),
@@ -1118,13 +1224,23 @@ class Handler(BaseHTTPRequestHandler):
                     attendees=body.get("attendees") or [],
                     source=str(body.get("source") or "manual"),
                 )
+                audit.user_event(scope["person"], "meeting.create",
+                                 target=meeting.get("id"), payload={"ok": True})
                 return self._json({"ok": True, "meeting": meetings.brief(meeting)})
 
             parts = _parts(path, "/api/meetings/")
             if len(parts) == 2 and parts[1] == "parse":
                 return self._parse_meeting(parts[0], body)
             if len(parts) == 2 and parts[1] == "commit":
-                result = meetings.commit(parts[0], body.get("item_ids") or [], actor=str(body.get("actor") or "市政府办"))
+                # 议定事项落库也是写操作，需登录 + 领导权限。
+                scope, allowed, why = self._require(authz.MEETING_COMMIT)
+                if not allowed:
+                    audit.user_event(scope.get("person") if scope else None, "access.denied",
+                                     target="meeting.commit_items", payload={"reason": why})
+                    return self._json({"ok": False, "error": why}, 403)
+                result = meetings.commit(parts[0], body.get("item_ids") or [], actor=scope["person"])
+                audit.user_event(scope["person"], "meeting.commit_items",
+                                 target=parts[0], payload={"ok": result.get("ok")})
                 return self._json(result, 200 if result.get("ok") else 409)
 
             self.send_error(404)
@@ -1217,8 +1333,12 @@ class Handler(BaseHTTPRequestHandler):
 
         不在这里复刻「什么状态能做什么」——两份规则一定会漂移，届时页面允许
         而接口拒绝，或者反过来跳过守卫。
+
+        鉴权闸门在业务守卫之前：先判「这个人能不能对这个单位做这个动作」，
+        再判「这个状态能不能做这个动作」。两道都过才落数据。
         """
-        if ov.get(iid) is None:
+        item = ov.get(iid)
+        if item is None:
             return self._json({"ok": False, "error": "item_not_found", "item_id": iid}, 404)
 
         action = str(body.get("action") or "").strip()
@@ -1235,6 +1355,20 @@ class Handler(BaseHTTPRequestHandler):
                 400,
             )
 
+        # 动作 → 授权动作名（authz.ACTION_FROM_ZH），资源单位 = 主办 ∪ 协办。
+        # 签收/进展/办结按「主办单位」判（不能替协办签收）；催办/退回按「涉及单位」判。
+        az_action = authz.ACTION_FROM_ZH.get(action)
+        if az_action is None:
+            return self._json({"ok": False, "error": f"未注册的操作：{action}"}, 400)
+        resource_units = tuple([item.assignee] + list(item.co_assignees))
+        scope, allowed, why = self._require(az_action, {"units": resource_units})
+        if not allowed:
+            audit.user_event(
+                scope.get("person") if scope else None, "access.denied",
+                target=az_action, payload={"item_id": iid, "reason": why},
+            )
+            return self._json({"ok": False, "error": why}, 403)
+
         text = str(body.get("text") or "").strip()
         reason = str(body.get("reason") or "").strip()
         # 界面上只有一个输入框（"办理说明 / 退回理由"），用户不会区分 text 和 reason。
@@ -1248,12 +1382,14 @@ class Handler(BaseHTTPRequestHandler):
         result = ov.advance(
             iid,
             action,
-            actor=str(body.get("actor") or "市政府办"),
+            actor=scope["person"],  # actor 由登录身份定，不再信前端
             text=text,
             reason=reason,
             evidence=evidence,
             percent=body.get("percent"),
         )
+        audit.user_event(scope["person"], az_action,
+                         target=iid, payload={"ok": result.get("ok")})
         if not result.get("ok"):
             return self._json(result, 409)
         return self._json({**result, "item": ov.detail(iid), "stats": ov.stats()})
@@ -1264,14 +1400,20 @@ class Handler(BaseHTTPRequestHandler):
         和会议 commit 相反，这里**不整体回滚**：催办只是往事件流里记一条提醒，
         部分成功没有副作用；硬要原子性反而会让能催的也催不出去。逐条报结果，
         失败的写清原因，由调用方决定要不要重试。
+
+        鉴权：催办是写操作，需登录；逐条按「涉及单位」判，非分管单位的不催。
         """
+        scope = self._session_scope()
+        if scope is None:
+            return self._json({"ok": False, "error": "未登录：请先在右上角登录身份。"}, 401)
+
         ids = [str(i) for i in (body.get("ids") or []) if str(i).strip()]
         if not ids:
             return self._json({"ok": False, "error": "没有选择要催办的事项。"}, 400)
         if len(ids) > 200:
             return self._json({"ok": False, "error": f"一次最多催办 200 条，收到 {len(ids)} 条。"}, 400)
 
-        actor = str(body.get("actor") or "市政府办")
+        actor = scope["person"]  # 由登录身份定，不再信前端
         custom = str(body.get("text") or "").strip()
         done: list[dict] = []
         failed: list[dict] = []
@@ -1280,6 +1422,14 @@ class Handler(BaseHTTPRequestHandler):
             one = ov.detail(iid)
             if one is None:
                 failed.append({"item_id": iid, "error": "没有这件事项。"})
+                continue
+            # 先判授权，再判状态
+            units = tuple([one.get("assignee") or ""] + [str(x) for x in (one.get("co_assignees") or [])])
+            allowed, why = authz.can(scope, authz.OVERSIGHT_URGE, {"units": units})
+            if not allowed:
+                audit.user_event(scope["person"], "access.denied",
+                                 target=authz.OVERSIGHT_URGE, payload={"item_id": iid, "reason": why})
+                failed.append({"item_id": iid, "error": why})
                 continue
             if "催办" not in (one.get("allowed_actions") or []):
                 failed.append({"item_id": iid, "error": f"当前状态「{one.get('status')}」不能催办。"})
@@ -1290,6 +1440,7 @@ class Handler(BaseHTTPRequestHandler):
             text = custom or (f"{'；'.join(reasons)}，请加快办理并反馈进展。" if reasons else "请反馈当前办理进展和下一步安排。")
             res = ov.advance(iid, "催办", actor=actor, text=text)
             if res.get("ok"):
+                audit.user_event(scope["person"], "oversight.urge", target=iid, payload={"ok": True})
                 done.append({"item_id": iid, "assignee": one.get("assignee"), "text": text})
             else:
                 failed.append({"item_id": iid, "error": res.get("error")})
@@ -1304,6 +1455,59 @@ class Handler(BaseHTTPRequestHandler):
                 "scan": ov.scan(),
             }
         )
+
+    # ---------------- 认证 ----------------
+    def _login(self, body: dict) -> None:
+        """登录：白名单身份 + 正确口令才签发 session。
+
+        body: {"person": "mayor", "password": "..."}。返回 {ok, session} 或
+        {ok:false, error}。口令校验走 credentials.verify，空口令/错口令一律拒绝。
+        返回的 session 含 person/role/units，前端存 sid，写操作和读收窄都凭它。
+        """
+        pid = str(body.get("person") or "").strip()
+        password = str(body.get("password") or "")
+        if not pid:
+            return self._json({"ok": False, "error": "person_required"}, 400)
+        if not password:
+            return self._json({"ok": False, "error": "password_required"}, 400)
+        s = auth.login(pid, password)
+        if s is None:
+            # 不区分「没有这个身份」和「口令错」，避免泄露身份是否存在。
+            audit.user_event(pid if people.find(pid) else None, "auth.login_failed")
+            return self._json({"ok": False, "error": "身份或口令不正确"}, 401)
+        audit.user_event(pid, "auth.login", payload={"role": s.get("role")})
+        return self._json({"ok": True, "session": s})
+
+    def _whoami(self) -> None:
+        """当前会话身份。前端用它判断是否已登录、显示谁。无 session 返回未登录。"""
+        s = self._session_scope()
+        if s is None:
+            return self._json({"ok": True, "authed": False})
+        return self._json(
+            {
+                "ok": True,
+                "authed": True,
+                "person": s.get("person"),
+                "role": s.get("role"),
+                "units": list(s.get("units") or ()),
+            }
+        )
+
+    def _logout(self) -> None:
+        """登出：吊销当前 session。"""
+        sid = ""
+        auth_h = str(self.headers.get("Authorization") or "").strip()
+        if auth_h.lower().startswith("bearer "):
+            sid = auth_h[7:].strip()
+        if not sid:
+            sid = str(self.headers.get("X-Session") or "").strip()
+        if not sid:
+            return self._json({"ok": False, "error": "no_session"}, 400)
+        s = auth.resolve(sid)
+        if s:
+            audit.user_event(s.get("person") or "", "auth.logout")
+        auth.revoke(sid)
+        return self._json({"ok": True})
 
     # ---------------- 会议助手 ----------------
     def _parse_meeting(self, mid: str, body: dict) -> None:

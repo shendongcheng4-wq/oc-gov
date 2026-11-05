@@ -2145,6 +2145,19 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
   </div>
 </div>
 
+<div class="modal" id="loginModal">
+  <div class="modal-box login-box">
+    <div class="modal-head">
+      <div>
+        <h3>登录</h3>
+        <p>选身份并输入口令。登录后系统才按这个身份收窄可见数据、放开写权限；未登录只能浏览演示视角。</p>
+      </div>
+      <span class="modal-x" id="lgClose">✕</span>
+    </div>
+    <div class="modal-body" id="lgBody"></div>
+  </div>
+</div>
+
 <div class="modal" id="calModal">
   <div class="modal-box cal-box">
     <div class="modal-head">
@@ -2910,7 +2923,7 @@ async function commitMeet(card) {
   try {
     const r = await fetch("/api/meetplan", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      headers: authHeaders({ "X-Person-Id": PID.get() }),
       body: JSON.stringify({
         thread_id: card.dataset.tid,
         message_id: card.dataset.mid,
@@ -5265,6 +5278,54 @@ const PID = {
   get: () => localStorage.getItem("ocgov.person") || "mayor",
   set: (v) => localStorage.setItem("ocgov.person", v),
 };
+// 登录态（session）：后端签发的凭据，写操作靠它证明身份，不是靠「我在请求头里写我是谁」。
+// 第三批：登录要输口令，口令校验通过才发 session。sid 存 localStorage。
+const SID = {
+  get: () => localStorage.getItem("ocgov.sid") || "",
+  set: (v) => { if (v) localStorage.setItem("ocgov.sid", v); else localStorage.removeItem("ocgov.sid"); },
+};
+// 写操作请求要带的鉴权头。有 sid 就带，没有就空对象（后端会拦）。
+function authHeaders(extra) {
+  const h = Object.assign({ "Content-Type": "application/json" }, extra || {});
+  if (SID.get()) h["X-Session"] = SID.get();
+  return h;
+}
+// 当前是否已登录（凭 sid 问后端，而不是只看本地有没有存 sid——sid 可能已过期/被吊销）。
+async function whoami() {
+  try {
+    const r = await fetch("/api/auth/whoami", { headers: authHeaders() });
+    const d = await r.json();
+    return d.authed ? d : null;
+  } catch { return null; }
+}
+// 登录：用口令给某个身份拿 session。返回 false 表示没拿到（口令错/身份不存在）。
+async function doLogin(person, password) {
+  try {
+    const r = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ person, password }),
+    });
+    const d = await r.json();
+    if (!d.ok || !d.session) return { ok: false, error: d.error || "登录失败" };
+    SID.set(d.session.sid);
+    return { ok: true };
+  } catch { return { ok: false, error: "网络错误" }; }
+}
+// 登出：吊销当前 session。
+async function doLogout() {
+  try {
+    await fetch("/api/auth/logout", { method: "POST", headers: authHeaders() });
+  } catch { /* 忽略 */ }
+  SID.set("");
+}
+// 确保已登录：有 session 就检查有效性，没有就弹登录框。返回 true=已登录。
+async function ensureLogin() {
+  const w = await whoami();
+  if (w) return true;
+  SID.set("");
+  return false;
+}
 let PP = { people: [], max: 8 };
 let ACCT_ACTIONS = {};
 let WS = null;
@@ -5370,6 +5431,15 @@ function renderIdMenu() {
     data: () => openSettings("general"),
     about: () => openSettings("about"),
     reset: () => resetLocalPrefs(),
+    logout: async () => {
+      await doLogout();
+      AUTHD = false;
+      renderIdMenu();
+      // 登出后回到演示视角：工作台/提醒按当前本地 PID（未登录的演示身份）重拉
+      await loadWorkspace();
+      await loadNotify({ silent: true });
+      toast("已登出，回到演示视角");
+    },
   };
   const items = [
     { id: "settings", icon: "gear", name: "设置", hint: "Ctrl+," },
@@ -5381,18 +5451,24 @@ function renderIdMenu() {
     { id: "data", icon: "db", name: "数据与存储", hint: `${threads} 个会话` },
     { id: "about", icon: "info", name: "关于", hint: "v0.2" },
     { sep: 1 },
-    { id: "reset", icon: "power", name: "重置本机偏好", cls: "danger" },
   ];
+  // 已登录才显示「登出」：未登录时右上角是「登录」按钮，没有可登出的会话。
+  if (AUTHD) {
+    items.push({ id: "logout", icon: "power", name: "登出", cls: "danger" });
+  }
+  items.push({ id: "reset", icon: "power", name: "重置本机偏好", cls: "danger" });
   $("#idMenu").innerHTML = `
     <div class="acct-top" id="acctTop">${acctIdCard(p)}</div>
     <div class="acct-list">${items.map(acctRow).join("")}</div>`;
 }
 
 function acctIdCard(p) {
+  // authed 是「当前 session 是否有效」的缓存，renderIdMenu 前由 refreshAuth 更新
+  const who = AUTHD ? "已登录" : "演示视角 · 未登录";
   return `<div class="acct-id">
       <div class="acct-av">${esc(p.avatar || "市")}</div>
-      <div class="acct-who"><b>${esc(p.name)}</b><span>${esc(p.scope || "")} · 演示身份</span></div>
-      <button class="acct-swap" id="acctSwap">切换</button>
+      <div class="acct-who"><b>${esc(p.name)}</b><span>${esc(p.scope || "")} · ${who}</span></div>
+      <button class="acct-swap" id="acctSwap">${AUTHD ? "切换" : "登录"}</button>
     </div>`;
 }
 
@@ -5407,6 +5483,75 @@ function showIdPicker() {
         ${p.id === cur ? `<span class="hint">当前</span>` : ""}
       </div>`).join("")}
   </div>`;
+}
+
+// 登录态缓存：refreshAuth 问后端 whoami 后写这里，界面据此显示「已登录/未登录」。
+let AUTHD = false;
+
+async function refreshAuth() {
+  const w = await whoami();
+  AUTHD = !!w;
+  return w;
+}
+
+// 登录框：选身份 + 输口令。登录成功才真正切到这个身份（读收窄、写权限都以它为准）。
+function renderLoginModal(preselected) {
+  const cur = preselected || PID.get();
+  const people = PP.people || [];
+  const opts = people.map((p) => `
+    <option value="${esc(p.id)}" ${p.id === cur ? "selected" : ""}>${esc(p.name)} · ${esc(p.scope)}</option>`).join("");
+  $("#lgBody").innerHTML = `
+    <div class="lg-sec">
+      <label class="set-l"><b>身份</b><span>登录后按这个身份收窄可见数据、放开写权限。</span></label>
+      <select id="lgPerson" class="set-input">${opts}</select>
+    </div>
+    <div class="lg-sec">
+      <label class="set-l"><b>口令</b><span>默认口令 ocgov2026，登录后建议在数据与存储里修改。</span></label>
+      <input type="password" id="lgPassword" class="set-input" placeholder="输入口令" autocomplete="current-password" onkeydown="if(event.key==='Enter')submitLogin()">
+    </div>
+    <div class="lg-err" id="lgErr" hidden></div>
+    <div class="lg-act">
+      <button class="btn" id="lgSubmit" type="button">登录</button>
+    </div>`;
+  // 聚焦口令框
+  setTimeout(() => { const el = $("#lgPassword"); if (el) el.focus(); }, 50);
+}
+
+function openLoginModal(preselected) {
+  renderLoginModal(preselected);
+  $("#loginModal").classList.add("on");
+}
+
+async function submitLogin() {
+  const person = $("#lgPerson").value;
+  const password = $("#lgPassword").value;
+  if (!person) return;
+  if (!password) { showLgErr("请输入口令"); return; }
+  const res = await doLogin(person, password);
+  if (!res.ok) { showLgErr(res.error || "登录失败"); return; }
+  $("#loginModal").classList.remove("on");
+  // 登录成功：把本地身份切到登录的那个（读口以 session 身份为准，但本地 PID 也要一致）。
+  const changed = person !== PID.get();
+  PID.set(person);
+  await refreshAuth();
+  // 会话是按身份存的：换了身份就清掉当前会话、重拉列表，否则屏幕留的是上一个人的聊天记录。
+  if (changed) {
+    THREAD = null;
+    renderThread(null);
+    refreshThreads();
+  }
+  NT.data = null;
+  await loadWorkspace();
+  await loadNotify({ silent: true });
+  renderIdMenu();
+  const p = WS && WS.person;
+  toast(p ? `已登录「${p.name}」：${p.scope}` : "已登录");
+}
+
+function showLgErr(msg) {
+  const el = $("#lgErr");
+  el.textContent = msg;
+  el.hidden = false;
 }
 
 async function resetLocalPrefs() {
@@ -5450,20 +5595,10 @@ async function switchPerson(pid) {
     $("#idMenu").hidden = true;
     return;
   }
-  PID.set(pid);
   $("#idMenu").hidden = true;
-  // 会话是按身份存的：不换掉当前会话、不重拉列表，屏幕上留着的还是上一个人的
-  // 聊天记录 —— 既不安全，也让人以为「切换没生效」。
-  THREAD = null;
-  renderThread(null);
-  refreshThreads();
-  // 提醒按人算：换身份不刷新，铃铛上还是上一个人的数，点开才发现内容对不上
-  NT.data = null;
-  await loadWorkspace();
-  await loadNotify({ silent: true });
-  renderIdMenu();
-  const p = WS && WS.person;
-  toast(p ? `已切换到「${p.name}」：${p.scope}，关注 ${p.count} 项` : "已切换身份");
+  // 第三批：换身份不再自动免密登录，而是弹登录框让用户输入口令。
+  // 登录成功（submitLogin）后才会真正切到那个身份。
+  openLoginModal(pid);
 }
 
 async function loadWorkspace() {
@@ -7262,7 +7397,7 @@ function bindMeetDetail() {
     try {
       const r = await fetch(`/api/meetings/${encodeURIComponent(MT.current)}/commit`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ item_ids: [...MT.sel] }),
       });
       const d = await r.json();
@@ -7328,7 +7463,7 @@ function newMeetingForm() {
     try {
       const r = await fetch("/api/meetings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({
           title,
           text,
@@ -7665,6 +7800,18 @@ function renderOvDetail(raw) {
     <div class="ov-events">${events || `<div class="hint" style="margin:0">没有事件记录。</div>`}</div>`;
 }
 
+// 写操作被拒时统一处理：未登录/无 session → 弹登录框；越权 → toast 原因。
+function handleWriteDeny(d) {
+  const err = d.error || "";
+  if (/未登录|no_session|session/i.test(err)) {
+    toast("请先登录");
+    openLoginModal(PID.get());
+    return true;
+  }
+  toast(err || "操作被拒绝");
+  return false;
+}
+
 async function ovAct(action) {
   if (!OVX.sel) return toast("先选一条事项");
   const text = ($("#ovText")?.value || "").trim();
@@ -7672,14 +7819,14 @@ async function ovAct(action) {
   const pctRaw = ($("#ovPct")?.value || "").trim();
   const d = await (await fetch(`/api/oversight/${encodeURIComponent(OVX.sel)}/action`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(),
     body: JSON.stringify({
-      action, text, actor: "市政府办",
+      action, text,
       percent: pctRaw === "" ? null : Number(pctRaw),
       evidence: evRaw,
     }),
   })).json();
-  if (!d.ok) return toast(d.error || "操作被拒绝");
+  if (!d.ok) return handleWriteDeny(d);
   toast(d.changed ? `${action}：${d.from_status} → ${d.to_status}` : `${action}：已记录，状态未变`);
   await refreshOversight();
   if (d.item) renderOvDetail(d.item);
@@ -7693,10 +7840,10 @@ async function ovUrgeBatch() {
   if (!confirm(`对当前筛选下的 ${ids.length} 条事项发起催办？`)) return;
   const d = await (await fetch("/api/oversight/urge", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ids, actor: "市政府办" }),
+    headers: authHeaders(),
+    body: JSON.stringify({ ids }),
   })).json();
-  if (!d.ok) return toast(d.error || "催办失败");
+  if (!d.ok) return handleWriteDeny(d);
   toast(`已催办 ${d.count} 条${d.failed.length ? `，${d.failed.length} 条跳过` : ""}`);
   await refreshOversight();
   if (OVX.sel) await showOvItem(OVX.sel);
@@ -7730,6 +7877,9 @@ async function boot() {
   await loadPeople();
   await loadExperts();
   await loadWorkspace();
+  // 登录态：启动时问一次后端，决定右上角显示「已登录」还是「演示视角·未登录」。
+  // 不阻塞首屏；未登录时读操作照常（演示全量），写操作会被拦并引导登录。
+  refreshAuth().then(() => renderIdMenu()).catch(() => {});
 
   // 模型配置 + 最近一次会话（没有会话就停在空态，不自动建空记录）
   await loadModels();
@@ -7891,6 +8041,8 @@ document.addEventListener("click", (e) => {
     return;
   }
   if (e.target.closest("#acctSwap")) return showIdPicker();
+
+  if (e.target.closest("#lgSubmit")) return submitLogin();
 
   const stab = e.target.closest("[data-stab]");
   if (stab) { SET_TAB = stab.dataset.stab; return renderSettings(); }
@@ -8121,6 +8273,8 @@ $("#mmClose").onclick = closeModelModal;
 $("#mtClose").onclick = closeMeetModal;
 $("#calClose").onclick = closeCalModal;
 $("#calModal").onclick = (e) => { if (e.target.id === "calModal") closeCalModal(); };
+$("#lgClose").onclick = () => $("#loginModal").classList.remove("on");
+$("#loginModal").onclick = (e) => { if (e.target.id === "loginModal") $("#loginModal").classList.remove("on"); };
 $("#wmClose").onclick = () => $("#watchModal").classList.remove("on");
 $("#deskCustom").onclick = openLayoutPicker;
 $("#followManage").onclick = openFollowPicker;

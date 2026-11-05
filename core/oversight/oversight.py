@@ -430,13 +430,21 @@ def list_items(
     status: str | None = None,
     assignee: str | None = None,
     only_risk: bool = False,
+    scope: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """按条件筛选，按风险紧急度排序。"""
+    """按条件筛选，按风险紧急度排序。
+
+    `scope` 是责任单位集合（主办 ∪ 协办都算）：传了就只返回落在该集合里的事项，
+    传 None 是全市台账（默认，行为不变）。这是「读收窄」的落点——局长调
+    list_items 时带上自己的分管单位，就只能看到本单位的事项，看不到别的局的账。
+    """
     rows = []
     for item in _ITEMS.values():
         if status and item.status != status:
             continue
         if assignee and item.assignee != assignee and assignee not in item.co_assignees:
+            continue
+        if scope is not None and item.assignee not in scope and not (scope & set(item.co_assignees)):
             continue
         risk = assess(item)
         if only_risk and risk.level == RISK_NONE:
@@ -471,9 +479,13 @@ def _brief(item: Item, risk: Risk) -> dict[str, Any]:
     }
 
 
-def detail(item_id: str) -> dict[str, Any] | None:
+def detail(item_id: str, scope: set[str] | None = None) -> dict[str, Any] | None:
     item = get(item_id)
     if item is None:
+        return None
+    # 行级拒绝：给了 scope 就校验事项的责任单位是否落在里面，不在就返回 None，
+    # 和「事项不存在」表现一致——不向越权者泄露这条事项是否存在。
+    if scope is not None and item.assignee not in scope and not (scope & set(item.co_assignees)):
         return None
     risk = assess(item)
     return {
@@ -488,17 +500,21 @@ def detail(item_id: str) -> dict[str, Any] | None:
 
 
 # ── 催办扫描 ──────────────────────────────────────────────────────────────
-def scan(days: int = SOON_DAYS) -> dict[str, Any]:
+def scan(days: int = SOON_DAYS, scope: set[str] | None = None) -> dict[str, Any]:
     """扫描需要催办的事项。这是定时任务每天该调用的那个函数。
 
     注意 days 只影响"临期"窗口，逾期和停滞的判定是固定的——
     不允许通过放大窗口来让逾期事项"消失"。
+
+    `scope` 同 list_items：给了就只扫责任单位落在集合里的事项。
     """
     buckets: dict[str, list[dict[str, Any]]] = {
         "逾期": [], "今日到期": [], "临期": [], "签收超时": [], "停滞": [],
     }
     for item in _ITEMS.values():
         if item.status == CLOSED:
+            continue
+        if scope is not None and item.assignee not in scope and not (scope & set(item.co_assignees)):
             continue
         risk = assess(item)
         row = _brief(item, risk)
@@ -516,16 +532,21 @@ def scan(days: int = SOON_DAYS) -> dict[str, Any]:
 
     total = sum(len(v) for v in buckets.values())
     need = len({r["id"] for v in buckets.values() for r in v})
+
+    def _in_scope(i: Item) -> bool:
+        return scope is None or i.assignee in scope or (scope & set(i.co_assignees))
+
+    open_count = sum(1 for i in _ITEMS.values() if i.status != CLOSED and _in_scope(i))
     return {
         "scanned_at": _now().strftime("%Y-%m-%d %H:%M"),
         "today": today().isoformat(),
         "window_days": days,
-        "open_items": sum(1 for i in _ITEMS.values() if i.status != CLOSED),
+        "open_items": open_count,
         "hit_count": total,
         "item_count": need,
         "buckets": buckets,
         "headline": (
-            f"扫描 {sum(1 for i in _ITEMS.values() if i.status != CLOSED)} 件在办事项，"
+            f"扫描 {open_count} 件在办事项，"
             f"{need} 件需要催办。"
         ),
     }
