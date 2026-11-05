@@ -5506,7 +5506,7 @@ function renderLoginModal(preselected) {
       <select id="lgPerson" class="set-input">${opts}</select>
     </div>
     <div class="lg-sec">
-      <label class="set-l"><b>口令</b><span>默认口令 ocgov2026，登录后建议在数据与存储里修改。</span></label>
+      <label class="set-l"><b>口令</b><span>口令由服务端配置：<code>OCGOV_PASSWORD</code> 环境变量，或首次启动时控制台打印的一次性口令。代码里没有内置口令。</span></label>
       <input type="password" id="lgPassword" class="set-input" placeholder="输入口令" autocomplete="current-password" onkeydown="if(event.key==='Enter')submitLogin()">
     </div>
     <div class="lg-err" id="lgErr" hidden></div>

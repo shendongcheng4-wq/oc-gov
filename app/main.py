@@ -102,6 +102,7 @@ import harness as harness_mod  # noqa: E402
 import auth  # noqa: E402
 import audit  # noqa: E402
 import authz  # noqa: E402
+import credentials  # noqa: E402
 import directory  # noqa: E402
 
 
@@ -1893,6 +1894,19 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8090
+
+    # 口令引导：代码里没有内置口令（仓库公开，写死的默认口令等于没有口令）。
+    # 环境变量 > 已有记录 > 全新安装随机生成一个、只在这里打印一次。
+    generated = credentials.bootstrap([p["id"] for p in people.all_people()])
+    if generated:
+        print(f"首次启动：已生成登录口令 {generated}", flush=True)
+        print(
+            "  请记下它。忘了可删除 data/credentials.json 重新生成，"
+            "或设置环境变量 OCGOV_PASSWORD 覆盖（后者会重新派生全部口令）。",
+            flush=True,
+        )
+    elif not credentials.has_records():
+        print("警告：尚无口令记录，登录会被拒绝。请检查 data/ 目录是否可写。", flush=True)
 
     # 老会话没有 owner 字段（隔离是后加的）。一次性划给默认身份，而不是当成
     # "所有人可见"——那等于隔离没做；也不是直接丢弃——用户的会话不该莫名消失。

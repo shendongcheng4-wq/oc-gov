@@ -2236,24 +2236,27 @@ def test_http(port: int | None = None) -> None:
     # （市长办身份，权限最宽），拿到 sid 后**只给需要授权的写接口**带上 ——
     # 不做全局注入：session 的优先级高于 X-Person-Id/演示身份，一旦全局带上，
     # 下面那些「换身份看不同数据」的用例就全被覆盖成市长视角了。
+    #
+    # 服务端没有内置口令（仓库公开，写死的默认口令等于没有口令），所以测试
+    # 不猜口令：只有设了 OCGOV_PASSWORD 才做登录态用例，否则退化成只验
+    # 「匿名写必须被拒」—— 那正是闸门本身该守的东西。
     sid = ""
-    try:
-        login_req = urllib.request.Request(
-            base + "/api/auth/login",
-            data=json.dumps(
-                {
-                    "person": "mayor",
-                    "password": os.environ.get("OCGOV_PASSWORD") or "ocgov2026",
-                }
-            ).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(login_req, timeout=10) as r:
-            sid = ((json.loads(r.read().decode("utf-8")).get("session") or {}).get("sid")) or ""
-        check("登录拿到 session", bool(sid), "默认口令 ocgov2026，可用 OCGOV_PASSWORD 覆盖")
-    except urllib.error.HTTPError as e:
-        check("登录拿到 session", False, f"code={e.code}")
+    pw = os.environ.get("OCGOV_PASSWORD", "").strip()
+    if not pw:
+        print("  SKIP  未设置 OCGOV_PASSWORD：登录态写接口用例跳过（匿名拒绝仍会验证）")
+    else:
+        try:
+            login_req = urllib.request.Request(
+                base + "/api/auth/login",
+                data=json.dumps({"person": "mayor", "password": pw}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(login_req, timeout=10) as r:
+                sid = ((json.loads(r.read().decode("utf-8")).get("session") or {}).get("sid")) or ""
+            check("登录拿到 session", bool(sid), "OCGOV_PASSWORD 与服务端不一致？")
+        except urllib.error.HTTPError as e:
+            check("登录拿到 session", False, f"code={e.code}")
 
     AUTH = {"Authorization": f"Bearer {sid}"} if sid else {}
 
@@ -2397,85 +2400,88 @@ def test_http(port: int | None = None) -> None:
     # 这是唯一一条会往真实台账里写东西的 HTTP 测试，所以建完必须删干净，
     # 并把「删掉了」也断言一次 —— 否则跑几次测试，会议列表里就多几场不存在的会。
     mtid, mttid = "", ""
-    before = len(get("/api/meetings").get("items") or [])
-    try:
-        req = urllib.request.Request(
-            base + "/api/ask",
-            data=json.dumps({"question": "下周三下午三点约个会，议题是接口冒烟，住建局参加"}).encode("utf-8"),
-            headers={"Content-Type": "application/json", "X-Person-Id": "mayor"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=90) as r:
-            mk = json.loads(r.read().decode("utf-8"))
-        mttid = mk.get("thread_id") or ""
-        check("POST /api/ask 命中约会议", mk.get("intent") == "meet", str(mk.get("intent")))
-        check("约会议只出草稿不建会",
-              len(get("/api/meetings").get("items") or []) == before,
-              f"{before} -> {len(get('/api/meetings').get('items') or [])}")
-
-        body = {
-            "thread_id": mttid,
-            "message_id": mk.get("message_id") or "",
-            "draft": {"title": "接口冒烟用会", "held_at": "2030-01-08 15:00",
-                      "place": "3号楼会议室", "host": "市长", "attendees": ["市住建局"]},
-        }
-        req = urllib.request.Request(
-            base + "/api/meetplan", data=json.dumps(body).encode("utf-8"),
-            headers={**AUTH, "Content-Type": "application/json", "X-Person-Id": "mayor"}, method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=15) as r:
-            ok = json.loads(r.read().decode("utf-8"))
-        mtid = (ok.get("meeting") or {}).get("id") or ""
-        check("POST /api/meetplan 建会", ok.get("ok") is True and bool(mtid), str(ok)[:90])
-        check("建会后会议列表 +1", len(ok.get("items") or []) == before + 1, str(len(ok.get("items") or [])))
-
-        with urllib.request.urlopen(urllib.request.Request(
-            base + "/api/meetplan", data=json.dumps(body).encode("utf-8"),
-            headers={**AUTH, "Content-Type": "application/json", "X-Person-Id": "mayor"}, method="POST",
-        ), timeout=15) as r:
-            dup = json.loads(r.read().decode("utf-8"))
-        check("重复确认不会建第二场",
-              dup.get("duplicate") is True and (dup.get("meeting") or {}).get("id") == mtid,
-              str(dup)[:90])
-
+    if not sid:
+        print("  SKIP  建会写接口需要登录（未设 OCGOV_PASSWORD）")
+    else:
+        before = len(get("/api/meetings").get("items") or [])
         try:
             req = urllib.request.Request(
-                base + "/api/meetplan",
-                data=json.dumps({"draft": {"held_at": "2030-01-09 09:00"}}).encode("utf-8"),
-                headers={**AUTH, "Content-Type": "application/json"}, method="POST",
+                base + "/api/ask",
+                data=json.dumps({"question": "下周三下午三点约个会，议题是接口冒烟，住建局参加"}).encode("utf-8"),
+                headers={"Content-Type": "application/json", "X-Person-Id": "mayor"},
+                method="POST",
             )
-            with urllib.request.urlopen(req, timeout=10) as r:
-                r.read()
-            check("缺议题建会返回 400", False, "居然成功了")
-        except urllib.error.HTTPError as e:
-            check("缺议题建会返回 400", e.code == 400, f"code={e.code}")
+            with urllib.request.urlopen(req, timeout=90) as r:
+                mk = json.loads(r.read().decode("utf-8"))
+            mttid = mk.get("thread_id") or ""
+            check("POST /api/ask 命中约会议", mk.get("intent") == "meet", str(mk.get("intent")))
+            check("约会议只出草稿不建会",
+                  len(get("/api/meetings").get("items") or []) == before,
+                  f"{before} -> {len(get('/api/meetings').get('items') or [])}")
 
-        th = get(f"/api/threads/{mttid}")
-        drafts = [(m.get("meta") or {}).get("meet_draft") for m in (th.get("thread") or {}).get("messages") or []]
-        drafts = [x for x in drafts if x]
-        check("回放带上已建会编号", bool(drafts) and drafts[0].get("meeting_id") == mtid,
-              str(drafts[:1])[:90])
-    except urllib.error.HTTPError as e:
-        check("/api/meetplan 可用", False, f"code={e.code}（服务跑的是旧代码？）")
-    finally:
-        if mtid:
+            body = {
+                "thread_id": mttid,
+                "message_id": mk.get("message_id") or "",
+                "draft": {"title": "接口冒烟用会", "held_at": "2030-01-08 15:00",
+                          "place": "3号楼会议室", "host": "市长", "attendees": ["市住建局"]},
+            }
+            req = urllib.request.Request(
+                base + "/api/meetplan", data=json.dumps(body).encode("utf-8"),
+                headers={**AUTH, "Content-Type": "application/json", "X-Person-Id": "mayor"}, method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=15) as r:
+                ok = json.loads(r.read().decode("utf-8"))
+            mtid = (ok.get("meeting") or {}).get("id") or ""
+            check("POST /api/meetplan 建会", ok.get("ok") is True and bool(mtid), str(ok)[:90])
+            check("建会后会议列表 +1", len(ok.get("items") or []) == before + 1, str(len(ok.get("items") or [])))
+
+            with urllib.request.urlopen(urllib.request.Request(
+                base + "/api/meetplan", data=json.dumps(body).encode("utf-8"),
+                headers={**AUTH, "Content-Type": "application/json", "X-Person-Id": "mayor"}, method="POST",
+            ), timeout=15) as r:
+                dup = json.loads(r.read().decode("utf-8"))
+            check("重复确认不会建第二场",
+                  dup.get("duplicate") is True and (dup.get("meeting") or {}).get("id") == mtid,
+                  str(dup)[:90])
+
             try:
-                with urllib.request.urlopen(urllib.request.Request(
-                    f"{base}/api/meetings/{mtid}", headers={**AUTH}, method="DELETE"), timeout=10) as r:
+                req = urllib.request.Request(
+                    base + "/api/meetplan",
+                    data=json.dumps({"draft": {"held_at": "2030-01-09 09:00"}}).encode("utf-8"),
+                    headers={**AUTH, "Content-Type": "application/json"}, method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=10) as r:
                     r.read()
-            except urllib.error.HTTPError:
-                pass
-        if mttid:
-            try:
-                with urllib.request.urlopen(urllib.request.Request(
-                    f"{base}/api/threads/{mttid}", headers={**AUTH}, method="DELETE"), timeout=10) as r:
-                    r.read()
-            except urllib.error.HTTPError:
-                pass
-        check("约会议测试自清（会 + 会话）",
-              len(get("/api/meetings").get("items") or []) == before
-              and all(t.get("id") != mttid for t in get("/api/threads").get("items") or []),
-              f"会议 {len(get('/api/meetings').get('items') or [])} vs {before}")
+                check("缺议题建会返回 400", False, "居然成功了")
+            except urllib.error.HTTPError as e:
+                check("缺议题建会返回 400", e.code == 400, f"code={e.code}")
+
+            th = get(f"/api/threads/{mttid}")
+            drafts = [(m.get("meta") or {}).get("meet_draft") for m in (th.get("thread") or {}).get("messages") or []]
+            drafts = [x for x in drafts if x]
+            check("回放带上已建会编号", bool(drafts) and drafts[0].get("meeting_id") == mtid,
+                  str(drafts[:1])[:90])
+        except urllib.error.HTTPError as e:
+            check("/api/meetplan 可用", False, f"code={e.code}（服务跑的是旧代码？）")
+        finally:
+            if mtid:
+                try:
+                    with urllib.request.urlopen(urllib.request.Request(
+                        f"{base}/api/meetings/{mtid}", headers={**AUTH}, method="DELETE"), timeout=10) as r:
+                        r.read()
+                except urllib.error.HTTPError:
+                    pass
+            if mttid:
+                try:
+                    with urllib.request.urlopen(urllib.request.Request(
+                        f"{base}/api/threads/{mttid}", headers={**AUTH}, method="DELETE"), timeout=10) as r:
+                        r.read()
+                except urllib.error.HTTPError:
+                    pass
+            check("约会议测试自清（会 + 会话）",
+                  len(get("/api/meetings").get("items") or []) == before
+                  and all(t.get("id") != mttid for t in get("/api/threads").get("items") or []),
+                  f"会议 {len(get('/api/meetings').get('items') or [])} vs {before}")
 
     models = get("/api/models")
     check("/api/models 有 resolved 列表", isinstance(models.get("resolved"), list), str(type(models.get("resolved"))))
@@ -2702,7 +2708,7 @@ def test_http(port: int | None = None) -> None:
                         "held_at": "2026-11-02",
                     }
                 ).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
+                headers={**AUTH, "Content-Type": "application/json"},
                 method="POST",
             ),
             timeout=30,
@@ -2720,7 +2726,10 @@ def test_http(port: int | None = None) -> None:
     )
     with urllib.request.urlopen(req, timeout=90) as r:
         kask = json.loads(r.read().decode("utf-8"))
-    check("POST /api/ask 事项问题走知识库", kask.get("intent") == "knowledge", str(kask.get("intent")))
+    if fixture_mid:
+        check("POST /api/ask 事项问题走知识库", kask.get("intent") == "knowledge", str(kask.get("intent")))
+    else:
+        print("  SKIP  问数走知识库用例需要先建夹具会议（未设 OCGOV_PASSWORD？）")
     check("知识库答案不带数值", not (kask.get("facts") or []), str(kask.get("facts"))[:60])
     # 这一问会在真实 data/chats.json 里建一个会话。以前没删，跑 N 次测试就攒下 N 条
     # 同名会话（「上次开会定了什么」）—— 脏数据是测试自己造的，测试就该自己清掉。
@@ -2728,7 +2737,7 @@ def test_http(port: int | None = None) -> None:
     if ktid:
         try:
             with urllib.request.urlopen(
-                urllib.request.Request(f"{base}/api/threads/{ktid}", method="DELETE"), timeout=10
+                urllib.request.Request(f"{base}/api/threads/{ktid}", headers={**AUTH}, method="DELETE"), timeout=10
             ) as r:
                 r.read()
             left = [t for t in (get("/api/threads").get("items") or []) if t.get("id") == ktid]
@@ -2740,7 +2749,7 @@ def test_http(port: int | None = None) -> None:
     if fixture_mid:
         try:
             with urllib.request.urlopen(
-                urllib.request.Request(f"{base}/api/meetings/{fixture_mid}", method="DELETE"), timeout=10
+                urllib.request.Request(f"{base}/api/meetings/{fixture_mid}", headers={**AUTH}, method="DELETE"), timeout=10
             ) as r:
                 r.read()
             still = [m for m in (get("/api/meetings").get("items") or []) if m.get("id") == fixture_mid]
@@ -2791,19 +2800,26 @@ def test_http(port: int | None = None) -> None:
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read().decode("utf-8"))
 
-    code, d = post(f"/api/oversight/{first_id}/action", {}, auth=True)
-    check("缺 action 返回 400", code == 400 and d.get("error") == "action_required", f"{code} {str(d)[:70]}")
+    # 闸门本身：不带 session 的写一律拒绝。这条不看有没有配口令，永远该成立。
+    code, d = post("/api/oversight/urge", {"ids": []})
+    check("未登录写督办被拒", code in (401, 403), f"{code} {str(d)[:70]}")
 
-    code, d = post("/api/oversight/nope-9999/action", {"action": "签收"}, auth=True)
-    check("不存在的事项流转返回 404", code == 404, f"{code} {str(d)[:70]}")
+    if sid:
+        code, d = post(f"/api/oversight/{first_id}/action", {}, auth=True)
+        check("缺 action 返回 400", code == 400 and d.get("error") == "action_required", f"{code} {str(d)[:70]}")
 
-    finished = [i for i in book["items"] if i["status"] == "已办结"]
-    if finished:
-        code, d = post(f"/api/oversight/{finished[0]['id']}/action", {"action": "催办"}, auth=True)
-        check("已办结催办返回 409", code == 409 and d.get("ok") is False, f"{code} {str(d)[:70]}")
+        code, d = post("/api/oversight/nope-9999/action", {"action": "签收"}, auth=True)
+        check("不存在的事项流转返回 404", code == 404, f"{code} {str(d)[:70]}")
 
-    code, d = post("/api/oversight/urge", {"ids": []}, auth=True)
-    check("空催办列表返回 400", code == 400, f"{code} {str(d)[:70]}")
+        finished = [i for i in book["items"] if i["status"] == "已办结"]
+        if finished:
+            code, d = post(f"/api/oversight/{finished[0]['id']}/action", {"action": "催办"}, auth=True)
+            check("已办结催办返回 409", code == 409 and d.get("ok") is False, f"{code} {str(d)[:70]}")
+
+        code, d = post("/api/oversight/urge", {"ids": []}, auth=True)
+        check("空催办列表返回 400", code == 400, f"{code} {str(d)[:70]}")
+    else:
+        print("  SKIP  督办流转/催办用例需要登录（未设 OCGOV_PASSWORD）")
 
     # 关注列表走 HTTP 写一遍。这一步打的是**服务端的真实数据**，所以还原必须
     # 精确到"和测试前完全一样"：原来没有自定义覆盖的话，写回一份等于默认值的
