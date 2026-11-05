@@ -12,9 +12,11 @@
 召唤多个专家 = 同一个问题、同一组数字，各自给一段角度不同的看法。**不做合并总结**：
 合并必须再调一次模型，而那次调用不会产生任何新信息，只多一次编数字的机会。
 
-**专家名单是可配置的。** 内置默认写在这里，持久化到 `data/experts.json`
-（启动优先读它），可在专家管理面板里增删改。用户自建的专家没有 `domain`
-字段也能正常用 —— 只是拿不到域内依据，退回「只看方向信号」。
+**专家名单是可配置的。** 每位专家是一份 Markdown 人设卡，放在项目根 `experts/<id>/expert.md`
+（frontmatter 存身份与域，正文写「看问题的方式」），可入库、可分发、业务方自己写。
+内置默认是这七位的落地文件；`data/experts.json` 是**旧格式**，仅当 `experts/` 目录
+不存在时回退读取，读到后自动迁成 MD。可在专家管理面板里增删改。用户自建的专家没有
+`domain` 字段也能正常用 —— 只是拿不到域内依据，退回「只看方向信号」。
 
 **专家读知识库，但只读自己域内的那几条。** 域写在每位专家的 `domain` 里
 （指标代码 + 责任单位），由 `core/knowledge.index(person, domain)` 收窄。
@@ -44,8 +46,17 @@ import llmclient  # noqa: E402
 # 接口的 max 和后端的截断都引用这一个常量，别在别处再写死数字。
 MAX_PER_CALL = 3
 
-# 专家名单持久化到 data/experts.json（缺省回退到下面的内置默认）。
+# 专家名单的**主存储**是项目根 experts/<id>/expert.md（可入库、可分发）。
+# data/experts.json 是旧格式：仅在 experts/ 目录不存在时回退读取，读到后自动迁成 MD。
+# 内置默认（_DEFAULT_EXPERTS）是兜底中的兜底，正常情况由上面的 MD 落地文件承担。
+EXPERTS_DIR = ROOT / "experts"
+
+# 旧格式持久化文件（遗留回退 + 迁移来源）。
 EXPERTS_FILE = ROOT / "data" / "experts.json"
+
+# 判定 frontmatter 起始：第一行是 `---` 且后面能找到闭合的 `---` 才算有 frontmatter。
+# 没有 frontmatter 的 md 读进来是空身份，会被下面当「坏专家」跳过，不至于把正文当名字。
+_FM_DELIM = "---"
 
 # 每位专家最多带几条知识库记录进 prompt。
 # 定 4 是按 token 算的：一条正文截 180 字，4 条 ≈ 720 字，加上指标信号和角色说明
@@ -175,8 +186,230 @@ def _clean_domain(raw: Any) -> dict[str, list[str]] | None:
     return {"codes": codes, "units": units}
 
 
+def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    """把 expert.md 拆成 frontmatter dict + 正文。
+
+    只认「首行 `---`、成对闭合」的 YAML 块；解析失败或没有 frontmatter 时
+    返回空 dict，正文原样返回。这里**故意不引 yaml 库**：专家卡就那七八个
+    字段，够用的子集是 id/name/avatar/brief/focus/angle 加一个 domain
+    （codes/units 两串）。引 yaml 只会多一个可选依赖，还得为它写容错。
+    """
+    stripped = text.lstrip("\ufeff").strip()
+    if not stripped.startswith(_FM_DELIM):
+        return {}, stripped
+    lines = stripped.splitlines()
+    if lines[0].strip() != _FM_DELIM:
+        return {}, stripped
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == _FM_DELIM:
+            end = i
+            break
+    if end is None:
+        return {}, stripped
+    fm: dict[str, Any] = {}
+    for raw in lines[1:end]:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        key = key.strip()
+        val = val.strip().strip("'\"").strip()
+        if not key or not val:
+            continue
+        # domain 是唯一的嵌套块，key 单独占一行、值在下面缩进的行里。
+        # 解析 YAML 流式 `[a, b]` 之外，也兼容「codes: [A, B]」这种写在一行的情况
+        # 已经在 partition 里被当成普通 key=val 处理掉了——不对，codes 本身是 key，
+        # 它在 domain 块下，会走到这里。所以这里只认非 domain 的顶层标量。
+        fm[key] = val
+    body = "\n".join(lines[end + 1 :]).strip()
+    return fm, body
+
+
+def _parse_domain_block(text: str) -> dict[str, list[str]] | None:
+    """从 expert.md 的 frontmatter 里抠 domain 块（codes / units 两个列表）。
+
+    只认 frontmatter 区（首尾 `---` 之间）里的 domain 块，支持两种写法：
+
+        domain:
+          codes: [GY_VA_GROWTH, GDP_TOTAL]
+          units: [市统计局, 市财政局]
+
+        domain:
+          codes:
+            - GY_VA_GROWTH
+            - GDP_TOTAL
+          units:
+            - 市统计局
+
+    解析失败返回 None，等价于「没绑域」，不会让整份专家卡报废。
+    """
+    if not isinstance(text, str):
+        return None
+    # 只在 frontmatter 里找 domain，正文（frontmatter 之后）绝不允许混进来。
+    fm = _frontmatter_only(text)
+    if fm is None:
+        return None
+    codes = _extract_list_item(fm, "codes")
+    units = _extract_list_item(fm, "units")
+    if not codes and not units:
+        return None
+    return {"codes": codes, "units": units}
+
+
+def _frontmatter_only(text: str) -> str | None:
+    """抽出 expert.md 的 frontmatter 区（首尾 `---` 之间，含 `---`），没有返回 None。"""
+    stripped = text.lstrip("\ufeff").strip()
+    if not stripped.startswith(_FM_DELIM):
+        return None
+    lines = stripped.splitlines()
+    if lines[0].strip() != _FM_DELIM:
+        return None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == _FM_DELIM:
+            return "\n".join(lines[: i + 1])
+    return None
+
+
+def _extract_list_item(text: str, key: str) -> list[str]:
+    """在 frontmatter 里抠 `key:` 后面跟的列表（流式或块式），去重保序。
+
+    `text` 已限定为 frontmatter 区，所以「缩进变浅」就是块式列表的边界，
+    不会再吞到正文。
+    """
+    lines = text.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith(key + ":") or s == key:
+            start = i
+            break
+    if start is None:
+        return []
+    items: list[str] = []
+    first = lines[start].split(":", 1)[1].strip() if ":" in lines[start] else ""
+    if first:
+        items.extend(_split_list_tokens(first))
+    base_indent = len(lines[start]) - len(lines[start].lstrip())
+    for line in lines[start + 1 :]:
+        s = line.strip()
+        if not s:
+            continue
+        indent = len(line) - len(line.lstrip())
+        # 缩进回到 key 同级或更浅，说明这个列表块结束了。
+        if indent <= base_indent:
+            break
+        items.extend(_split_list_tokens(s))
+    seen: set[str] = set()
+    out: list[str] = []
+    for it in items:
+        if it and it not in seen:
+            seen.add(it)
+            out.append(it)
+    return out
+
+
+def _split_list_tokens(s: str) -> list[str]:
+    """把 `[A, B]` 或 `- A` 或 `- "A B"` 拆成词条。
+
+    处理三种：流式 `[A, B]`、块式 `- A`、带引号的 `- "A B"`（单位名可能含括号、
+    逗号，得整体保留）。引号内的逗号不拆。
+    """
+    s = s.strip()
+    out: list[str] = []
+    if s.startswith("["):
+        s = s[1:]
+        if s.endswith("]"):
+            s = s[:-1]
+        # 引号内的逗号不拆：先把 "..." 里的逗号换成占位，拆完再换回来。
+        quoted = re.findall(r'"([^"]*)"', s)
+        for q in quoted:
+            s = s.replace(f'"{q}"', "\x00")
+        for part in s.split(","):
+            part = part.strip()
+            if part == "\x00":
+                out.append(quoted.pop(0) if quoted else part)
+            elif part:
+                out.append(part)
+    else:
+        s = s.lstrip("-").strip()
+        s = s.strip("'\"").strip()
+        if s:
+            out.append(s)
+    return out
+
+
+def _read_expert_md(md_path: Path) -> dict[str, Any] | None:
+    """读一份 expert.md，拼成和旧 json 条目同构的 dict；读坏/缺 id 返回 None。"""
+    try:
+        text = md_path.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return None
+    fm, body = _parse_frontmatter(text)
+    eid = str(fm.get("id") or "").strip()
+    if not eid:
+        return None
+    item = {k: str(fm.get(k) or "").strip() for k in _EXPERT_KEYS}
+    if not item["name"]:
+        item["name"] = eid
+    dom = _clean_domain(fm.get("domain")) or _parse_domain_block(text)
+    if dom:
+        item["domain"] = dom
+    # 正文作为 angle 的补充源：frontmatter 没写 angle 时，从正文「看问题的方式」
+    # 小节里取。这是给手写专家卡的兜底，让业务方只写正文也能用。
+    if not item["angle"] and body:
+        item["angle"] = _angle_from_body(body)
+    return item
+
+
+def _angle_from_body(body: str) -> str:
+    """从正文里抠「看问题的方式」小节作为 angle；没有就退回正文首段。
+
+    专家卡的正文约定有一个「## 看问题的方式」小节，里面就是这位参谋怎么判断。
+    frontmatter 有 angle 时这里用不上；没写 angle 时从这里兜底，避免空手。
+    """
+    m = re.search(r"看问题的方式\s*\n(.*)", body, flags=re.S)
+    if m:
+        seg = m.group(1).strip()
+        # 截到下一个标题为止
+        seg = re.split(r"\n\s*#", seg)[0].strip()
+        if seg:
+            return seg
+    # 没有该小节就取正文第一个非空段，掐掉标题行
+    for line in body.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            return line[:200]
+    return ""
+
+
 def _load() -> list[dict[str, Any]]:
-    """从 data/experts.json 读名单；没有或读坏就回退内置默认。"""
+    """读专家名单，优先级：experts/ 目录 → 旧 data/experts.json（自动迁移）→ 内置默认。
+
+    experts/ 目录存在且至少有一位能读出来，就以它为准；否则退回旧 json，
+    读到旧 json 就顺手把它迁成 MD（下次起目录优先，json 不再参与）。
+    json 也没有或读坏，才用内置默认。三个来源都保证「有域不丢、字段完整」。
+    """
+    # 1) 首选 experts/ 目录
+    if EXPERTS_DIR.is_dir():
+        loaded: dict[str, dict[str, Any]] = {}
+        for md in sorted(EXPERTS_DIR.glob("*/expert.md")):
+            item = _read_expert_md(md)
+            if not item:
+                continue
+            loaded.setdefault(item["id"], item)  # 同名目录只认第一个（setdefault 保序）
+        if loaded:
+            # 排序保持「内置默认的声明顺序在前，新增专家按字母序排后」。
+            # 内置顺序是有意的（总参谋打头、板块参谋按经济→项目→社会→民生→生态），
+            # 换存储层不该把它打乱；目录遍历天然是字母序，会把它洗成 eco 打头。
+            builtin_order = [e["id"] for e in _DEFAULT_EXPERTS]
+            known = [loaded.pop(eid) for eid in builtin_order if eid in loaded]
+            extra = [loaded[k] for k in sorted(loaded)]
+            return known + extra
+
+    # 2) 旧 data/experts.json（读坏或为空都继续往下）
     try:
         if EXPERTS_FILE.is_file():
             raw = json.loads(EXPERTS_FILE.read_text(encoding="utf-8"))
@@ -198,10 +431,52 @@ def _load() -> list[dict[str, Any]]:
                         item["domain"] = dom
                     out.append(item)
                 if out:
+                    _migrate_json_to_md(out)
                     return out
     except Exception:  # noqa: BLE001
         pass
     return [dict(e) for e in _DEFAULT_EXPERTS]
+
+
+def _migrate_json_to_md(items: list[dict[str, Any]]) -> None:
+    """把旧 json 名单迁成 experts/<id>/expert.md。只写不删：json 留作兜底。
+
+    迁移是「尽力而为」，任何一位写失败都不影响其余；下次 _load 只要目录里
+    至少有一位，就以目录为准。domain 是唯一要专门处理的字段（要写成 YAML 块）。
+    """
+    for e in items:
+        eid = str(e.get("id") or "").strip()
+        if not eid:
+            continue
+        lines = ["---", f"id: {eid}"]
+        for k in ("name", "avatar", "brief", "focus", "angle"):
+            v = str(e.get(k) or "").strip()
+            if v:
+                lines.append(f"{k}: {v}")
+        dom = e.get("domain")
+        if dom and (dom.get("codes") or dom.get("units")):
+            lines.append("domain:")
+            codes = dom.get("codes") or []
+            units = dom.get("units") or []
+            if codes:
+                lines.append("  codes: [" + ", ".join(str(c) for c in codes) + "]")
+            if units:
+                lines.append("  units: [" + ", ".join(str(u) for u in units) + "]")
+        lines.append("---")
+        lines.append("")
+        lines.append(f"# {e.get('name') or eid}")
+        lines.append("")
+        lines.append("## 看问题的方式")
+        lines.append("")
+        if e.get("angle"):
+            lines.append(e["angle"])
+        body = "\n".join(lines) + "\n"
+        try:
+            d = EXPERTS_DIR / eid
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "expert.md").write_text(body, encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            continue
 
 
 def all_experts() -> list[dict[str, Any]]:
@@ -216,11 +491,15 @@ def find(eid: str | None) -> dict[str, Any] | None:
 
 
 def save_experts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """整体替换名单并落盘。校验字段后写 data/experts.json，返回规范化后的名单。
+    """整体替换名单并落盘。校验字段后写 experts/<id>/expert.md，返回规范化后的名单。
 
     编辑面板只提交身份字段；同 id 已有 domain 而提交里没带，**保留原 domain** ——
     否则在面板里改一句 focus 就会把这位参谋的知识域悄悄清空，界面上一无所有
     （解读退回无依据模式），用户完全察觉不到是编辑害的。
+
+    名单里缺了谁 = 删除：把对应目录的 expert.md 移进 experts/_removed/ 留底，
+    不物理抹掉（业务方手写的内容值得留个全尸）。移不动的（跨盘/权限）退化为改名
+    `expert.md.removed`，绝不让删除失败把整个保存拖垮。
     """
     prev = {e["id"]: e for e in _load()}
     clean: list[dict[str, Any]] = []
@@ -245,14 +524,68 @@ def save_experts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if dom:
             item["domain"] = dom
         clean.append(item)
-    try:
-        EXPERTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        EXPERTS_FILE.write_text(
-            json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-    except Exception:  # noqa: BLE001
-        pass
+    _write_md(clean)
+    _remove_missing_md([e["id"] for e in clean])
     return clean
+
+
+def _write_md(clean: list[dict[str, Any]]) -> None:
+    """把规范化名单写成 experts/<id>/expert.md。复用迁移的同款落盘格式。"""
+    for e in clean:
+        eid = str(e.get("id") or "").strip()
+        if not eid:
+            continue
+        lines = ["---", f"id: {eid}"]
+        for k in ("name", "avatar", "brief", "focus", "angle"):
+            v = str(e.get(k) or "").strip()
+            if v:
+                lines.append(f"{k}: {v}")
+        dom = e.get("domain")
+        if dom and (dom.get("codes") or dom.get("units")):
+            lines.append("domain:")
+            codes = dom.get("codes") or []
+            units = dom.get("units") or []
+            if codes:
+                lines.append("  codes: [" + ", ".join(str(c) for c in codes) + "]")
+            if units:
+                lines.append("  units: [" + ", ".join(str(u) for u in units) + "]")
+        lines.append("---")
+        lines.append("")
+        lines.append(f"# {e.get('name') or eid}")
+        lines.append("")
+        lines.append("## 看问题的方式")
+        lines.append("")
+        if e.get("angle"):
+            lines.append(e["angle"])
+        body = "\n".join(lines) + "\n"
+        try:
+            d = EXPERTS_DIR / eid
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "expert.md").write_text(body, encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            continue
+
+
+def _remove_missing_md(kept_ids: list[str]) -> None:
+    """把名单里已不存在的专家目录移进 _removed/ 留底。"""
+    if not EXPERTS_DIR.is_dir():
+        return
+    kept = set(kept_ids)
+    removed_dir = EXPERTS_DIR / "_removed"
+    for d in EXPERTS_DIR.iterdir():
+        if not d.is_dir() or d.name.startswith("_") or d.name in kept:
+            continue
+        if not (d / "expert.md").is_file():
+            continue
+        try:
+            removed_dir.mkdir(parents=True, exist_ok=True)
+            d.rename(removed_dir / d.name)
+        except Exception:  # noqa: BLE001
+            # 跨盘/占用时退化为改名，绝不让删除失败拖垮保存
+            try:
+                (d / "expert.md").rename(d / "expert.md.removed")
+            except Exception:  # noqa: BLE001
+                continue
 
 
 # 落库时只保留回放要用的字段：回看历史不需要知道「是谁算的」，

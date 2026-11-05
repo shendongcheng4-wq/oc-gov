@@ -858,6 +858,83 @@ def test_experts() -> None:
     check("依据随解读一起落库", len(kept[0].get("refs") or []) == 1, str(kept[0].get("refs"))[:80])
     check("无解读时裁成空列表", ex.to_meta(None) == [] and ex.to_meta([]) == [], "")
 
+    # ---- 专家卡已是 Markdown 存储（experts/<id>/expert.md），不再是 data/experts.json ----
+    #
+    # 这几条卡的是「存储层换掉但行为不变 + 旧数据不丢」：
+    #   - 主存储是 experts/ 目录，每位一份 expert.md，可入库可分发
+    #   - 旧 data/experts.json 仍能读，且会自动迁成 MD，domain 一条不丢
+    #   - save_experts 写回 MD，删除的专家进 _removed/ 留底而非物理抹掉
+    # 用临时目录隔离，绝不动真实的 experts/。
+    import tempfile
+
+    check("专家主存储是 MD 目录", ex.EXPERTS_DIR.is_dir(), str(ex.EXPERTS_DIR))
+    md_count = len([p for p in ex.EXPERTS_DIR.glob("*/expert.md") if p.parent.name != "_removed"])
+    check("七位内置参谋都有 expert.md", md_count >= 7, f"实际 {md_count}")
+
+    # 读回的一位参谋，domain 与内置默认逐字段一致（迁移时最怕 domain 悄悄丢）
+    dflt = {e["id"]: e for e in ex._DEFAULT_EXPERTS}
+    domain_drift = [
+        eid
+        for eid, e in {x["id"]: x for x in ex.all_experts()}.items()
+        if (e.get("domain") or None) != (dflt.get(eid, {}).get("domain") or None)
+    ]
+    check("MD 读回的 domain 与内置默认一致", not domain_drift, str(domain_drift))
+
+    # 隔离环境里重放「旧 json 回退 + 自动迁移」路径
+    tmp = tempfile.mkdtemp(dir=str(ROOT / "data"))
+    orig_dir, orig_file = ex.EXPERTS_DIR, ex.EXPERTS_FILE
+    try:
+        ex.EXPERTS_DIR = Path(tmp) / "experts"
+        ex.EXPERTS_FILE = Path(tmp) / "experts.json"
+        ex.EXPERTS_FILE.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "mig",
+                        "name": "迁移参谋",
+                        "avatar": "迁",
+                        "brief": "b",
+                        "focus": "f",
+                        "angle": "a",
+                        "domain": {"codes": ["AAA"], "units": ["单位一"]},
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        mig = ex.all_experts()
+        check("旧 json 能读回", [e["id"] for e in mig] == ["mig"], str(mig))
+        check("旧 json 的 domain 不丢", mig[0].get("domain") == {"codes": ["AAA"], "units": ["单位一"]}, str(mig[0].get("domain")))
+        check("旧 json 自动迁成 MD", (ex.EXPERTS_DIR / "mig" / "expert.md").is_file(), "")
+        # 迁移后再读，目录优先于 json（json 已不再参与，结果仍一致）
+        check("迁移后目录优先且结果一致", [e["id"] for e in ex.all_experts()] == ["mig"], "")
+    finally:
+        ex.EXPERTS_DIR, ex.EXPERTS_FILE = orig_dir, orig_file
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # save_experts 写回 MD 且删除留底（隔离环境）
+    tmp2 = tempfile.mkdtemp(dir=str(ROOT / "data"))
+    orig_dir2 = ex.EXPERTS_DIR
+    try:
+        ex.EXPERTS_DIR = Path(tmp2)
+        saved = ex.save_experts(
+            [
+                {"id": "a", "name": "甲", "avatar": "甲", "brief": "b", "focus": "f", "angle": "a"},
+                {"id": "b", "name": "乙", "avatar": "乙", "brief": "b", "focus": "f", "angle": "a"},
+            ]
+        )
+        check("save 写回 MD", (ex.EXPERTS_DIR / "a" / "expert.md").is_file() and (ex.EXPERTS_DIR / "b" / "expert.md").is_file(), "")
+        # 面板只提交身份字段、不提交 domain 时，保留原 domain（这步走 _load 读回 prev）
+        saved2 = ex.save_experts([{"id": "a", "name": "甲", "avatar": "甲", "brief": "b", "focus": "f2", "angle": "a2"}])
+        check("save 缺 domain 不丢原值（此处本就无域，仅验不报错）", saved2[0]["id"] == "a", str(saved2))
+        # 删除 b：b 的目录应被移进 _removed/ 留底
+        ex.save_experts([{"id": "a", "name": "甲", "avatar": "甲", "brief": "b", "focus": "f", "angle": "a"}])
+        check("删除的专家进 _removed 留底", (ex.EXPERTS_DIR / "_removed" / "b" / "expert.md").is_file(), "")
+    finally:
+        ex.EXPERTS_DIR = orig_dir2
+        shutil.rmtree(tmp2, ignore_errors=True)
+
     # 端到端：落一轮回答后重读历史，专家解读还在（回看不该凭空少一段）
     th = chat.create("smoke-expert-meta")
     chat.append(th["id"], "assistant", "标题", meta={"expert_views": kept})
