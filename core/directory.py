@@ -86,9 +86,15 @@ def person_scope(pid: str) -> dict[str, Any]:
     输入边界清晰、可测试。
     """
     units = person_units(pid)
+    role = role_of(pid)
     return {
         "person": pid,
-        "role": role_of(pid),
+        "role": role,
         "units": units,
-        "is_citywide": len(units) == 0,  # leader 空 units = 全市
+        # 全市与否**只看角色**，不看 units 是否为空。
+        # 早先用「units 为空」推全市，是个隐式约定：给任何身份配上空 units
+        # 就等于悄悄给了他全市数据（新建身份时忘填 units 就会踩，而且不报错）。
+        # leader 的空 units 表达的是「不按单位过滤」，和「这个人没有分管单位」
+        # 是两件事，必须分开判。
+        "is_citywide": role == ROLE_LEADER,
     }

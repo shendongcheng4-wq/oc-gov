@@ -4633,10 +4633,10 @@ function renderRagPanel() {
     const name = ($("#rag_name").value || "").trim();
     if (!name) return toast("名称不能为空");
     const d = await (await fetch("/api/rag/bases", {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST", headers: authHeaders(),
       body: JSON.stringify({ name, description: ($("#rag_desc").value || "").trim() }),
     })).json();
-    if (!d.ok) return toast(d.error || "创建失败");
+    if (!d.ok) return handleWriteDeny(d);
     await loadRag();
     RAG.active = d.base;
     renderRagPanel();
@@ -4688,10 +4688,13 @@ async function renderRagBasePanel(kbId) {
       const buf = await f.arrayBuffer();
       const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
       const d = await (await fetch(`/api/rag/bases/${encodeURIComponent(kbId)}/upload`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: authHeaders(),
         body: JSON.stringify({ name: f.name, data: b64, content_type: f.type }),
       })).json();
-      toast(d.ok ? `已入库「${f.name}」` : (d.error || "上传失败"));
+      // 一批文件里第一条被拒就够了：后面几条会是同一个原因（没登录/不够级），
+      // 逐条弹对话框只会盖住第一条。
+      if (!d.ok) { handleWriteDeny(d); break; }
+      toast(`已入库「${f.name}」`);
     }
     await loadRag();
     renderRagBasePanel(kbId);
@@ -4715,8 +4718,8 @@ async function renderRagBasePanel(kbId) {
     btn.onclick = async () => {
       const id = btn.dataset.ragDelDoc;
       if (!confirm("删除这份文档？")) return;
-      const d = await (await fetch(`/api/rag/bases/${encodeURIComponent(kbId)}/doc?doc=${encodeURIComponent(id)}`, { method: "DELETE" })).json();
-      if (!d.ok) return toast(d.error || "删除失败");
+      const d = await (await fetch(`/api/rag/bases/${encodeURIComponent(kbId)}/doc?doc=${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() })).json();
+      if (!d.ok) return handleWriteDeny(d);
       await loadRag();
       renderRagBasePanel(kbId);
     };
@@ -4839,7 +4842,7 @@ function renderPluginsModal() {
       if (card) card.classList.toggle("off", !target);
       try {
         const d = await (await fetch("/api/plugins/toggle", {
-          method: "POST", headers: { "Content-Type": "application/json" },
+          method: "POST", headers: authHeaders(),
           body: JSON.stringify({ id, enabled: target }),
         })).json();
         if (!d.ok) throw new Error(d.error || "切换失败");
@@ -4948,7 +4951,7 @@ function renderExpertsModal() {
     });
     try {
       const d = await (await fetch("/api/experts", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: authHeaders(),
         body: JSON.stringify({ experts: EXPERTS_DRAFT }),
       })).json();
       if (!d.ok) throw new Error(d.error || "保存失败");
@@ -5093,11 +5096,11 @@ function bindModelPanel() {
     btn.onclick = async () => {
       const ref = btn.dataset.pick;
       const r = await fetch("/api/active-model", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: authHeaders(),
         body: JSON.stringify({ ref }),
       });
       const d = await r.json();
-      if (!d.ok) return toast(d.error || "切换失败");
+      if (!d.ok) return handleWriteDeny(d);
       await loadModels();
       renderModelPanel();
       toast(`默认模型已切换为 ${ref}`);
@@ -5115,7 +5118,7 @@ function bindModelPanel() {
       btn.disabled = true;
       try {
         const d = await (await fetch("/api/models/test", {
-          method: "POST", headers: { "Content-Type": "application/json" },
+          method: "POST", headers: authHeaders(),
           body: JSON.stringify({ id, model: model.id }),
         })).json();
         out.innerHTML = d.ok
@@ -5133,7 +5136,7 @@ function bindModelPanel() {
       const out = box.querySelector(`[data-out="${id}"]`);
       out.innerHTML = `<div class="test-out">正在拉取远端模型列表…</div>`;
       const d = await (await fetch("/api/models/fetch", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: authHeaders(),
         body: JSON.stringify({ id }),
       })).json();
       if (!d.ok) { out.innerHTML = `<div class="test-out bad">失败：${esc(d.error)}</div>`; return; }
@@ -5142,10 +5145,11 @@ function bindModelPanel() {
       const prov = (MODELS.providers || []).find((p) => p.id === id);
       const merged = [...(prov.models || [])];
       items.forEach((it) => { if (!merged.some((m) => m.id === it.id)) merged.push({ id: it.id, name: it.name, enabled: true, chat: true }); });
-      await fetch("/api/models", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+      const wr = await (await fetch("/api/models", {
+        method: "POST", headers: authHeaders(),
         body: JSON.stringify({ id, name: prov.name, base_url: prov.base_url, models: merged }),
-      });
+      })).json();
+      if (!wr.ok) return handleWriteDeny(wr);
       await loadModels();
       renderModelPanel();
       toast(`已合并 ${items.length} 个远端模型，点模型名可设为默认`);
@@ -5157,10 +5161,11 @@ function bindModelPanel() {
       const id = btn.dataset.del;
       const prov = (MODELS.providers || []).find((p) => p.id === id);
       if (!confirm(`删除 provider「${prov ? prov.name : id}」？\n指向它的会话模型会被置空。`)) return;
-      const d = await (await fetch(`/api/models/${id}`, { method: "DELETE" })).json();
+      const d = await (await fetch(`/api/models/${id}`, { method: "DELETE", headers: authHeaders() })).json();
+      if (!d.ok) return handleWriteDeny(d);
       await loadModels();
       renderModelPanel();
-      toast(d.ok ? `已删除，重置了 ${d.threads_reset || 0} 个会话的模型绑定` : (d.error || "删除失败"));
+      toast(`已删除，重置了 ${d.threads_reset || 0} 个会话的模型绑定`);
     };
   });
 
@@ -5181,10 +5186,10 @@ function bindModelPanel() {
       }
       if (!name || !base || !key || !models.length) return toast("名称、Base URL、Key、至少一个模型都要填");
       const d = await (await fetch("/api/models", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: authHeaders(),
         body: JSON.stringify({ name, base_url: base, api_key: key, llamacpp, models: models.map((id) => ({ id, context_window: win })) }),
       })).json();
-      if (!d.ok) return toast(d.error || "保存失败");
+      if (!d.ok) return handleWriteDeny(d);
       await loadModels();
       renderModelPanel();
       toast(`已保存 ${name}，点模型名设为默认`);
@@ -6417,10 +6422,13 @@ $("#ntDispatch").onclick = async () => {
   try {
     const res = await fetch("/api/notify/dispatch", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      headers: authHeaders(),
       body: "{}",
     });
     const d = await res.json();
+    // 群发是市领导动作：未登录会 403 并弹登录框，登录了但不够级就只说原因。
+    // 不能直接读 d.message —— 拒绝响应里没有这个字段，会显示成「没有需要外发的提醒」。
+    if (!d.ok) return handleWriteDeny(d);
     toast(d.message || (d.sent ? `已发送 ${d.sent} 条` : "没有需要外发的提醒"));
     await loadNotify({ silent: true });
   } catch (e) {
@@ -6452,11 +6460,12 @@ $("#ntChanBody").onclick = async (e) => {
     try {
       const res = await fetch("/api/notify/test", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+        headers: authHeaders(),
         body: JSON.stringify({ channel: kind }),
       });
       const d = await res.json();
-      toast(d.message || (d.ok ? "测试消息已发送" : "发送失败"));
+      if (!d.ok) return handleWriteDeny(d);
+      toast(d.message || "测试消息已发送");
       await loadNotify({ silent: true });
       $("#ntFoldChan").open = true;
     } finally {
@@ -7334,10 +7343,11 @@ function bindMeetDetail() {
       try {
         const r = await fetch(`/api/meetings/${encodeURIComponent(MT.current)}/items/${encodeURIComponent(iid)}`, {
           method: "PATCH",
-          headers: { "Content-Type": "application/json" },
+          headers: authHeaders(),
           body: JSON.stringify({ [el.dataset.f]: el.value }),
         });
         const d = await r.json();
+        if (r.status === 403) return handleWriteDeny(d);
         if (!d.ok) { toast("保存失败：" + (d.error || "未知错误")); return; }
         const m = await (await fetch("/api/meetings/" + encodeURIComponent(MT.current))).json();
         if (m.ok) renderMeetDetail(m.meeting);
@@ -7354,8 +7364,9 @@ function bindMeetDetail() {
     parseBtn.disabled = true;
     parseBtn.textContent = "解析中…";
     try {
-      const r = await fetch(`/api/meetings/${encodeURIComponent(MT.current)}/parse`, { method: "POST" });
+      const r = await fetch(`/api/meetings/${encodeURIComponent(MT.current)}/parse`, { method: "POST", headers: authHeaders() });
       const d = await r.json();
+      if (r.status === 403) return handleWriteDeny(d);
       if (!d.ok) { toast("解析失败：" + (d.detail || d.error || "未知错误")); return; }
       MT.sel = new Set();
       renderMeetDetail(d.meeting);
@@ -7372,7 +7383,8 @@ function bindMeetDetail() {
   const delBtn = $("#mtDel");
   if (delBtn) delBtn.onclick = async () => {
     if (!confirm("删除这份会议记录？（已落督办的事项不会被删）")) return;
-    await fetch("/api/meetings/" + encodeURIComponent(MT.current), { method: "DELETE" });
+    const d = await (await fetch("/api/meetings/" + encodeURIComponent(MT.current), { method: "DELETE", headers: authHeaders() })).json();
+    if (!d.ok) return handleWriteDeny(d);
     MT.current = null;
     await refreshMeetList();
     newMeetingForm();

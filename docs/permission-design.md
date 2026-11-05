@@ -68,7 +68,10 @@
 ```
 read:  metric      → leader 全量；dept-leader 分管；bureau 本单位（协办也算）
 read:  oversight   → 按 assignee ∪ co_assignees 过滤
-write: oversight   → 建档/催办：leader、dept-leader(分管内)；签收/进展/办结：bureau(本单位主办)
+write: oversight   → 签收/进展/办结：资源单位在分管范围内（bureau=本单位，dept-leader=分管内）
+                     建档/催办/退回：leader、dept-leader(分管内)；确认办结：仅 leader
+                     （催办与退回都按「涉及单位」判 —— 退回原本只判角色，会出现
+                       「看不到这条却退得回」的倒挂，实现里已按同口径收口）
 write: meeting     → 仅 leader（会议落库是市级动作）
 read:  knowledge   → 按 domain.units 收窄（现有 experts 逻辑迁移过来）
 ```
@@ -113,6 +116,11 @@ access.denied                                  # 越权被拒（记录攻击尝�
 | 4 | `core/audit.py`：append-only JSONL + 点分层词表 | `audit.py` 表结构 |
 | 5 | `main.py` 写入口加鉴权闸门；`_person()` 改读 session | — |
 | 6 | 前端身份切换改「后端返回的角色」，写按钮按授权结果禁用 | — |
+
+**步 5 的最终形态（2026-11 补齐）**：不是逐个 handler 想起来加 `_require`，而是
+`main.py` 顶部的 `WRITE_POLICY` 登记表 + `_gate_write()`，三个写方法在路由前各查一次，
+**表外一律 403**。第一轮只覆盖了督办和会议，第二轮补成「配置类锁市领导、资料库写要登录、
+个人数据保演示态」。`tests/smoke.py::test_write_policy` 扫源码里的路由字面量，漏登记即红。
 
 **第一批（最小可用闭环，先堵最危险的口子）**：步 0 + 2 + 3 + 4 + 5 —— 交付「写台账真的被拦住了、且留了审计」的硬结果。
 **第二批**：三档可见范围的读收窄全量铺开 + 前端改造（步 1 完整 + 6）。

@@ -2267,6 +2267,140 @@ def test_frontend_theme() -> None:
     check("日程按钮已接到弹窗", 'tool.dataset.tool === "cal"' in html, "")
 
 
+def test_write_policy() -> None:
+    """写接口登记表 = 闸门的唯一依据，所以它必须覆盖所有写路由。
+
+    这条防的不是「今天漏了哪个口子」，而是**明天新加接口忘了登记**。
+    忘了登记其实不会出事（运行时会 403），但会有人为了「让它能用」把闸门
+    注释掉。这里把漏登记变成红灯，让那句注释显得没必要。
+    """
+    print("[14b] 写接口闸门登记表")
+    import main as srv  # 延迟导入：这个模块会拉起一堆 core 依赖，别拖慢前面的用例
+
+    src = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+
+    def method_body(name: str) -> str:
+        start = src.index(f"    def do_{name}(self)")
+        nxt = src.find("\n    def ", start + 10)
+        return src[start : nxt if nxt != -1 else len(src)]
+
+    patterns = [row[1] for row in srv.WRITE_POLICY]
+    missing: list[str] = []
+    for method in ("POST", "PATCH", "DELETE"):
+        chunk = method_body(method)
+        # 静态路由：if path == "/api/xxx"
+        for p in sorted(set(re.findall(r'path == "(/api/[^"]*)"', chunk))):
+            if not srv._match_policy(method, p)[0]:
+                missing.append(f"{method} {p}")
+        # 动态路由（_parts/_tail）：整族至少要有登记项，否则等于整族没登记
+        for fam in sorted(set(re.findall(r'_(?:parts|tail)\(path, "(/api/[^"]*)"', chunk))):
+            if not any(p.startswith(fam.rstrip("/") + "/") for p in patterns):
+                missing.append(f"{method} {fam}*")
+
+    check("每个写路由都登记进闸门表", not missing, "漏登记：" + "、".join(missing))
+
+    # 演示态的四条命脉必须是 PUBLIC：这些被收紧成「要登录」，页面打开就不能用，
+    # 而这类回归不会有任何报错，只会让人以为「坏了」。
+    demo = [("POST", "/api/ask"), ("POST", "/api/ask/stream"), ("POST", "/api/threads"),
+            ("POST", "/api/workspace/watch"), ("POST", "/api/saved")]
+    bad = [f"{m} {p}" for m, p in demo if srv._match_policy(m, p) != (True, None)]
+    check("演示态入口保持匿名可用", not bad, "、".join(bad))
+
+    # 配置类必须锁到市领导（不是「登录就行」）
+    locked = ["/api/models", "/api/active-model", "/api/experts",
+              "/api/plugins/toggle", "/api/notify/dispatch"]
+    unlocked = [p for p in locked if srv._match_policy("POST", p)[1] not in (
+        srv.authz.CONFIG_MODEL, srv.authz.CONFIG_EXPERT,
+        srv.authz.CONFIG_PLUGIN, srv.authz.NOTIFY_DISPATCH,
+    )]
+    check("配置类锁到市领导", not unlocked, "、".join(unlocked))
+
+    # 判定本身：bureau 改不了配置，但能写资料库（共享库登录即可）
+    bureau = {"person": "bureau", "role": "bureau", "units": ("住建局",)}
+    denied = [a for a in (srv.authz.CONFIG_MODEL, srv.authz.CONFIG_EXPERT,
+                          srv.authz.CONFIG_PLUGIN, srv.authz.NOTIFY_DISPATCH,
+                          srv.authz.MEETING_EDIT) if srv.authz.can(bureau, a)[0]]
+    check("bureau 改不了全局配置", not denied, "、".join(denied))
+    check("bureau 能写共享资料库", srv.authz.can(bureau, srv.authz.KNOWLEDGE_WRITE)[0], "")
+    check("匿名过不了身份闸门", not srv.authz.can({}, srv.authz.GATE_SESSION)[0], "")
+
+
+def test_authz_scope() -> None:
+    """授权判定的两条边界：全市身份怎么认、退回判不判单位。
+
+    这两处原来都「比该有的宽」——不报错、不留痕，只有真越权时才看得出来。
+    所以拿测试钉住，而不是靠代码里那句注释。
+    """
+    print("[14c] 授权边界（全市身份 / 退回单位）")
+    import authz
+    import directory
+    import people
+
+    # ── 1. 全市不全市，看角色，不看 units 空不空 ──
+    real_find = people.find
+    probe = {
+        "id": "_probe",
+        "name": "探针",
+        "avatar": "探",
+        "post": "局长",
+        "scope": "测试",
+        "note": "测试用，不在预设名单里",
+        "units": [],
+    }
+
+    def patched(pid):
+        if pid == "_probe":
+            return dict(probe)
+        return real_find(pid)
+
+    try:
+        people.find = patched
+        # 非 leader + 空 units：不能因为「没填单位」就变成全市。
+        # role_of 对未登记 id 回落 bureau，正好是这条边界。
+        sc = directory.person_scope("_probe")
+        check("空 units 的非 leader 不是全市", sc["is_citywide"] is False, str(sc))
+        check(
+            "空 units 的非 leader 读不到全市督办",
+            not authz.can(sc, authz.READ_OVERSIGHT, {"units": ("市财政局",)})[0],
+            "",
+        )
+
+        # 反向：真市长的空 units 仍然是全市。防止「修成恒 False」也算修好。
+        mayor = directory.person_scope("mayor")
+        check("市长的空 units 仍是全市", mayor["is_citywide"] is True, str(mayor))
+        check(
+            "市长读得到任意单位",
+            authz.can(mayor, authz.READ_OVERSIGHT, {"units": ("市财政局",)})[0],
+            "",
+        )
+
+        # 判据只看角色：leader 配了分管单位，他还是全市
+        directory.PERSON_ROLE["_probe"] = directory.ROLE_LEADER
+        probe["units"] = ["市财政局"]
+        sc2 = directory.person_scope("_probe")
+        check("leader 有分管单位也是全市", sc2["is_citywide"] is True, str(sc2))
+    finally:
+        people.find = real_find
+        directory.PERSON_ROLE.pop("_probe", None)
+
+    # ── 2. 退回要判单位（原来只判角色：常务能退环保局的单，他连看都看不到） ──
+    vmayor = directory.person_scope("vmayor")
+    ok, why = authz.can(vmayor, authz.OVERSIGHT_REJECT, {"units": ("市住建局",)})
+    check("分管领导能退回分管单位事项", ok is True, why)
+    ok, why = authz.can(vmayor, authz.OVERSIGHT_REJECT, {"units": ("市生态环境局",)})
+    check("分管领导不能退回非分管单位事项", ok is False and "分管" in why, f"{ok} {why}")
+    ok, why = authz.can(vmayor, authz.OVERSIGHT_REJECT, {"units": ()})
+    check("退回缺少责任单位时不放行", ok is False and "责任单位" in why, f"{ok} {why}")
+
+    bureau = directory.person_scope("bureau")
+    ok, _ = authz.can(bureau, authz.OVERSIGHT_REJECT, {"units": ("市生态环境局",)})
+    check("局长不能退回（角色不够）", ok is False, "")
+
+    ok, _ = authz.can(directory.person_scope("mayor"), authz.OVERSIGHT_REJECT,
+                      {"units": ("市财政局",)})
+    check("市领导能退回任意单位", ok is True, "")
+
+
 def test_http(port: int | None = None) -> None:
     port = port or int(os.environ.get("OCGOV_PORT") or 8090)
     print(f"[15] HTTP 接口（127.0.0.1:{port}，未启动则跳过）")
@@ -2429,23 +2563,47 @@ def test_http(port: int | None = None) -> None:
             check("已读状态跑完还原", again.get("unread") == ntb.get("unread"),
                   f"{ntb.get('unread')} -> {again.get('unread')}")
 
-        req = urllib.request.Request(
-            base + "/api/notify/dispatch",
-            data=b"{}",
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=10) as r:
-            dp = json.loads(r.read().decode("utf-8"))
-        check("巡检接口可用", dp.get("ok") is True and ("skipped" in dp or dp.get("sent", 0) >= 0), str(dp)[:90])
-        # 这条走的是真实服务，用的是服务进程的时钟，改不了它的 now：
-        # 夜里跑会命中默认静默时段（22:00–07:00），skipped 是 quiet_hours。
-        # 两者都表示「一条都没发出去」，断言就问这件事，别绑死其中一个原因。
-        check(
-            "未配通道时巡检不假装发送",
-            dp.get("sent", 0) == 0 and dp.get("skipped") in ("no_channel", "quiet_hours"),
-            str(dp)[:90],
-        )
+        # 巡检 = 群发动作，闸门锁到市领导。未登录必须被拒（这条永远该成立）；
+        # 登录后才验「没配通道不假装发送」。
+        try:
+            req = urllib.request.Request(
+                base + "/api/notify/dispatch",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as r:
+                anon = json.loads(r.read().decode("utf-8"))
+            check("未登录不能触发群发", False, f"居然返回 200：{str(anon)[:80]}")
+        except urllib.error.HTTPError as e:
+            body = {}
+            try:
+                body = json.loads(e.read().decode("utf-8"))
+            except Exception:  # noqa: BLE001
+                pass
+            check("未登录不能触发群发", e.code == 403 and body.get("code") == "write_denied",
+                  f"{e.code} {str(body)[:70]}")
+
+        if not sid:
+            print("  SKIP  巡检发送用例需要登录（未设 OCGOV_PASSWORD）")
+        else:
+            req = urllib.request.Request(
+                base + "/api/notify/dispatch",
+                data=b"{}",
+                headers={**AUTH, "Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as r:
+                dp = json.loads(r.read().decode("utf-8"))
+            check("巡检接口可用", dp.get("ok") is True and ("skipped" in dp or dp.get("sent", 0) >= 0), str(dp)[:90])
+            # 这条走的是真实服务，用的是服务进程的时钟，改不了它的 now：
+            # 夜里跑会命中默认静默时段（22:00–07:00），skipped 是 quiet_hours。
+            # 两者都表示「一条都没发出去」，断言就问这件事，别绑死其中一个原因。
+            check(
+                "未配通道时巡检不假装发送",
+                dp.get("sent", 0) == 0 and dp.get("skipped") in ("no_channel", "quiet_hours"),
+                str(dp)[:90],
+            )
     except urllib.error.HTTPError as e:
         check("/api/notify 可读", False, f"code={e.code}（服务跑的是旧代码？）")
 
@@ -2864,6 +3022,65 @@ def test_http(port: int | None = None) -> None:
     # 闸门本身：不带 session 的写一律拒绝。这条不看有没有配口令，永远该成立。
     code, d = post("/api/oversight/urge", {"ids": []})
     check("未登录写督办被拒", code in (401, 403), f"{code} {str(d)[:70]}")
+
+    # ---- 写接口总闸门 ----
+    # 1) 表外一律拒绝：这是「默认拒绝」机制本身，比逐个接口补 _require 可靠 ——
+    #    以后新加写接口忘了登记，得到的是被拒，而不是裸奔。
+    code, d = post("/api/definitely-not-a-write-endpoint", {})
+    check("未登记的写接口一律 403",
+          code == 403 and d.get("code") == "write_unregistered", f"{code} {str(d)[:70]}")
+
+    # 2) 配置类口子以前是裸的：匿名就能改模型（含 api_key）、改专家名单、切插件。
+    #    这里用的载荷都「本来就该 400/404」——万一闸门被摘掉，测试报的是状态码
+    #    不符，而不是真的往真实配置里塞一条假 provider / 清空专家名单。
+    for path, payload in (
+        ("/api/active-model", {"ref": ""}),                              # 本该 400
+        ("/api/plugins/toggle", {"id": "not-installed-xyz", "enabled": True}),  # 本该 404
+        ("/api/rag/bases", {"name": ""}),                                # 本该 400
+        ("/api/experts", {"experts": "not-a-list"}),                     # 本该 400
+    ):
+        code, d = post(path, payload)
+        check(f"匿名写 {path} 被拒",
+              code == 403 and d.get("code") == "write_denied", f"{code} {str(d)[:60]}")
+
+    if sid:
+        # 3) 同一条路径，市领导过闸门（停在 handler 的入参校验上，不写盘）。
+        code, d = post("/api/active-model", {"ref": ""}, auth=True)
+        check("市领导过得了配置类闸门",
+              code == 400 and d.get("error") == "ref_required", f"{code} {str(d)[:60]}")
+
+        # 4) 登录了但不够级：必须是 403 + 说明原因，而不是「未登录」——
+        #    两者都 403，区别全在文案，前端据此决定弹登录框还是弹提示。
+        bsid = ""
+        try:
+            breq = urllib.request.Request(
+                base + "/api/auth/login",
+                data=json.dumps({"person": "bureau", "password": pw}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(breq, timeout=10) as r:
+                bsid = ((json.loads(r.read().decode("utf-8")).get("session") or {}).get("sid")) or ""
+        except urllib.error.HTTPError:
+            bsid = ""
+        if not bsid:
+            print("  SKIP  越权用例需要能登录 bureau 身份")
+        else:
+            try:
+                req = urllib.request.Request(
+                    base + "/api/active-model",
+                    data=json.dumps({"ref": ""}).encode("utf-8"),
+                    headers={"Authorization": f"Bearer {bsid}", "Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    code, d = r.status, json.loads(r.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                code, d = e.code, json.loads(e.read().decode("utf-8"))
+            check("bureau 改配置被拒且说的是越权",
+                  code == 403 and "市领导" in (d.get("error") or ""), f"{code} {str(d)[:60]}")
+    else:
+        print("  SKIP  配置类闸门的登录态用例需要 OCGOV_PASSWORD")
 
     if sid:
         code, d = post(f"/api/oversight/{first_id}/action", {}, auth=True)
@@ -3377,6 +3594,8 @@ def main() -> int:
     test_frontend_sidebar()
     test_frontend_thread_switch()
     test_frontend_live()
+    test_write_policy()
+    test_authz_scope()
     test_http()
     print()
     if FAILS:

@@ -45,6 +45,39 @@ OVERSIGHT_CONFIRM = "oversight.confirm"    # 确认办结（市级收口）
 OVERSIGHT_REJECT = "oversight.reject"      # 退回
 OVERSIGHT_URGE = "oversight.urge"         # 催办
 MEETING_COMMIT = "meeting.commit"          # 会议落库
+MEETING_EDIT = "meeting.edit"              # 删会议、改议定事项（会进日程/提醒，市级动作）
+
+# 配置类：改一次影响所有人，不是「某个单位的数据」。
+# 判定的输入只有角色，不看 units —— 单位口径对这些动作没有意义。
+CONFIG_MODEL = "config.model"              # 模型供应商 / 当前模型 / 连通性探测
+CONFIG_EXPERT = "config.expert"            # 专家名单
+CONFIG_PLUGIN = "config.plugin"            # 插件开关
+NOTIFY_DISPATCH = "notify.dispatch"        # 群发巡检 / 通道测试（真的会往外发消息）
+KNOWLEDGE_WRITE = "knowledge.write"        # 共享资料库：建库 / 上传 / 删
+
+# 身份闸门：只回答「有没有登录」，不回答「能不能动这一条」。
+# 用于那些行级判定必须看请求体（资源单位）的动作 —— 闸门拿不到 units，
+# 业务层 _require 拿到后还要再判一次。
+GATE_SESSION = "gate.session"
+
+# 拒绝原因里的中文动作名。写在这里而不是拼在 message 里，是为了让
+# 「改模型配置需要市领导」这句话只有一份。
+_ACTION_LABEL: dict[str, str] = {
+    CONFIG_MODEL: "改模型配置",
+    CONFIG_EXPERT: "改专家名单",
+    CONFIG_PLUGIN: "改插件开关",
+    NOTIFY_DISPATCH: "群发提醒",
+    MEETING_EDIT: "改会议记录",
+}
+
+# 只认角色的动作：市领导独占。
+_LEADER_ONLY: tuple[str, ...] = (
+    CONFIG_MODEL,
+    CONFIG_EXPERT,
+    CONFIG_PLUGIN,
+    NOTIFY_DISPATCH,
+    MEETING_EDIT,
+)
 
 # 动作 → 它对应的督办流转 action（oversight.advance 的 action 名）。
 # 用于把 authz 的授权结果和 oversight 的动作名对上。
@@ -142,10 +175,17 @@ def can(
         return False, "确认办结需要市领导。"
 
     if action == OVERSIGHT_REJECT:
-        # 退回是审方动作：领导（市领导 + 分管领导）可退回。
-        if _role_ok(scope, directory.ROLE_DEPT_LEADER):
+        # 退回是审方动作：领导（市领导 + 分管领导）可退回，但**只能退自己
+        # 分管单位的事项** —— 和签收/催办同口径。早先这里只判角色不判单位，
+        # 结果是常务副市长能退回环保局的办结单（他连看都看不到那一条），
+        # 权限比"看得到才退得回"还宽，属于逻辑倒挂。
+        if not _role_ok(scope, directory.ROLE_DEPT_LEADER):
+            return False, "退回需要领导。"
+        if not units:
+            return False, "事项缺少责任单位，无法判定退回权限。"
+        if _unit_in_scope(scope, units):
             return True, ""
-        return False, "退回需要领导。"
+        return False, "不能退回非分管单位的事项。"
 
     if action == OVERSIGHT_URGE:
         # 催办：领导可催（全市/分管），局长只能催自己单位。
@@ -158,6 +198,28 @@ def can(
         if _role_ok(scope, directory.ROLE_LEADER):
             return True, ""
         return False, "会议落库需要市领导。"
+
+    # ── 配置类：不分单位，只看角色 ──
+    if action in _LEADER_ONLY:
+        # 这些动作改的是全局共享状态（模型与 api_key、专家名单、插件开关、
+        # 群发通道、会议主档）。给分管领导或局长开这个口子没有正当场景：
+        # 谁能改 api_key，谁就能把所有人的提问导到自己的服务器上。
+        if _role_ok(scope, directory.ROLE_LEADER):
+            return True, ""
+        return False, f"{_ACTION_LABEL.get(action, action)}需要市领导。"
+
+    if action == KNOWLEDGE_WRITE:
+        # 共享资料库：登录即可写，匿名不行。这里不按单位判 —— 库是所有人共用的，
+        # 没有「这个单位的库」这种切法，硬切只会让人传完看不到自己传的东西。
+        if _role_ok(scope, directory.ROLE_BUREAU):
+            return True, ""
+        return False, "资料库写入需要登录。"
+
+    if action == GATE_SESSION:
+        # 身份闸门：有角色就放行。行级判定不在这里做（闸门看不到 units）。
+        if _role_ok(scope, directory.ROLE_BUREAU):
+            return True, ""
+        return False, "未登录：请先在右上角登录身份。"
 
     # 未知动作：显式拒绝（对齐 Octop `user_has_permission` 对未知 key 返回 False）。
     return False, f"未注册的动作：{action}。"

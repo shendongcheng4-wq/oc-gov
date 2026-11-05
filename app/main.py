@@ -354,6 +354,81 @@ class _TooBig(Exception):
         super().__init__(f"body 超过 {limit} 字节")
 
 
+# ── 写接口登记表（(方法, 路径正则, 动作)）────────────────────────────────
+# 为什么要有这张表：do_POST/do_PATCH/do_DELETE 是靠一串 if 路由的。闸门如果
+# 也写成「想起来就在 handler 里调一次 _require」，那新加接口忘了调 = 默认
+# 可匿名调用 —— 这正是这张表出现之前的样子（11 个写口裸着）。这里反过来：
+# **表里没登记的写路径一律 403**，忘了登记得到的是「被拒」，不是「裸奔」。
+#
+# 第三列三档：
+#   None                → 演示态放行。不登录也能用：问数、会话、工作台、日程、
+#                         材料装配、文件解析。这是「双击打开就能演示」的底线，
+#                         写死在这个白名单里，不靠默认值。
+#   authz.GATE_SESSION  → 只要求登录。行级权限业务层 _require 再判一次 ——
+#                         「能登录」不等于「能签收某个单位的事项」。
+#   <动作名>            → 交给 authz.can()：配置类=市领导，资料库写=登录即可。
+#
+# 路径按 re.fullmatch 匹配，末尾斜杠会被规范化掉（/api/models/ 等同 /api/models）。
+WRITE_POLICY: tuple[tuple[str, str, str | None], ...] = (
+    # ── 演示态放行（PUBLIC）──
+    ("POST", r"/api/auth/login", None),          # 登录自己当然不能要求先登录
+    ("POST", r"/api/auth/logout", None),         # 幂等，且过期 sid 也要能退
+    ("POST", r"/api/attachments/parse", None),   # 纯解析，不落盘
+    ("POST", r"/api/ask", None),
+    ("POST", r"/api/ask/stream", None),
+    ("POST", r"/api/ask/cancel", None),          # handler 内按 turn 归属自查
+    ("POST", r"/api/schedule/brief", None),
+    ("POST", r"/api/briefdoc", None),
+    ("POST", r"/api/threads", None),
+    ("POST", r"/api/workspace/(watch|follow|layout|feed-seen)", None),
+    ("POST", r"/api/saved", None),
+    ("POST", r"/api/notify/read", None),
+    ("PATCH", r"/api/threads/[^/]+", None),      # handler 内按 owner 过滤
+    ("DELETE", r"/api/threads/[^/]+", None),
+
+    # ── 办公室务：登录 + 行级判定 ──
+    ("POST", r"/api/oversight", authz.GATE_SESSION),
+    ("POST", r"/api/oversight/urge", authz.GATE_SESSION),
+    ("POST", r"/api/oversight/[^/]+/action", authz.GATE_SESSION),
+
+    # ── 会议：市级动作，只有市领导 ──
+    ("POST", r"/api/meetings", authz.MEETING_COMMIT),
+    ("POST", r"/api/meetings/[^/]+/parse", authz.MEETING_COMMIT),
+    ("POST", r"/api/meetings/[^/]+/commit", authz.MEETING_COMMIT),
+    ("POST", r"/api/meetplan", authz.MEETING_COMMIT),
+    ("PATCH", r"/api/meetings/[^/]+/items/[^/]+", authz.MEETING_EDIT),
+    ("DELETE", r"/api/meetings/[^/]+", authz.MEETING_EDIT),
+
+    # ── 配置类：全局共享状态，只有市领导 ──
+    ("POST", r"/api/models", authz.CONFIG_MODEL),
+    ("POST", r"/api/models/test", authz.CONFIG_MODEL),
+    ("POST", r"/api/models/fetch", authz.CONFIG_MODEL),
+    ("POST", r"/api/active-model", authz.CONFIG_MODEL),
+    ("DELETE", r"/api/models/[^/]+", authz.CONFIG_MODEL),
+    ("POST", r"/api/experts", authz.CONFIG_EXPERT),
+    ("POST", r"/api/plugins/toggle", authz.CONFIG_PLUGIN),
+
+    # ── 群发：真的会往外发消息，只有市领导 ──
+    ("POST", r"/api/notify/dispatch", authz.NOTIFY_DISPATCH),
+    ("POST", r"/api/notify/test", authz.NOTIFY_DISPATCH),
+
+    # ── 共享资料库：读不限，写要登录 ──
+    ("POST", r"/api/rag/bases", authz.KNOWLEDGE_WRITE),
+    ("POST", r"/api/rag/bases/[^/]+/upload", authz.KNOWLEDGE_WRITE),
+    ("DELETE", r"/api/rag/bases/[^/]+", authz.KNOWLEDGE_WRITE),
+    ("DELETE", r"/api/rag/bases/[^/]+/doc", authz.KNOWLEDGE_WRITE),
+)
+
+
+def _match_policy(method: str, path: str) -> tuple[bool, str | None]:
+    """查表。返回 (是否已登记, 动作)。动作 None = PUBLIC。"""
+    norm = path.rstrip("/") or "/"
+    for m, pattern, action in WRITE_POLICY:
+        if m == method and re.fullmatch(pattern, norm):
+            return True, action
+    return False, None
+
+
 def _attachments(body: dict) -> list[dict]:
     """校验并裁剪前端送来的参考材料。
 
@@ -501,6 +576,42 @@ class Handler(BaseHTTPRequestHandler):
             return None, False, "未登录：请先在右上角登录身份。"
         allowed, reason = authz.can(scope, action, resource)
         return scope, allowed, reason
+
+    def _gate_write(self, method: str) -> dict | None:
+        """写接口总闸门。返回 None = 放行；返回 dict = 调用方直接 403 回出去。
+
+        这是**粗粒度**闸门：只回答「这个身份能不能碰这一类接口」。细粒度
+        （能不能动这个单位的这一条）仍在业务层用 `_require(action, resource)`
+        判 —— 闸门拿不到 units，硬把行级判定塞进来就变成两处各判一半。
+
+        三个方法都在路由之前调它一次。没登记的写路径一律拒绝：新增接口必须
+        先来这张表登记，忘了就是「被拒」，而不是「匿名可调」。
+        """
+        path = urlparse(self.path).path
+        registered, action = _match_policy(method, path)
+        if not registered:
+            audit.user_event(
+                None, "access.denied",
+                target="write.unregistered",
+                payload={"method": method, "path": path},
+            )
+            return {
+                "ok": False,
+                "error": f"未登记的写接口：{method} {path}",
+                "code": "write_unregistered",
+            }
+        if action is None:
+            return None  # 演示态放行
+
+        scope, allowed, why = self._require(action)
+        if allowed:
+            return None
+        audit.user_event(
+            scope.get("person") if scope else None, "access.denied",
+            target=action,
+            payload={"method": method, "path": path, "reason": why},
+        )
+        return {"ok": False, "error": why, "code": "write_denied", "action": action}
 
     def _read_scope(self) -> tuple[str | None, set[str] | None]:
         """读收窄用的 (pid, scope)。和写操作不同，读是「有身份就收窄、没身份保持现状」。
@@ -920,6 +1031,12 @@ class Handler(BaseHTTPRequestHandler):
                 {"ok": False, "error": "body_too_large", "limit": exc.limit}, 413
             )
 
+        # 闸门在路由之前：先判「这类接口你能不能碰」，再进具体 handler 判
+        # 「这一条你能不能动」。顺序不能反 —— 反了就是先干活再拦人。
+        denied = self._gate_write("POST")
+        if denied is not None:
+            return self._json(denied, 403)
+
         try:
             if path == "/api/auth/login":
                 return self._login(body)
@@ -1254,6 +1371,9 @@ class Handler(BaseHTTPRequestHandler):
     # ---------------- DELETE ----------------
     def do_DELETE(self) -> None:
         path = urlparse(self.path).path
+        denied = self._gate_write("DELETE")
+        if denied is not None:
+            return self._json(denied, 403)
         try:
             pid = _tail(path, "/api/models/")
             if pid:
@@ -1301,6 +1421,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_PATCH(self) -> None:
         path = urlparse(self.path).path
         body = self._body()
+        denied = self._gate_write("PATCH")
+        if denied is not None:
+            return self._json(denied, 403)
         try:
             # ---- 会话重命名 ----
             tid = _tail(path, "/api/threads/")
