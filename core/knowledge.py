@@ -98,6 +98,18 @@ MIN_SCORE = 0.18
 # （实测 0.60）留出余量。
 MIN_VECTOR_SIM = 0.55
 
+# 灰度区：余弦落在 [GRAY_VECTOR_FLOOR, MIN_VECTOR_SIM) 之间时，向量分本身
+# 分不开「真命中」和「通用词碰巧相似」——实测「上次开会定了什么」对正确的
+# 常务会议记录是 0.540，而「进出口数据」对无关的「平台数据接入」是 0.528，
+# 只差 0.012，任何单一阈值都会误伤一边。
+#
+# 但两路的强弱差得很开：前者字面覆盖率 0.50（问句的二字组确实覆盖了记录），
+# 后者只有 0.25（全落在「数据」这个通用词上）。所以在灰度区要求字面佐证，
+# 用第二个独立信号消歧，而不是继续拧一个阈值。
+# 低于 GRAY_VECTOR_FLOOR 的向量分连灰度区都不进——语义上确实不沾边。
+GRAY_VECTOR_FLOOR = 0.50
+GRAY_LEX_SUPPORT = 0.40
+
 
 def _norm(text: str) -> str:
     """去掉问句里的疑问词与虚字，留下实词。"""
@@ -566,6 +578,8 @@ def search_in(entries: list[dict[str, Any]], query: str, limit: int = 6) -> list
     - **向量可用**：用 embedding 的余弦相似度当主信号，叠 `_hard_signals`
       （术语/单位/编号/标题）。语义相似能挡住 bigram 的「通用词虚高」——问
       「进出口数据」不会再因为「数据」二字召回「停车难」「平台数据接入」。
+      余弦落在灰度区（见 `GRAY_VECTOR_FLOOR`）时要求字面佐证再放行：那个区间
+      里真命中（0.540）和通用词假命中（0.528）只差 0.012，单靠一个阈值分不开。
     - **向量不可用**：退回原 bigram 覆盖率 + 硬信号，行为与以前完全一致。
     """
     q = str(query or "").strip()
@@ -574,6 +588,13 @@ def search_in(entries: list[dict[str, Any]], query: str, limit: int = 6) -> list
     low = q.lower()
 
     vec_scores = _vector_scores(q, entries) if embedding.embedding_available() else None
+    if not vec_scores:
+        # 注意这里要退成 None 而不是留着空 dict。`_vector_scores` 在 embed() 运行期
+        # 返回空（模型文件坏了、显存不够）时给的是 {}——那不是「算出来全是 0 分」，
+        # 而是「这一路没跑通」，必须退回字面检索。否则每条都按 v=0 滤掉，
+        # 问什么都是「没有相关记录」。
+        vec_scores = None
+
     hits: list[dict[str, Any]] = []
     for entry in entries:
         hard = _hard_signals(q, entry)
@@ -581,7 +602,9 @@ def search_in(entries: list[dict[str, Any]], query: str, limit: int = 6) -> list
             # 向量分（0~1 的余弦）＋硬信号。向量分设一个下限，语义上完全不沾边的
             # 条目即使硬信号勉强命中也不放行——「数据」这种通用词不会再擦线进来。
             v = vec_scores.get(entry["id"], 0.0)
-            if v < MIN_VECTOR_SIM:
+            if v < MIN_VECTOR_SIM and not (
+                v >= GRAY_VECTOR_FLOOR and _lexical_score(q, entry) >= GRAY_LEX_SUPPORT
+            ):
                 continue
             s = round(min(v + hard, 2.0), 4)
         else:
@@ -624,7 +647,10 @@ def _vector_scores(query: str, entries: list[dict[str, Any]]) -> dict[str, float
             continue
         norm = math.sqrt(sum(x * x for x in vec))
         sim = 0.0 if norm == 0 else sum(a * b for a, b in zip(q, vec)) / (qnorm * norm)
-        out[e["id"]] = sim
+        # 必须显式转 float：embedding 返回的是 numpy.float32，sum/除法一路下来仍是
+        # np.float32，round() 也不改类型。这个数会顺着 score 进入 /api/ask 的响应，
+        # json.dumps 直接抛 TypeError —— 表现为「检索到东西就 500」。
+        out[e["id"]] = float(sim)
     return out
 
 
