@@ -593,7 +593,7 @@ def query_metric(
             return round(cur - base, 1)
         return round(cur - base, 0)
 
-    return {
+    result = {
         "ok": True,
         "code": code,
         "name": METRICS[code]["name"],
@@ -612,6 +612,27 @@ def query_metric(
         "source": source_of(code, end),
         "caveats": METRICS[code]["caveats"],
     }
+
+    # 真实值覆盖：只覆盖「当期大数」三个字段（value / yoy / source），
+    # 走势 series 保持 mock（真实年度值没有月度走势，历史曲线仍用演示序列）。
+    # 历史期次（period 明确指定且非最新）不覆盖 —— 那是演示序列的地盘。
+    try:
+        import realdata  # noqa: PLC0415
+
+        real = realdata.real_annual_value(code)
+    except Exception:
+        real = None
+    if real is not None and (period is None or end == latest_available(today)):
+        result["value"] = _round(real["value"], code)
+        result["period"] = f"{real['year']}-12"
+        result["period_label"] = f"{real['year']}年（全年）"
+        result["yoy"] = real["yoy"]
+        result["yoy_pct"] = real["yoy"]
+        result["yoy_note"] = "可比价增速"
+        rs = realdata.real_source(code)
+        if rs:
+            result["source"] = rs
+    return result
 
 
 def breakdown_metric(
