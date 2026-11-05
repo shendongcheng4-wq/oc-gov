@@ -2232,6 +2232,31 @@ def test_http(port: int | None = None) -> None:
     check("/api/health", health.get("ok") is True, str(health))
     check("健康检查报告模型状态", "planner" in health, str(health.keys()))
 
+    # 权限层上线后写接口要凭 session，匿名调用一律 401/403。这里先登录一次
+    # （市长办身份，权限最宽），拿到 sid 后**只给需要授权的写接口**带上 ——
+    # 不做全局注入：session 的优先级高于 X-Person-Id/演示身份，一旦全局带上，
+    # 下面那些「换身份看不同数据」的用例就全被覆盖成市长视角了。
+    sid = ""
+    try:
+        login_req = urllib.request.Request(
+            base + "/api/auth/login",
+            data=json.dumps(
+                {
+                    "person": "mayor",
+                    "password": os.environ.get("OCGOV_PASSWORD") or "ocgov2026",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(login_req, timeout=10) as r:
+            sid = ((json.loads(r.read().decode("utf-8")).get("session") or {}).get("sid")) or ""
+        check("登录拿到 session", bool(sid), "默认口令 ocgov2026，可用 OCGOV_PASSWORD 覆盖")
+    except urllib.error.HTTPError as e:
+        check("登录拿到 session", False, f"code={e.code}")
+
+    AUTH = {"Authorization": f"Bearer {sid}"} if sid else {}
+
     ov = get("/api/overview")
     check("/api/overview", ov.get("ok") is True and len(ov.get("kpis") or []) == 4, "")
 
@@ -2396,7 +2421,7 @@ def test_http(port: int | None = None) -> None:
         }
         req = urllib.request.Request(
             base + "/api/meetplan", data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json", "X-Person-Id": "mayor"}, method="POST",
+            headers={**AUTH, "Content-Type": "application/json", "X-Person-Id": "mayor"}, method="POST",
         )
         with urllib.request.urlopen(req, timeout=15) as r:
             ok = json.loads(r.read().decode("utf-8"))
@@ -2406,7 +2431,7 @@ def test_http(port: int | None = None) -> None:
 
         with urllib.request.urlopen(urllib.request.Request(
             base + "/api/meetplan", data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json", "X-Person-Id": "mayor"}, method="POST",
+            headers={**AUTH, "Content-Type": "application/json", "X-Person-Id": "mayor"}, method="POST",
         ), timeout=15) as r:
             dup = json.loads(r.read().decode("utf-8"))
         check("重复确认不会建第二场",
@@ -2417,7 +2442,7 @@ def test_http(port: int | None = None) -> None:
             req = urllib.request.Request(
                 base + "/api/meetplan",
                 data=json.dumps({"draft": {"held_at": "2030-01-09 09:00"}}).encode("utf-8"),
-                headers={"Content-Type": "application/json"}, method="POST",
+                headers={**AUTH, "Content-Type": "application/json"}, method="POST",
             )
             with urllib.request.urlopen(req, timeout=10) as r:
                 r.read()
@@ -2436,14 +2461,14 @@ def test_http(port: int | None = None) -> None:
         if mtid:
             try:
                 with urllib.request.urlopen(urllib.request.Request(
-                    f"{base}/api/meetings/{mtid}", method="DELETE"), timeout=10) as r:
+                    f"{base}/api/meetings/{mtid}", headers={**AUTH}, method="DELETE"), timeout=10) as r:
                     r.read()
             except urllib.error.HTTPError:
                 pass
         if mttid:
             try:
                 with urllib.request.urlopen(urllib.request.Request(
-                    f"{base}/api/threads/{mttid}", method="DELETE"), timeout=10) as r:
+                    f"{base}/api/threads/{mttid}", headers={**AUTH}, method="DELETE"), timeout=10) as r:
                     r.read()
             except urllib.error.HTTPError:
                 pass
@@ -2751,11 +2776,13 @@ def test_http(port: int | None = None) -> None:
     except urllib.error.HTTPError as e:
         check("不存在的事项返回 404", e.code == 404, f"code={e.code}")
 
-    def post(path: str, payload: dict):
+    def post(path: str, payload: dict, auth: bool = False):
+        # auth=True 用于走了权限闸门的接口（督办流转/催办）。不默认全带：
+        # session 的身份优先于请求体里的 person，会盖掉本段按身份写的用例。
         req = urllib.request.Request(
             base + path,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={**AUTH, "Content-Type": "application/json"} if auth else {"Content-Type": "application/json"},
             method="POST",
         )
         try:
@@ -2764,18 +2791,18 @@ def test_http(port: int | None = None) -> None:
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read().decode("utf-8"))
 
-    code, d = post(f"/api/oversight/{first_id}/action", {})
+    code, d = post(f"/api/oversight/{first_id}/action", {}, auth=True)
     check("缺 action 返回 400", code == 400 and d.get("error") == "action_required", f"{code} {str(d)[:70]}")
 
-    code, d = post("/api/oversight/nope-9999/action", {"action": "签收"})
+    code, d = post("/api/oversight/nope-9999/action", {"action": "签收"}, auth=True)
     check("不存在的事项流转返回 404", code == 404, f"{code} {str(d)[:70]}")
 
     finished = [i for i in book["items"] if i["status"] == "已办结"]
     if finished:
-        code, d = post(f"/api/oversight/{finished[0]['id']}/action", {"action": "催办"})
+        code, d = post(f"/api/oversight/{finished[0]['id']}/action", {"action": "催办"}, auth=True)
         check("已办结催办返回 409", code == 409 and d.get("ok") is False, f"{code} {str(d)[:70]}")
 
-    code, d = post("/api/oversight/urge", {"ids": []})
+    code, d = post("/api/oversight/urge", {"ids": []}, auth=True)
     check("空催办列表返回 400", code == 400, f"{code} {str(d)[:70]}")
 
     # 关注列表走 HTTP 写一遍。这一步打的是**服务端的真实数据**，所以还原必须
