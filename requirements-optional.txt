@@ -13,4 +13,7 @@ fastembed==0.9.1
 # octop-memory
 
 # 插件引擎（可选）：问数/知识库/资料库都没命中时兜底回答
-# octop-harness
+octop-harness==1.0.7
+# 插件自身的第三方依赖（plugins/ 下各插件 main.py 直接 import）：
+segno==1.6.6
+psutil==7.2.2
