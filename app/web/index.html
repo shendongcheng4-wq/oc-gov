@@ -8142,8 +8142,12 @@ document.addEventListener("click", (e) => {
   }
 
   if (e.target.closest("[data-ask]")) {
-    const q = e.target.closest("[data-ask]").dataset.ask;
-    $("#q").value = q;
+    const q = (e.target.closest("[data-ask]").dataset.ask || "").trim();
+    if (!q) return;
+    // 示例胶囊 = 直接发这一句，不往输入框里灌。
+    // 以前是 `#q.value = q` 然后 ask()，但 ask() 不会清输入框（清空是「发送」
+    // 按钮那条路径自己做的），于是答案都出来了，底下还挂着一模一样的一句，
+    // 看着像根本没发出去。顺带也不再覆盖用户正在打的草稿。
     return ask(q);
   }
 
@@ -8311,6 +8315,12 @@ $("#ovBack").onclick = () => { $("#ovModal").classList.remove("on"); openMeetMod
 $("#ovUrge").onclick = ovUrgeBatch;
 $("#ovModal").onclick = (e) => { if (e.target.id === "ovModal") $("#ovModal").classList.remove("on"); };
 $("#mtNew").onclick = newMeetingForm;
+// 会议列表点击：refreshMeetList() 每次整体重绘 #mtList，必须用事件委托绑在容器上，
+// 否则重绘后每个 .mt-item 上绑的监听器都会丢
+$("#mtList").onclick = (e) => {
+  const it = e.target.closest("[data-mt]");
+  if (it && it.dataset.mt !== MT.current) selectMeeting(it.dataset.mt);
+};
 $("#modelModal").onclick = (e) => { if (e.target.id === "modelModal") closeModelModal(); };
 $("#tmClose").onclick = () => $("#themeModal").classList.remove("on");
 $("#themeModal").onclick = (e) => { if (e.target.id === "themeModal") $("#themeModal").classList.remove("on"); };
