@@ -1641,6 +1641,46 @@ def test_meetplan() -> None:
         mt_ledger.delete(mid2)
 
 
+def test_chitchat() -> None:
+    """寒暄：该认的认，不该抢的不抢，且绝不为此调模型。
+
+    最要紧的是「不抢」。「你好，9 月工业增速多少」这类混合句一旦被认成寒暄，
+    用户会拿到一段能力介绍，而他问的数一个没答 —— 界面上还一切正常，看不出错。
+    所以正反两侧都要钉，反例比正例更重要。
+    """
+    print("\n[18b] 对话里的寒暄")
+    import chitchat as cc
+
+    for q in ("你好", "您好！", "你好呀", "在吗", "你能干什么", "你会什么", "能查什么",
+              "你是谁", "你是什么模型", "谢谢", "多谢", "再见", "怎么用", "帮助"):
+        check(f"识别为寒暄：{q}", cc.wants(q) is True, f"kind={cc.kind(q)!r}")
+
+    for q in ("你好，9月工业增加值增速是多少", "你好，帮我约个会",
+              "谢谢，顺便看下12345办结率", "你能做什么分析9月工业",
+              "这个指标怎么用口径算", "帮助我查一下工业", "工业增加值是多少"):
+        check(f"不误判：{q}", cc.wants(q) is False, f"kind={cc.kind(q)!r}")
+
+    # 三件事必须同时成立：走寒暄分支、不调模型、不拒答。
+    # refused 若为 True，上层会转给 harness 兜底（main.py:_harness_fallback），
+    # 一句「你好」被插件引擎接管，属于莫名其妙。
+    import ask as ask_mod
+    r = ask_mod.ask("你好")
+    check("走寒暄分支", r.get("intent") == "chitchat", str(r.get("intent")))
+    check("不拒答", r.get("refused") is False, str(r.get("refused")))
+    check("零模型调用", (r.get("usage") or {}).get("calls") == 0, str(r.get("usage")))
+    check("给出能力说明", bool(r.get("headline")) and len(r.get("facts") or []) >= 5,
+          str(r.get("facts"))[:60])
+    check("给出来问什么的入口", len(r.get("suggestions") or []) >= 3,
+          str([s.get("name") for s in (r.get("suggestions") or [])]))
+
+    # 点了参谋也要跳过：没有指标可解读，调模型只会让本地 27B 为一句「你好」
+    # 花上 2-5 秒 × 人数。跳过必须说出来，否则看起来像功能坏了。
+    r2 = ask_mod.ask("你好", expert_ids=["economy"])
+    check("寒暄不召唤参谋", "expert_views" not in r2, str(list(r2))[:60])
+    check("跳过参谋要说明", any("参谋" in n for n in (r2.get("notes") or [])),
+          str(r2.get("notes")))
+
+
 def test_attach_entry() -> None:
     """附件：从「选文件」到「真进 prompt」的整条链路。
 
@@ -3585,6 +3625,7 @@ def main() -> int:
     test_notify()
     test_saved()
     test_meetplan()
+    test_chitchat()
     test_attach_entry()
     test_book_parse()
     test_docx_parse()

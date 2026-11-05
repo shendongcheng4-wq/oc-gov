@@ -23,6 +23,7 @@ from typing import Any
 # core/ 要进路径：专家团是 core 层模块，不是 metrics 子目录里的
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import chitchat as chitchat_mod  # noqa: E402
 import experts as experts_mod  # noqa: E402
 import knowledge as knowledge_mod
 import llm
@@ -543,8 +544,17 @@ def ask(
 
             # 专家解读放在最后：答案已经是成品，专家只能补「怎么看」，改不了任何数值。
             # 任何一位专家失败都只影响他自己那一段，不牵连答案。
+            #
+            # 寒暄那一轮没有可解读的对象：没有指标、没有数值、没有记录，
+            # 叫参谋来说什么？真调了模型，本地 27B 会为一句「你好」花上
+            # 2-5 秒 × 人数，产出还是「信息不足」。跳过就得说出来 —— 用户
+            # 明明点了参谋，一声不响地什么都不给，看起来像功能坏了。
             check()
-            if expert_ids:
+            if expert_ids and result.get("chitchat"):
+                result.setdefault("notes", []).append(
+                    "这轮没有指标或记录，参谋没有可解读的内容，所以没有调用模型。"
+                )
+            elif expert_ids:
                 result["expert_views"] = experts_mod.interpret(
                     result,
                     expert_ids,
@@ -596,6 +606,16 @@ def _ask_impl(
         person = people_mod.meta(person_id)
         draft = meetplan_mod.parse(question, today=today, person=person)
         return meetplan_mod.as_result(draft, question)
+
+    # 寒暄排在规划之前，理由和上面不同：这类话在指标字典里必然匹配不到，
+    # 走一遍模型规划只会得到一次空结果、一次白烧的本地推理（27B 要 2-5 秒），
+    # 最后仍然落到拒答 —— 用户问「你能干什么」，系统回「没有对应的指标」。
+    # 这里纯规则，不花 token，也就能在门口把话说清楚。
+    #
+    # 顺序放在 meetplan 之后：建会是有副作用的意图，不能被「你好」抢走。
+    # 两者实际互斥（`chitchat.wants` 是整句匹配），但把有动作的那个放前面更安全。
+    if chitchat_mod.wants(question):
+        return chitchat_mod.as_result(question)
 
     plan, planner, degraded = _plan_question(
         question, today, history, model_ref, known_metrics, should_stop, attachments
