@@ -406,6 +406,7 @@ WRITE_POLICY: tuple[tuple[str, str, str | None], ...] = (
     ("POST", r"/api/active-model", authz.CONFIG_MODEL),
     ("DELETE", r"/api/models/[^/]+", authz.CONFIG_MODEL),
     ("POST", r"/api/experts", authz.CONFIG_EXPERT),
+    ("POST", r"/api/plugins/call", None),        # 只读工具直调，handler 内按白名单再挡一次
     ("POST", r"/api/plugins/toggle", authz.CONFIG_PLUGIN),
 
     # ── 群发：真的会往外发消息，只有市领导 ──
@@ -1067,6 +1068,25 @@ class Handler(BaseHTTPRequestHandler):
                 request_cancel(turn_id)
                 return self._json({"ok": True})
 
+            # 直接调一个只读工具。给脚本/调试/前端按钮用。
+            # 只放行 toolhost.READONLY_TOOLS 里登记过的工具：写操作必须走各自的
+            # 写口（WRITE_POLICY + 状态机守卫），这里给的是「查」，不是「办」。
+            if path == "/api/plugins/call":
+                name = str(body.get("tool") or "").strip()
+                args = body.get("args")
+                if not name:
+                    return self._json({"ok": False, "error": "tool_required"}, 400)
+                if args is None:
+                    args = {}
+                if not isinstance(args, dict) or len(args) > 8:
+                    return self._json({"ok": False, "error": "bad_args"}, 400)
+                import toolhost as toolhost_mod  # noqa: PLC0415
+
+                person = self._person()
+                actor = str(person or "")
+                res = toolhost_mod.call_sync(name, actor=actor, **args)
+                return self._json(res, 200 if res.get("ok") else 400)
+
             if path == "/api/plugins/toggle":
                 plugin_id = str(body.get("id") or "").strip()
                 enabled = bool(body.get("enabled"))
@@ -1076,7 +1096,18 @@ class Handler(BaseHTTPRequestHandler):
                 known = {p["id"] for p in harness_mod.list_plugins()}
                 if plugin_id not in known:
                     return self._json({"ok": False, "error": "plugin_not_found"}, 404)
-                harness_mod.set_enabled(plugin_id, enabled)
+                # 底线只读工具所在的插件不可停用。这里拦的是绕过前端直接 POST 的路。
+                try:
+                    harness_mod.set_enabled(plugin_id, enabled)
+                except harness_mod.BaselineLocked:
+                    return self._json(
+                        {
+                            "ok": False,
+                            "error": "baseline_locked",
+                            "message": "该插件提供底线只读工具，不允许停用",
+                        },
+                        403,
+                    )
                 return self._json({"ok": True, "id": plugin_id, "enabled": enabled})
 
             # 专家名单整体替换（增/删/改一体）。前端把编辑后的完整名单 POST 回来，

@@ -2233,11 +2233,13 @@ def test_harness() -> None:
     if not harness.available():
         check("未装时 import_error 非空", bool(harness.import_error()), "")
 
-    # plugins 目录下的示例插件（demo-time）应能被识别为插件目录
+    # 业务插件应能被识别为插件目录。示例插件（demo-time 等）已移到
+    # plugins/_disabled/，不再断言它们存在——否则每加一次清理就红一次。
     pdir = harness.plugins_dir()
     if pdir.is_dir():
-        has_demo = (pdir / "demo-time" / "plugin.yaml").is_file()
-        check("示例插件 demo-time 存在 plugin.yaml", has_demo, "")
+        for pid in ("query-metric", "scan-oversight", "search-knowledge"):
+            has = (pdir / pid / "plugin.yaml").is_file()
+            check(f"业务插件 {pid} 存在 plugin.yaml", has, "")
 
     # 启停状态：set_enabled 落盘、list_plugins 返回 enabled、unknown 不误报
     check("set_enabled 返回布尔", isinstance(harness.set_enabled("__smoke_probe__", True), bool), "")
