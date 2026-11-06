@@ -1,0 +1,7 @@
+id: scan-oversight
+version: 0.1.0
+name: 督办扫描
+description: 扫出逾期、临期、停滞的督办事项（只读）
+group: gov
+kind: tool
+entry: main.py

@@ -1,0 +1,7 @@
+id: search-knowledge
+version: 0.1.0
+name: 知识库检索
+description: 在指标口径、督办事项、会议记录里检索原文与出处（只读）
+group: gov
+kind: tool
+entry: main.py

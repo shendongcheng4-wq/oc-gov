@@ -1,0 +1,7 @@
+id: query-metric
+version: 0.1.0
+name: 指标查询
+description: 查本市经济指标的最新值、同比、口径与责任部门（只读）
+group: gov
+kind: tool
+entry: main.py
