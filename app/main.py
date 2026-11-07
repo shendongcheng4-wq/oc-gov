@@ -94,6 +94,9 @@ import saved as saved_mod  # noqa: E402
 import schedule as schedule_mod  # noqa: E402
 import notify as notify_mod  # noqa: E402
 import briefdoc as brief_mod  # noqa: E402
+import proofread as proofread_mod  # noqa: E402
+import wenshu as wenshu_mod  # noqa: E402
+import docxgen as docx_mod  # noqa: E402
 import knowledge as knowledge_mod  # noqa: E402
 import experts as expert_mod  # noqa: E402
 import meetplan as meetplan_mod  # noqa: E402
@@ -379,6 +382,11 @@ WRITE_POLICY: tuple[tuple[str, str, str | None], ...] = (
     ("POST", r"/api/ask/cancel", None),          # handler 内按 turn 归属自查
     ("POST", r"/api/schedule/brief", None),
     ("POST", r"/api/briefdoc", None),
+    ("POST", r"/api/briefdoc/docx", None),      # 只生成字节流，不落盘
+    ("POST", r"/api/briefdoc/review", None),    # 只读：把材料回查一遍，不写存储
+    ("POST", r"/api/wenshu", None),             # 文种稿：装配 + 体例检查，不落盘
+    ("POST", r"/api/wenshu/docx", None),        # 只生成字节流
+    ("POST", r"/api/wenshu/review", None),      # 只读：体例检查
     ("POST", r"/api/threads", None),
     ("POST", r"/api/workspace/(watch|follow|layout|feed-seen)", None),
     ("POST", r"/api/saved", None),
@@ -841,6 +849,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/briefdoc/options":
                 return self._json(brief_mod.options(self._person()))
 
+            # ---- 开文种：请示 / 通知 ----
+            # 文种的可选项很少（两个文种、几类锚点），一次性给全比按文种分次取省事，
+            # 也省掉「切文种要等一次网络」的停顿。
+            if path == "/api/wenshu/options":
+                return self._json(wenshu_mod.options())
+
             # ---- 知识库 ----
             # 只读检索：返回的是原文条目，不是模型生成的答案。
             if path == "/api/knowledge":
@@ -1294,6 +1308,113 @@ class Handler(BaseHTTPRequestHandler):
             parts = _parts(path, "/api/oversight/")
             if len(parts) == 2 and parts[1] == "action":
                 return self._advance(parts[0], body)
+
+            # ---- 材料助手：出 .docx ----
+            # 两个出口（Markdown / Word）共用同一次 compose()。如果各自查一遍数，
+            # 迟早出现「纸面 8.9、Word 里 8.5」——这类不一致比排版难看严重得多。
+            # 这里只做排版，不取数、不校验事实。
+            if path == "/api/briefdoc/docx":
+                source = str(body.get("source") or "compose")
+                if source == "bulletin":
+                    fields = body.get("fields") if isinstance(body.get("fields"), dict) else {}
+                    if not str(fields.get("task") or "").strip():
+                        return self._json({"ok": False, "error": "缺 task：红头公文必须写明督办事项"}, 400)
+                    data = brief_mod.bulletin_docx(fields)
+                    day = str(fields.get("date_text") or "").strip() or "draft"
+                    name = f"督办通报-{day}.docx"
+                elif isinstance(body.get("meta"), dict) and isinstance(body.get("blocks"), list):
+                    # 纸面回灌：前端把刚刚「服务端算出来的」那份 meta/blocks 原样送回来排版。
+                    # 为什么允许：材料是投影，导出的 Word 必须和屏幕上一字不差；重新调一次
+                    # 模型会让「下一步」那段换一种说法，用户看到的就是「文件跟纸面不一样」。
+                    # 这里不产生任何事实，只把这些字段排进 docx，所以不存在「前端改数」的风险。
+                    try:
+                        data = brief_mod.to_docx(body["meta"], body["blocks"])
+                    except (KeyError, TypeError, AttributeError, ValueError):
+                        return self._json({"ok": False, "error": "blocks 结构不对，无法排版"}, 400)
+                    name = brief_mod.docx_filename(body["meta"])
+                else:
+                    res = brief_mod.compose(
+                        self._person(body),
+                        kind=str(body.get("kind") or "report"),
+                        period=(str(body["period"]) if body.get("period") else None),
+                        sections=body.get("sections"),
+                        codes=body.get("codes"),
+                        meeting_id=(str(body["meeting_id"]) if body.get("meeting_id") else None),
+                        use_model=body.get("use_model") is not False,
+                    )
+                    if not res.get("ok"):
+                        return self._json(res, 400)
+                    data = brief_mod.to_docx(res["meta"], res["blocks"])
+                    name = brief_mod.docx_filename(res["meta"])
+                return self._json({
+                    "ok": True,
+                    "filename": name,
+                    "bytes": len(data),
+                    "docx": docx_mod.to_base64(data),
+                })
+
+            # ---- 材料助手：审校 ----
+            # 审的是「当前纸面」，所以收的是前端手上的 meta/blocks，而不是重新 compose：
+            # 重新装配会得到另一份材料，审出来的问题跟用户看着的那一份对不上。
+            # 只读：不写任何存储，也不改请求里的内容。
+            if path == "/api/briefdoc/review":
+                meta = body.get("meta")
+                blocks = body.get("blocks")
+                if not isinstance(meta, dict) or not isinstance(blocks, list):
+                    return self._json({"ok": False, "error": "审校要传 meta 和 blocks"}, 400)
+                try:
+                    res = proofread_mod.review(meta, blocks)
+                except (KeyError, TypeError, AttributeError, ValueError) as exc:
+                    return self._json({"ok": False, "error": f"材料结构不对，无法审校（{type(exc).__name__}）"}, 400)
+                if not res.get("ok"):
+                    return self._json(res, 400)
+                return self._json(res)
+
+            # ---- 开文种：装配 ----
+            # 前端只交「要素」和「勾了哪几个编号」。事实句由服务端按编号重新取一遍，
+            # 所以前端传不进一段自己编的话——这是文种稿唯一要紧的防线。
+            if path == "/api/wenshu":
+                fields = body.get("fields") if isinstance(body.get("fields"), dict) else {}
+                return self._json(
+                    wenshu_mod.build(
+                        str(body.get("kind") or "qingshi"),
+                        fields,
+                        use_model=body.get("use_model") is not False,
+                    )
+                )
+
+            # ---- 开文种：出 .docx ----
+            # 和材料出口同一个立场：把刚排好的那份 doc 原样回灌，
+            # 不重新装配。重新装配会让文件里的措辞和屏幕上的对不上，
+            # 而这份稿子是要打印出来送签的。
+            if path == "/api/wenshu/docx":
+                meta = body.get("meta")
+                doc = body.get("doc")
+                if not isinstance(meta, dict) or not isinstance(doc, dict):
+                    return self._json({"ok": False, "error": "导出要传 meta 和 doc"}, 400)
+                try:
+                    data = wenshu_mod.to_docx(meta, doc)
+                except (KeyError, TypeError, AttributeError, ValueError):
+                    return self._json({"ok": False, "error": "doc 结构不对，无法排版"}, 400)
+                return self._json({
+                    "ok": True,
+                    "filename": wenshu_mod.filename(meta),
+                    "bytes": len(data),
+                    "docx": docx_mod.to_base64(data),
+                })
+
+            # ---- 开文种：体例检查 ----
+            # 审的是屏幕上这一份。和材料审校一样只读，不改请求里的内容。
+            if path == "/api/wenshu/review":
+                meta = body.get("meta")
+                doc = body.get("doc")
+                if not isinstance(meta, dict) or not isinstance(doc, dict):
+                    return self._json({"ok": False, "error": "体例检查要传 meta 和 doc"}, 400)
+                try:
+                    res = wenshu_mod.review(meta, doc)
+                except (KeyError, TypeError, AttributeError, ValueError) as exc:
+                    return self._json({"ok": False, "error": f"文稿结构不对，无法检查（{type(exc).__name__}）"}, 400)
+                return self._json(res)
 
             # ---- 对话里约会议：确认草稿才落库 ----
             # 单独一个写口，不并进 POST /api/meetings：那条是「粘纪要建记录」，

@@ -3364,6 +3364,385 @@ def test_briefdoc() -> None:
     check("纸张底色写死白纸、不跟随主题", "#fff" in paper_css and "var(--" not in paper_css, paper_css[:60])
     check("打印样式只保留纸张", "@media print" in body and "visibility:hidden" in body, "")
 
+    # ---- docx 出口：换格式不换事实 ----
+    # 导出不是「另存一份」，它必须和 Markdown 是同一批数字。所以这里不比文件大小，
+    # 而是把生成的 docx 再解析回来，拿两边的数字集合对差集。
+    import docparse
+
+    raw = doc.to_docx(d["meta"], d["blocks"])
+    check("能生成 docx（zip 头）", raw[:2] == b"PK", str(raw[:4]))
+    back = docparse.parse_book(raw, "brief.docx")
+    check("生成的 docx 能被读回来", back.get("ok") is True, str(back.get("error"))[:60])
+    dtext = back.get("text") or ""
+    check("docx 里有标题", d["meta"]["title"] in dtext, dtext[:40])
+    check("docx 里每个章节都在", all(b["title"] in dtext for b in d["blocks"]), "")
+    same = nums(dtext) == nums(d["markdown"])
+    check("docx 与 Markdown 数字同源", same, str(sorted(nums(dtext) ^ nums(d["markdown"]))[:5]))
+    check("docx 没漏资料来源", all(s["department"] in dtext for s in d["meta"]["sources"]), "")
+
+    gov = doc.bulletin_docx({
+        "task": "材料测试事项", "unit": "市住建局", "owner": "张三",
+        "due_text": "2026年12月31日", "no": "溧政办通〔2026〕07 号", "date_text": "2026年11月7日",
+    })
+    gtext = docparse.parse_book(gov, "gov.docx").get("text") or ""
+    check("红头公文带主送机关", "各镇（区）人民政府" in gtext, gtext[:40])
+    check("红头公文带文号与督办事项", "溧政办通" in gtext and "一、督办事项" in gtext, "")
+    check("红头公文有落款", "市住建局" in gtext and "张三" in gtext, "")
+
+    # 页边距是公文最容易写错的一处：37/35/28/26 毫米。1 毫米 = 56.6929 twips，
+    # 所以左 28mm 落在 1587（1587.4 取整）——Word 界面上会显示成 79.4 磅，别照着改。
+    import zipfile as _zip
+    import io as _io
+    from xml.etree import ElementTree as _ET
+
+    zf = _zip.ZipFile(_io.BytesIO(raw))
+    for name in zf.namelist():
+        if name.endswith((".xml", ".rels")):
+            _ET.fromstring(zf.read(name))  # 任何一份不合法都会抛
+    sect = _ET.fromstring(zf.read("word/document.xml")).find(
+        ".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pgMar")
+    margins = [sect.get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}" + k)
+               for k in ("top", "bottom", "left", "right")] if sect is not None else []
+    check("页边距按公文口径（上37下35左28右26mm）",
+          margins == ["2098", "1984", "1587", "1474"], str(margins))
+
+
+
+def test_proofread() -> None:
+    """材料审校：不改材料、不放行编造的数字、报了要能落到具体那一节。
+
+    这里最要紧的两条是反着的：一是「装配出来的材料必须能过审」——过不了说明审校在
+    瞎报或者装配本身有问题；二是「改坏一处必须被抓住」——抓不住就只是个装饰。
+    一条正向一条反向，缺一条这套东西就没有意义。
+    """
+    print("\n[12b] 材料审校")
+    import copy
+
+    import briefdoc as doc
+    import proofread as rv
+
+    d = doc.compose("mayor", kind="report", use_model=False)
+    before = json.dumps(d["blocks"], ensure_ascii=False, sort_keys=True)
+    r = rv.review(d["meta"], d["blocks"])
+    after = json.dumps(d["blocks"], ensure_ascii=False, sort_keys=True)
+
+    check("装配出来的材料能通过审校", r.get("verdict") == "pass",
+          f"{r.get('verdict')} {json.dumps([i['detail'] for i in r.get('issues') or []], ensure_ascii=False)[:140]}")
+    check("审校只读，不改材料", before == after, "")
+    check("表格行都能点回出处", r["summary"]["rows_traced"] == r["summary"]["rows"],
+          f"{r['summary']['rows_traced']}/{r['summary']['rows']}")
+    check("通篇数字都能溯源", r["summary"]["untraced"] == 0, f"未溯源 {r['summary']['untraced']}")
+
+    def tampered(fn):
+        m = copy.deepcopy(d)
+        fn(m)
+        return rv.review(m["meta"], m["blocks"])
+
+    def find(m, bid):
+        return next(x for x in m["blocks"] if x["id"] == bid)
+
+    cases = [
+        ("指标值与口径表不符", lambda m: find(m, "metrics")["rows"][0].update({"yoy": "+9.9%"}), "num-value"),
+        ("台账答案与台账不一致", lambda m: find(m, "oversight")["rows"][0].update({"status": "已办结"}), "ref-state"),
+        ("台账编号查不到", lambda m: find(m, "oversight")["rows"][0].update({"code": "DB0000"}), "ref-item"),
+        ("叙述里编了数字", lambda m: find(m, "next").update({"text": "下一步力争增长 12.7%。"}), "num-offlist"),
+        ("承诺性表述", lambda m: find(m, "next").update({"text": "坚决杜绝逾期。"}), "sty-commit"),
+        ("日期写成 ISO", lambda m: find(m, "next").update({"text": "请在 2026-12-31 前办结。"}), "sty-date"),
+        ("中文里用半角标点", lambda m: find(m, "next").update({"text": "请各单位(含协办)配合。"}), "sty-hw"),
+        ("章节序号错乱", lambda m: find(m, "metrics").update({"no": "三"}), "sty-seq"),
+    ]
+    for label, fn, rule in cases:
+        rr = tampered(fn)
+        hits = [i for i in rr["issues"] if i["rule"] == rule]
+        check(f"审校能抓到：{label}", bool(hits), str(sorted({i["rule"] for i in rr["issues"]})))
+        # 抓到但指不到哪一节，等于让人自己重读一遍全篇
+        check(f"「{label}」能定位到章节", not hits or bool(hits[0]["block"]), str(hits[:1])[:80])
+
+    bad = tampered(lambda m: find(m, "next").update({"text": "下一步力争增长 12.7%。"}))
+    item = next(i for i in bad["issues"] if i["rule"] == "num-offlist")
+    check("问题带章节与原文片段", bool(item["block"] and "12.7" in item["snippet"]), str(item)[:110])
+    check("有硬错就不许出手", bad["verdict"] == "block" and bad["score"] < 100, f"{bad['verdict']} / {bad['score']}")
+
+    def dup_row(m):
+        b = find(m, "metrics")
+        b["rows"].append(dict(b["rows"][0]))
+
+    cnt = tampered(dup_row)
+    check("正文说几项、表里几行对不上要报",
+          any(i["rule"] == "num-selfcontradict" for i in cnt["issues"]),
+          str(sorted({i["rule"] for i in cnt["issues"]})))
+
+    check("空材料不硬凑结论", rv.review({}, []).get("ok") is False, "")
+
+    # 三种文体都要能过：审校不能只对汇报有效
+    for kind in ("minutes", "bulletin"):
+        dk = doc.compose("mayor", kind=kind, use_model=False)
+        rk = rv.review(dk["meta"], dk["blocks"])
+        check(f"{kind} 材料也能通过审校", rk.get("verdict") == "pass",
+              json.dumps([i["detail"] for i in rk.get("issues") or []], ensure_ascii=False)[:120])
+
+    body = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("页面有审校入口", 'id="dcReviewBtn"' in body and "async function dcReview" in body, "")
+    check("审校侧栏挂在材料弹窗里", 'id="dcReview"' in body and ".doc-review.on" in body, "")
+    check("问题点击能跳回章节", "function dcJump" in body and "data-blk" in body, "")
+
+
+def test_evidence() -> None:
+    """写作时的检索：一节配哪些原文，配的东西是不是真的。
+
+    和上一条（审校）是一对反着的：审校问「纸面说的和库里对不对得上」，
+    依据答「库里原话是什么」。两条的共同底线是**不许改写**，所以这里一句
+    文字都不比，只比「引的这段是不是原文的子串」和「它有没有偷偷混进导出」。
+    """
+    print("\n[12c] 材料依据")
+    import docparse
+
+    import briefdoc as doc
+    import evidence as evd
+    import mockdata as md
+    import oversight as ov
+
+    d = doc.compose("mayor", kind="report", use_model=False)
+    blocks = d["blocks"]
+    got = {b["id"]: b.get("evidence") or [] for b in blocks}
+    check("指标节依据是口径原文", bool(got.get("metrics")), str({k: len(v) for k, v in got.items()}))
+    check("重点工作节依据是台账办理经过", bool(got.get("oversight")), str({k: len(v) for k, v in got.items()}))
+
+    # 指标口径：引文必须是口径字段的前缀，不能是模型凑的说法
+    for it in got.get("metrics") or []:
+        code = (it.get("ref") or {}).get("id")
+        detail = md.get_metric(code)
+        joined = evd._join([str(c) for c in detail["caveats"]])
+        body = it["quote"].rstrip("…").strip()
+        check(f"口径引文与指标字典一致（{code}）", joined.startswith(body), f"{body[:24]} / {joined[:24]}")
+
+    # 台账依据必须点得回去：编号查不到，这条依据就是编的
+    for it in got.get("oversight") or []:
+        rid = (it.get("ref") or {}).get("id") or ""
+        check(f"台账依据 {rid} 能查回台账", ov.get(rid) is not None, rid)
+        detail = ov.detail(rid) or {}
+        texts = [str(e.get("text") or "") for e in detail.get("events") or []]
+        texts.append(str(detail.get("standard") or ""))
+        check(f"台账依据 {rid} 是原文", any(it["quote"].rstrip("…") and it["quote"].rstrip("…") in t
+                                            for t in texts), it["quote"][:30])
+
+    # 会议依据：引的必须是纪要里的话，或者是某条议定事项的原文
+    for it in got.get("meeting") or []:
+        mid = (it.get("ref") or {}).get("id") or ""
+        import ledger
+        full = ledger.get(mid) or {}
+        quotes = [str(x.get("quote") or "") for x in full.get("items") or []]
+        quotes.append(str(full.get("text") or ""))
+        body = it["quote"].rstrip("…")
+        check(f"会议依据 {mid} 是纪要原文", any(body and body in q for q in quotes), body[:30])
+
+    # 一节之内不许重复摆同一段话
+    for bid, items in got.items():
+        keys = [x["quote"] for x in items]
+        check(f"{bid} 节依据不重复", len(keys) == len(set(keys)), f"{len(keys)} 条")
+
+    # 上限：依据是核对用的，不是把台账搬过来
+    cap = evd.MAX_PER_BLOCK + evd.RAG_MAX
+    check("每节依据有上限", all(len(v) <= cap for v in got.values()), str({k: len(v) for k, v in got.items()}))
+
+    # 依据不上纸、不进导出：正文是给别人看的，依据是自己核对用的
+    long_quotes = [x["quote"].rstrip("…") for v in got.values() for x in v if len(x["quote"]) >= 15]
+    md_text = d["markdown"]
+    check("依据不进 Markdown", not any(q in md_text for q in long_quotes),
+          str([q[:14] for q in long_quotes if q in md_text][:2]))
+    dtext = docparse.parse_book(doc.to_docx(d["meta"], blocks), "ev.docx").get("text") or ""
+    check("依据不进 docx", not any(q in dtext for q in long_quotes),
+          str([q[:14] for q in long_quotes if q in dtext][:2]))
+
+    # 资料库为空就如实没有，不许硬凑一段政策原文充数
+    empty = {"bases": [], "documents": 0}
+    check("资料库为空时不硬凑依据",
+          evd._from_docs({"id": "oversight", "rows": [{"title": "入河排污口排查整治"}]}, empty) == [], "")
+
+    # 有依据不该影响审校结论：多一个字段就报错，等于逼人删掉依据
+    import proofread as rv
+    check("带依据的材料仍能通过审校", rv.review(d["meta"], blocks).get("verdict") == "pass", "")
+
+    body_html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("纸面能渲染依据", "function dpEv" in body_html and "data-evbtn" in body_html, "")
+    check("依据默认折叠、点开才铺开",
+          ".dp-ev-list{display:none" in body_html and ".dp-ev.open .dp-ev-list{display:block}" in body_html, "")
+    check("打印时不出依据", ".dp-ev{display:none!important}" in body_html, "")
+    check("工具栏能一键展开全部依据", 'id="dcEv"' in body_html and "function dcEvToggleAll" in body_html, "")
+
+
+
+def test_wenshu() -> None:
+    """开文种：请示 / 通知。
+
+    这一块最要紧的不是「能不能生成一段通顺的话」，而是三件事：
+    ① 结构是死的 —— 请示必须是「缘由—事项—结语」，没人能靠一句话改掉；
+    ② 事实有出处 —— 勾一条台账，正文里那句话必须能回到那个编号；
+    ③ 模型只能写缘由段，且一出现清单外的数字/单位/套话就整段丢弃。
+
+    第 ③ 条是这一块唯一的风险口，所以正反两面都要测：放行的要真放行，
+    该拦的必须拦得住，而且拦下来之后要退回规则文本，不能留半截。
+    """
+    print("\n[12c] 开文种（请示 / 通知）")
+    import zipfile
+    from io import BytesIO
+
+    import llmclient
+    import wenshu as ws
+
+    opt = ws.options()
+    check("文种清单两件：请示、通知",
+          [k["id"] for k in opt["kinds"]] == ["qingshi", "tongzhi"], str([k["id"] for k in opt["kinds"]]))
+    check("可勾选事实含台账与指标",
+          bool(opt["anchors"]["ledger"]) and bool(opt["anchors"]["metrics"]), "")
+    check("文种选项不含示例正文（只给默认值）",
+          all("text" not in k for k in opt["kinds"]), "")
+
+    # ── 请示：结构、要素、出处 ──
+    qs = ws.build("qingshi", {
+        "subject": "高铁东站周边路网配套工程管线迁改资金",
+        "contact": "王磊", "tel": "0519-88888888",
+        "items": [{"text": "申请市级财政补助资金 3200 万元", "unit": "市财政局", "due": "2026-12-20"}],
+        "anchors": [{"type": "ledger", "ref": "DB2026-0027"}],
+    }, use_model=False)
+    check("请示能装配出来", qs.get("ok") is True, "")
+    qd = qs["doc"]
+    check("请示标题以文种结尾", qd["title"].endswith("的请示"), qd["title"])
+    check("请示主送机关默认上级政府", qd["to"] == "常州市人民政府", qd["to"])
+    check("请示结语是请求语", "请" in qd["tail"], qd["tail"])
+    check("请示带联系人与电话", "王磊" in qd["note"] and "0519" in qd["note"], qd["note"])
+    check("请示不写工作要求", not any(p["role"] == "require" for p in qd["paras"]), "")
+    check("事项按（一）（二）分条",
+          qd["paras"][-1]["text"].startswith("（一）"), qd["paras"][-1]["text"][:12])
+    check("时限写成中文日期", "2026年12月20日" in qd["paras"][-1]["text"], qd["paras"][-1]["text"])
+    check("缘由段以承接语收尾", qd["paras"][0]["text"].endswith("请示如下："), qd["paras"][0]["text"][-14:])
+    check("缘由段引到了勾选的台账事实",
+          "高铁东站周边路网配套工程" in qd["paras"][0]["text"], "")
+    check("依据带回了台账编号", qd["facts"][0]["ref"] == "DB2026-0027", str(qd["facts"]))
+    check("文号不自动编号（系统没有登记簿）",
+          "___" in qd["no"] and any("登记簿" in w for w in qs["warnings"]), qd["no"])
+    check("文号未填只是提示级，不拦出手", qs["check"]["verdict"] == "pass", qs["check"]["verdict"])
+
+    # ── 通知：分条方式、结语、工作要求 ──
+    tz = ws.build("tongzhi", {
+        "subject": "做好 2026—2027 年度冬季供暖保障工作",
+        "basis": "市政府第 12 次常务会议部署",
+        "require": "各责任单位每周五前将进展报市政府办公室",
+        "anchors": [{"type": "ledger", "ref": "DB2026-0035"}],
+    }, use_model=False)
+    td = tz["doc"]
+    check("通知标题以文种结尾", td["title"].endswith("的通知"), td["title"])
+    check("通知主送受文范围", "各镇（区）人民政府" in td["to"], td["to"])
+    check("通知结语是特此通知", td["tail"] == "特此通知。", td["tail"])
+    check("通知事项用「一、」而不是「（一）」",
+          any(p["text"].startswith("一、") for p in td["paras"]), str([p["text"][:6] for p in td["paras"]]))
+    check("通知单列工作要求", any(p["role"] == "require" for p in td["paras"]), "")
+    check("通知不写联系人（那是请示的项）", not td["note"], td["note"])
+    check("凭据写进了缘由段", "第 12 次常务会议" in td["paras"][0]["text"], td["paras"][0]["text"][:40])
+
+    # 自动代入：不填事项时用勾选的台账顶上，且缘由里不再重复一遍
+    check("未填事项时自动代入台账事项",
+          any("事项未填" in w for w in tz["warnings"]), str(tz["warnings"]))
+    check("同一件事不在缘由里说第二遍",
+          td["paras"][0]["text"].count("冬季供暖保障预案报备") == 0, td["paras"][0]["text"])
+
+    # 查不到的锚点：如实说，不静默丢，也不编
+    bad = ws.build("qingshi", {"subject": "X", "anchors": [{"type": "ledger", "ref": "DB-不存在"}]}, use_model=False)
+    check("查不到的锚点会明说", any("查不到" in w for w in bad["warnings"]), str(bad["warnings"]))
+    check("查不到的锚点不进依据", bad["doc"]["facts"] == [], "")
+
+    # ── 体例检查：改坏一处必须被抓到 ──
+    import copy
+    broken = ws.build("qingshi", {"items": [{"text": "办一件事"}]}, use_model=False)
+    rules = {i["rule"] for i in broken["check"]["issues"]}
+    check("缺事由报错", "ws-subject" in rules, str(rules))
+    check("有硬错时结论是 block", broken["check"]["verdict"] == "block", broken["check"]["verdict"])
+    check("缺主送机关不会误报（按文种默认补齐）", "ws-to" not in rules, str(rules))
+
+    no_contact = ws.build("qingshi", {
+        "subject": "申请一件事", "items": [{"text": "请批准"}]}, use_model=False)
+    check("请示缺联系人会提示",
+          "ws-contact" in {i["rule"] for i in no_contact["check"]["issues"]}, "")
+
+    many = ws.build("qingshi", {
+        "subject": "申请一件事", "contact": "张三", "tel": "123",
+        "items": [{"text": "一"}, {"text": "二"}, {"text": "三"}, {"text": "四"}]}, use_model=False)
+    check("请示超过 3 条会提示一文一事",
+          "ws-many" in {i["rule"] for i in many["check"]["issues"]}, "")
+
+    m2 = copy.deepcopy(qs)
+    m2["doc"]["date"] = "2026-11-07"
+    check("ISO 日期写法会被挑出来",
+          "ws-date" in {i["rule"] for i in ws.review(m2["meta"], m2["doc"])["issues"]}, "")
+    m3 = copy.deepcopy(qs)
+    m3["doc"]["paras"][0]["text"] = "我们高度重视这件事。"
+    got = {i["rule"] for i in ws.review(m3["meta"], m3["doc"])["issues"]}
+    check("套话会被挑出来", "ws-cliche" in got, str(got))
+    check("体例检查只读，不改文稿",
+          json.dumps(qs["doc"], ensure_ascii=False, sort_keys=True)
+          == json.dumps(copy.deepcopy(qs)["doc"], ensure_ascii=False, sort_keys=True), "")
+
+    # ── 模型闸：四种输出，三条必须被丢 ──
+    real_avail, real_chat = llmclient.available, llmclient.chat_json
+
+    def fake(reason: str):
+        llmclient.available = lambda: True
+        llmclient.chat_json = lambda *a, **k: {"data": {"reason": reason}}
+        return ws.build("qingshi", {
+            "subject": "高铁东站周边路网配套工程管线迁改资金",
+            "items": [{"text": "申请补助"}, ],
+            "anchors": [{"type": "ledger", "ref": "DB2026-0027"}],
+        }, use_model=True)
+
+    try:
+        good = fake("高铁东站周边路网配套工程已于 2026年10月28日 到期，目前仍在办理中，"
+                    "市住建局需尽快完成管线迁改，现提请审议相关资金安排。")
+        check("清单内的数字放行", good["model"]["source"] == "model", good["model"].get("note", ""))
+        check("放行后缘由此模型写", "提请审议" in good["doc"]["paras"][0]["text"], "")
+
+        over = fake("该工程需要资金 9999 万元，请予批准。")
+        check("清单外的数字整段丢弃", over["model"]["source"] == "rule", "")
+        check("丢弃原因写清楚了", "9999" in over["model"]["note"], over["model"]["note"])
+
+        unit = fake("市生态环境局已同意该方案，请予批准。")
+        check("编造的单位整段丢弃", unit["model"]["source"] == "rule", "")
+        check("退回后仍有规则文本可用", "请示如下" in unit["doc"]["paras"][0]["text"], "")
+
+        cli = fake("各部门要高度重视，狠抓落实，尽快完成。")
+        check("套话整段丢弃", cli["model"]["source"] == "rule", cli["model"]["note"])
+
+        long_one = fake("很长的缘由。" * 80)
+        check("超长缘由丢弃", long_one["model"]["source"] == "rule", "")
+    finally:
+        llmclient.available, llmclient.chat_json = real_avail, real_chat
+
+    # ── 出口：Markdown 与 docx ──
+    md = qs["markdown"]
+    check("Markdown 带标题与主送机关", "的请示" in md and "常州市人民政府" in md, "")
+    check("Markdown 的依据只写出处、不带内部编号",
+          "ledger:" not in md and "metric:" not in md, md.split("依据")[-1][:60])
+    data = ws.to_docx(qs["meta"], qd)
+    check("docx 是合法 zip", data[:2] == b"PK", str(data[:2]))
+    with zipfile.ZipFile(BytesIO(data)) as z:
+        xml = z.read("word/document.xml").decode("utf-8")
+    check("docx 里有红头机关名", "溧阳市人民政府" in xml, "")
+    check("docx 里有文号", "溧政" in xml, "")
+    check("docx 里有落款日期", qd["date"] in xml, "")
+    check("docx 正文用仿宋_GB2312", "仿宋_GB2312" in xml, "")
+    check("docx 标题用方正小标宋", "方正小标宋简体" in xml, "")
+
+    # 不落盘：文种是「窗口里的草稿」，存下来就会出现「文件里的说法和台账对不上」
+    before = {p.name for p in (Path(os.environ["OCGOV_DATA"])).glob("*")} if Path(os.environ["OCGOV_DATA"]).exists() else set()
+    ws.build("tongzhi", {"subject": "再装配一次"}, use_model=False)
+    after = {p.name for p in (Path(os.environ["OCGOV_DATA"])).glob("*")} if Path(os.environ["OCGOV_DATA"]).exists() else set()
+    check("装配不产生任何存档文件", before == after, str(after ^ before))
+
+    body_html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("红头栏位里有文种切换", 'data-wskind' in body_html and "DC_KINDS" in body_html, "")
+    check("请示/通知走服务端装配", '"/api/wenshu"' in body_html, "")
+    check("事实锚点可勾选", "data-wsa" in body_html, "")
+    check("体例检查复用同一个审校侧栏", '"/api/wenshu/review"' in body_html, "")
+
 
 def test_schedule() -> None:
     """AI 日程：只收已有时间的事、按身份过滤、同日不重复、模型只写话不排期。
@@ -3621,6 +4000,9 @@ def main() -> int:
     test_oversight_flow()
     test_schedule()
     test_briefdoc()
+    test_proofread()
+    test_evidence()
+    test_wenshu()
     test_knowledge()
     test_notify()
     test_saved()

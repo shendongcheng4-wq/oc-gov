@@ -1105,6 +1105,7 @@ html.embedded .drawer{top:0;height:100%}
 .mbadge{font-size:10px;padding:1px 6px;border-radius:20px;background:var(--brand-soft);color:var(--brand);flex:0 0 auto}
 .mbadge.ok{background:var(--ok-bg);color:var(--ok)}
 .mbadge.warn{background:var(--warn-bg);color:var(--warn)}
+.mbadge.err{background:var(--danger-bg);color:var(--danger)}
 .mrow{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
 .mchip{
   font-size:11px;padding:3px 9px;border-radius:20px;border:1px solid var(--line);
@@ -1479,6 +1480,8 @@ html.embedded .drawer{top:0;height:100%}
    纸张不跟随主题：它是一张纸，不是界面。深色主题下四周桌面是深色，纸仍然白底黑字——
    否则屏幕上看到的和打印出来的会是两样东西，而材料最终是要打印/上报的。 */
 .doc-box{width:min(1200px,97vw);max-height:90vh}
+/* 审校打开时把弹窗撑宽，而不是把公文纸挤窄——用 A4 版式看窄纸会误判排版 */
+.doc-box.rv-open{width:min(1540px,98vw)}
 .doc-body{display:grid;grid-template-columns:252px minmax(0,1fr);flex:1;min-height:0}
 .doc-side{
   border-right:1px solid var(--line);background:var(--surface-2);padding:12px 12px 20px;
@@ -1498,6 +1501,35 @@ html.embedded .drawer{top:0;height:100%}
 .dc-tab b{display:block;font-size:12px;color:var(--ink);font-weight:600}
 .dc-tab.on b{color:var(--brand)}
 .dc-tab span{display:none}
+/* 红头栏位里的文种切换：三个文种并排，选了哪个一眼能看出来 */
+.dc-kinds{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+.dc-kind{
+  font-family:inherit;font-size:11px;padding:5px 2px;border-radius:7px;cursor:pointer;
+  border:1px solid var(--line);background:var(--surface);color:var(--ink-2);transition:.14s
+}
+.dc-kind:hover{border-color:var(--brand)}
+.dc-kind.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand);font-weight:600}
+/* 事项行：一句正文 + 责任单位 + 时限。三样分开填，是因为它们的出处不同 */
+.ws-item{margin-bottom:6px}
+.ws-item-row{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:4px}
+.ws-item-row .dm-input{font-size:11px;padding:4px 6px}
+.ws-add{width:100%;margin-top:2px;font-size:11px}
+/* 锚点分组折叠：台账 8 条、指标 11 条全摊开，侧栏要滚半天才能到底部按钮 */
+.ws-anc{border:1px solid var(--line);border-radius:7px;padding:0 8px;margin-bottom:5px;background:var(--surface)}
+.ws-anc summary{font-size:11.5px;color:var(--ink-2);padding:6px 0;cursor:pointer;list-style:none}
+.ws-anc summary::-webkit-details-marker{display:none}
+.ws-anc summary::before{content:"▸ ";color:var(--faint)}
+.ws-anc[open] summary::before{content:"▾ "}
+.ws-anc .dc-checks{padding:0 0 7px}
+.ws-anc .dc-checks label{font-size:11px;line-height:1.5;align-items:flex-start}
+.ws-anc .dc-checks input{margin-top:2px}
+.ws-sub{font-style:normal;color:var(--faint);font-size:10px;margin-left:4px}
+/* 主按钮钉在侧栏底部：请示/通知的表单比一屏长，滚到中间时不能找不到「装配文稿」 */
+.dc-actions{
+  position:sticky;bottom:-20px;padding:8px 12px 10px;margin:0 -12px -20px;
+  background:var(--surface-2);border-top:1px solid var(--line);
+  box-shadow:0 -6px 10px -8px rgba(16,24,40,.18);z-index:3
+}
 .dc-form{display:flex;flex-direction:column;gap:13px}
 .dc-up{
   display:flex;align-items:center;justify-content:center;gap:5px;
@@ -1537,6 +1569,29 @@ html.embedded .drawer{top:0;height:100%}
   font-family:"FangSong","仿宋","SimSun","宋体",serif;font-size:14.5px;line-height:2;
   text-align:right;margin-top:38px;color:#1a1a1a
 }
+/* 主送机关顶格；附注在成文日期下方，左空二字；抄送在最后，顶格加句号 */
+.gov-p.gov-to{text-indent:0}
+.gov-note{
+  font-family:"FangSong","仿宋","SimSun","宋体",serif;font-size:14.5px;line-height:2;
+  margin:12px 0 0;color:#1a1a1a;text-indent:2em
+}
+.gov-cc{
+  font-family:"FangSong","仿宋","SimSun","宋体",serif;font-size:12.5px;line-height:1.9;
+  margin:26px 0 0;padding-top:8px;border-top:1px solid #e2d5d5;color:#333
+}
+/* 装配过程中的提醒贴在纸上，不能像正文：改完就该消失 */
+.gov-warn{
+  font-family:"FangSong","仿宋","SimSun","宋体",serif;font-size:12px;line-height:1.7;
+  background:#fdf6e8;border-left:2px solid #d9a441;color:#7a5a12;
+  padding:5px 9px;margin:0 0 8px;text-indent:0
+}
+/* 依据不上纸的正文区，只做一个极淡的脚标：它是核对用的，不是公文的一部分 */
+.gov-facts{
+  margin-top:26px;padding-top:8px;border-top:1px dashed #e2e2e2;
+  font-size:10.5px;color:#9aa0a8;line-height:1.7
+}
+.gov-facts span{color:#6b7280}
+@media print{.gov-warn,.gov-facts{display:none!important}}
 .dc-sel{
   width:100%;font-size:11.5px;padding:5px 7px;border:1px solid var(--line);
   border-radius:7px;background:var(--surface);color:var(--ink);font-family:inherit;
@@ -1552,7 +1607,40 @@ html.embedded .drawer{top:0;height:100%}
 .dc-pill.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand);font-weight:600}
 .dc-go{width:100%;padding:7px;font-size:12.5px}
 .dc-tip{font-size:10.5px;color:var(--faint);line-height:1.7}
-.doc-main{display:flex;flex-direction:column;min-width:0;min-height:0}
+.doc-main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
+/* 审校贴在纸面右边浮着，不挤纸宽：材料要看原样，问题要能一边看一边对 */
+.doc-review{
+  position:absolute;top:0;right:0;bottom:0;width:346px;z-index:7;display:none;
+  flex-direction:column;min-height:0;background:var(--surface);
+  border-left:1px solid var(--line);box-shadow:-10px 0 26px rgba(10,25,50,.09);
+}
+.doc-review.on{display:flex}
+.rv-head{padding:9px 13px;border-bottom:1px solid var(--line);flex:0 0 auto}
+.rv-top{display:flex;align-items:center;gap:8px}
+.rv-top b{font-size:12.5px}
+.rv-top .sp{flex:1}
+.rv-score{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
+.rv-verdict{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.6}
+.rv-nums{display:flex;gap:10px;margin-top:6px;font-size:10.5px;color:var(--faint)}
+.rv-nums span{white-space:nowrap}
+.rv-nums b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
+.rv-tabs{display:flex;gap:5px;padding:7px 13px;border-bottom:1px solid var(--line);flex:0 0 auto}
+.rv-tab{font-size:10.5px;padding:2px 8px;border-radius:20px;border:1px solid var(--line);background:transparent;color:var(--muted);cursor:pointer}
+.rv-tab.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand);font-weight:600}
+.rv-list{flex:1;overflow:auto;padding:8px 10px 14px}
+.rv-item{border:1px solid var(--line);border-left-width:3px;border-radius:6px;padding:7px 9px;margin-bottom:7px;cursor:pointer;background:var(--surface)}
+.rv-item:hover{background:var(--surface-2)}
+.rv-item.err{border-left-color:var(--danger)}
+.rv-item.warn{border-left-color:var(--warn)}
+.rv-item.info{border-left-color:var(--faint)}
+.rv-where{font-size:10.5px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.rv-rule{font-size:9.5px;padding:0 4px;border-radius:3px;background:var(--surface-3);color:var(--faint);font-family:ui-monospace,monospace}
+.rv-detail{font-size:11.5px;line-height:1.72;margin-top:4px;color:var(--text)}
+.rv-snip{font-size:11px;line-height:1.7;margin-top:4px;padding:3px 7px;border-radius:4px;background:var(--surface-3);color:var(--muted);font-family:"Songti SC","SimSun",serif}
+.rv-fix{font-size:10.5px;line-height:1.7;margin-top:4px;color:var(--brand)}
+.rv-empty{padding:26px 14px;text-align:center;font-size:11.5px;color:var(--faint);line-height:1.9}
+.rv-foot{padding:7px 13px;border-top:1px solid var(--line);font-size:10px;color:var(--faint);line-height:1.6;flex:0 0 auto}
+.doc-paper section.rv-hit{box-shadow:0 0 0 2px var(--warn);border-radius:4px;transition:box-shadow .2s}
 .doc-tools{
   display:flex;align-items:center;gap:7px;padding:8px 14px;
   border-bottom:1px solid var(--line);background:var(--surface);flex:0 0 auto;
@@ -1560,6 +1648,8 @@ html.embedded .drawer{top:0;height:100%}
 .doc-tools .sp{flex:1}
 .doc-tools .dt-state{font-size:10.5px;color:var(--muted)}
 .doc-wrap{flex:1;overflow:auto;background:var(--surface-3);padding:18px}
+/* 审校打开时给侧栏让位：纸面被盖住一半，等于没法对着问题看原文 */
+.doc-wrap.rv-open{padding-right:364px}
 .doc-paper{
   width:760px;max-width:100%;margin:0 auto;background:#fff;color:#14181f;
   padding:46px 54px 56px;border-radius:2px;box-shadow:0 6px 26px rgba(10,25,50,.16);
@@ -1589,6 +1679,24 @@ html.embedded .drawer{top:0;height:100%}
 .dp-lead{margin:0 0 9px;text-indent:2em}
 .dp-p{margin:0 0 8px;text-indent:2em}
 .dp-note{font-size:10.5px;color:#7a8598;margin:6px 0 0;line-height:1.7}
+/* 依据：贴在每一节下面，默认折叠。
+   它刻意不进正文——正文是给别人看的，依据是自己核对用的。
+   颜色全部写死，和纸面其它部分一样不跟主题：纸就是纸。 */
+.dp-ev{margin:10px 0 2px;padding:6px 9px 7px;border-left:2px solid #dfe4ec;background:#f8fafc;border-radius:0 4px 4px 0}
+.dp-ev-h{display:flex;align-items:center;gap:6px;background:none;border:0;padding:0;
+  font:inherit;font-size:10.5px;color:#8a94a6;cursor:pointer}
+.dp-ev-h:hover{color:#2b5fd9}
+.dp-ev-h b{font-weight:600;color:#5b667a}
+.dp-ev-c{color:#a6aebd}
+.dp-ev-list{display:none;margin:7px 0 0;padding:0;list-style:none}
+.dp-ev.open .dp-ev-list{display:block}
+.dp-ev-i{padding:6px 0 5px;border-top:1px dashed #e8ecf2}
+.dp-ev-i:first-child{border-top:0;padding-top:2px}
+.dp-ev-q{margin:0;font-size:11px;line-height:1.8;color:#5b6577}
+.dp-ev-m{display:flex;gap:7px;flex-wrap:wrap;margin-top:3px;font-size:10px;color:#98a1b1}
+.dp-ev-k{color:#5b667a}
+.dp-ev-i.link{cursor:pointer}
+.dp-ev-i.link:hover .dp-ev-q{color:#2b5fd9}
 .doc-paper table{width:100%;border-collapse:collapse;margin:8px 0 4px;font-size:11.5px;line-height:1.65}
 .doc-paper th,.doc-paper td{border:1px solid #d6dbe4;padding:5px 7px;text-align:left;vertical-align:top;word-break:break-word}
 .doc-paper th{
@@ -1624,6 +1732,8 @@ html.embedded .drawer{top:0;height:100%}
   .doc-wrap{overflow:visible!important;background:none!important;padding:0!important}
   #dcPaper{position:absolute;left:0;top:0;width:182mm!important;max-width:none!important;box-shadow:none!important;padding:0!important}
   .doc-paper th,.doc-paper tbody tr:nth-child(even) td{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  /* 依据不上纸：打印出来的是公文，不是工作底稿 */
+  .dp-ev{display:none!important}
   .dp-mock{border-color:#e5e5e5;background:#fafafa;color:#555}
 }
 
@@ -2176,7 +2286,7 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
     <div class="modal-head">
       <div>
         <h3>材料助手</h3>
-        <p>按骨架装配：指标带部门与披露日，事项带台账编号，会议带交办明细。模型只写「下一步」一节，且只能用材料里的数字。</p>
+        <p>材料按骨架装配，文种按要素成文：指标带部门与披露日，事项带台账编号，会议带交办明细。模型只写「下一步」或「缘由」一节，且只能用材料里的数字。</p>
       </div>
       <span class="modal-x" id="dcClose">✕</span>
     </div>
@@ -2185,6 +2295,7 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
       <section class="doc-main">
         <div class="doc-tools" id="dcTools"></div>
         <div class="doc-wrap" id="dcWrap"><article class="doc-paper" id="dcPaper"></article></div>
+        <aside class="doc-review" id="dcReview"></aside>
       </section>
     </div>
   </div>
@@ -6496,15 +6607,40 @@ const DC = { opt: null, cfg: null, doc: null, seq: 0, busy: false, pid: null,
   tab: "report",          // V3 写作助手当前栏位：report / minutes / bulletin
   upload: null,           // 会议材料上传：{ files:[{name,text}] }
   upText: "",             // 粘贴的补充材料
+  review: null,           // 审校结果。材料一重出就作废，不能拿旧结论看新材料
+  rfilter: "",            // 审校筛选："" / error / warn / info
+  evOpen: new Set(),      // 哪些节的「依据」是展开的。按节 id 记，重绘不丢
   bulletin: { task: "", unit: "", owner: "", due: "" },
-  gov: null, govNo: 1 };  // 红头公文结果与文号流水
+  gov: null, govNo: 1,    // 红头公文结果与文号流水
+  /* 红头栏位里的三种文种：bulletin 走本地套红（四要素，不发请求），
+     qingshi / tongzhi 走服务端装配（勾事实、查体例）。分开是因为前者没有
+     可回查的结构化事实，后者每一句都要落在台账或口径表上。 */
+  ws: {
+    kind: "bulletin",
+    subject: "", basis: "", to: "", org: "", no: "", reason: "",
+    require: "", contact: "", tel: "", cc: "", attach: "",
+    items: [{ text: "", unit: "", due: "" }],
+    anchors: [],          // ["ledger:DB2026-0027", "metric:GY_VA_GROWTH"]
+    store: {},            // 每种文种各存一份：请示的事项不该原样出现在通知里
+  },
+  wsOpt: null,            // /api/wenshu/options：文种默认值与可勾选的锚点
+  wsDoc: null,            // 服务端装配结果 { meta, doc, check, markdown, warnings }
+  wsBusy: false };
 
 /* V3 三个写作助手：每个栏位各管各的要素，不再共享一张表单 ——
-   工作汇报看期次、会议落实看会议与材料、督办通报填四要素套红头。 */
+   工作汇报看期次、会议落实看会议与材料、红头公文选文种（通报/请示/通知）。
+   不把请示、通知单列成第四、第五个页签：侧栏只有 252px，五个页签名字挤成两行，
+   而且「红头公文」本来就是一个栏位——变的是文种，不是工作内容。 */
 const DC_TABS = [
   { id: "report", name: "工作汇报", hint: "选指标期次，按期生成运行汇报" },
   { id: "minutes", name: "会议落实", hint: "选会议主题、上传会议材料" },
-  { id: "bulletin", name: "督办通报", hint: "填要素，套红头生成公文" },
+  { id: "bulletin", name: "红头公文", hint: "督办通报 / 请示 / 通知，套红头成文" },
+];
+
+const DC_KINDS = [
+  { id: "bulletin", name: "督办通报", hint: "四要素套红、本地生成" },
+  { id: "qingshi", name: "请示", hint: "上行文，一文一事" },
+  { id: "tongzhi", name: "通知", hint: "下行文，讲清事项与时限" },
 ];
 
 function dcDefaults(opt) {
@@ -6559,14 +6695,14 @@ function dcRenderSide() {
       </div>
       <button class="mini dc-go" id="dcGo">生成落实材料</button>`;
   } else {
-    const b = DC.bulletin;
+    // 红头公文：先选文种，再填要素。三个文种的要素表不一样——通报要责任人和时限，
+    // 请示要联系人和电话，通知要工作要求。塞一张表里就会逼着人填无关字段。
+    const kind = (DC_KINDS.find((k) => k.id === DC.ws.kind) || DC_KINDS[0]);
+    const seg = DC_KINDS.map((k) => `
+      <button class="dc-kind ${DC.ws.kind === k.id ? "on" : ""}" data-wskind="${esc(k.id)}" title="${esc(k.hint)}">${esc(k.name)}</button>`).join("");
     form = `
-      <div><div class="dc-lab"><b>任务 / 事项</b></div><textarea class="dc-up-text" id="govTask" rows="3" placeholder="例：高铁东站周边路网配套工程管线迁改">${esc(b.task)}</textarea></div>
-      <div><div class="dc-lab"><b>责任落实部门 / 单位</b></div><input class="dm-input" id="govUnit" placeholder="例：市住建局" value="${esc(b.unit)}"></div>
-      <div><div class="dc-lab"><b>责任人</b></div><input class="dm-input" id="govOwner" placeholder="例：张三" value="${esc(b.owner)}"></div>
-      <div><div class="dc-lab"><b>时限</b></div><input class="dm-input" id="govDue" type="date" value="${esc(b.due)}"></div>
-      <button class="mini dc-go" id="dcGenGov">套用红头 · 生成公文</button>
-      <div class="dc-tip">按政府公文红头格式排版：红色机关名 + 文号 + 红色分隔线，正文仿宋风格，可直接打印。</div>`;
+      <div><div class="dc-lab"><b>文种</b><span>${esc(kind.hint)}</span></div><div class="dc-kinds">${seg}</div></div>
+      ${DC.ws.kind === "bulletin" ? dcFormBulletin() : dcFormWs()}`;
   }
 
   $("#dcSide").innerHTML = `
@@ -6576,7 +6712,101 @@ function dcRenderSide() {
   dcCounts();
 }
 
-/* 侧栏每次重画后都要把"输入即保存"接回去，否则切页签回来字就丢了 */
+/* 督办通报：四要素，本地生成，不发请求。它没有可回查的结构化事实，
+   所以不走服务端装配——套进去的每个字都是人自己写的。 */
+function dcFormBulletin() {
+  const b = DC.bulletin;
+  return `
+    <div><div class="dc-lab"><b>任务 / 事项</b></div><textarea class="dc-up-text" id="govTask" rows="3" placeholder="例：高铁东站周边路网配套工程管线迁改">${esc(b.task)}</textarea></div>
+    <div><div class="dc-lab"><b>责任落实部门 / 单位</b></div><input class="dm-input" id="govUnit" placeholder="例：市住建局" value="${esc(b.unit)}"></div>
+    <div><div class="dc-lab"><b>责任人</b></div><input class="dm-input" id="govOwner" placeholder="例：张三" value="${esc(b.owner)}"></div>
+    <div><div class="dc-lab"><b>时限</b></div><input class="dm-input" id="govDue" type="date" value="${esc(b.due)}"></div>
+    <button class="mini dc-go" id="dcGenGov">套用红头 · 生成公文</button>
+    <div class="dc-tip">按政府公文红头格式排版：红色机关名 + 文号 + 红色分隔线，正文仿宋风格，可直接打印。</div>`;
+}
+
+/* 请示 / 通知：要素 + 事实锚点。
+   锚点不是「参考资料」，是正文里那几句话的出处——勾了哪条台账，正文就写哪条，
+   措辞由服务端按编号重新取一遍，前端传不进自己编的句子。 */
+function dcFormWs() {
+  const w = DC.ws;
+  const K = (DC.wsOpt && DC.wsOpt.kinds.find((k) => k.id === w.kind)) || {};
+  const needContact = w.kind === "qingshi";
+  const isNotice = w.kind === "tongzhi";
+
+  const items = (w.items || []).map((it, i) => `
+    <div class="ws-item">
+      <textarea class="dc-up-text" rows="2" data-wsi="${i}" data-wsk="text" placeholder="例：申请市级财政补助资金 3200 万元">${esc(it.text)}</textarea>
+      <div class="ws-item-row">
+        <input class="dm-input" data-wsi="${i}" data-wsk="unit" placeholder="责任单位（可空）" value="${esc(it.unit)}">
+        <input class="dm-input" data-wsi="${i}" data-wsk="due" type="date" value="${esc(it.due)}" title="完成时限">
+      </div>
+    </div>`).join("");
+
+  const picked = new Set(w.anchors || []);
+  const group = (type, rows, label) => {
+    if (!rows || !rows.length) return "";
+    const lis = rows.map((r) => {
+      const key = `${type}:${r.ref}`;
+      return `<label><input type="checkbox" data-wsa="${esc(key)}" ${picked.has(key) ? "checked" : ""}>${esc(r.label)}${
+        r.sub ? `<em class="ws-sub">${esc(r.sub)}</em>` : ""}</label>`;
+    }).join("");
+    return `<details class="ws-anc"><summary>${esc(label)}（${rows.length}）</summary><div class="dc-checks">${lis}</div></details>`;
+  };
+  const anc = DC.wsOpt
+    ? group("ledger", DC.wsOpt.anchors.ledger, "督办台账") + group("metric", DC.wsOpt.anchors.metrics, "指标口径表")
+    : `<div class="dc-tip">正在读取可勾选的事实…</div>`;
+
+  return `
+    <div><div class="dc-lab"><b>事由</b><span>进标题也进缘由</span></div>
+      <textarea class="dc-up-text" id="wsSubject" rows="2" placeholder="例：高铁东站周边路网配套工程管线迁改资金">${esc(w.subject)}</textarea></div>
+    <div><div class="dc-lab"><b>依据</b><span>可空</span></div>
+      <input class="dm-input" id="wsBasis" placeholder="例：市政府第 12 次常务会议部署" value="${esc(w.basis)}"></div>
+    <div><div class="dc-lab"><b>主送机关</b></div>
+      <input class="dm-input" id="wsTo" placeholder="${esc(K.to || "上级机关或受文范围")}" value="${esc(w.to)}"></div>
+    <div><div class="dc-lab"><b>发文机关</b></div>
+      <input class="dm-input" id="wsOrg" placeholder="${esc(K.org || "发文机关全称")}" value="${esc(w.org)}"></div>
+    <div><div class="dc-lab"><b>文号</b><span>不自动编号</span></div>
+      <input class="dm-input" id="wsNo" placeholder="按发文登记簿补填" value="${esc(w.no)}"></div>
+    <div><div class="dc-lab"><b>事项</b><span>一条一件事</span></div>
+      ${items}
+      <button class="mini ws-add" id="dcWsAdd" ${(w.items || []).length >= (DC.wsOpt ? DC.wsOpt.max_items : 6) ? "disabled" : ""}>＋ 再加一条</button>
+    </div>
+    ${isNotice ? `<div><div class="dc-lab"><b>工作要求</b><span>可空</span></div>
+      <textarea class="dc-up-text" id="wsRequire" rows="2" placeholder="例：各责任单位每周五前将进展报市政府办公室。">${esc(w.require)}</textarea></div>` : ""}
+    ${needContact ? `<div><div class="dc-lab"><b>联系人 / 电话</b><span>请示必备</span></div>
+      <div class="ws-item-row">
+        <input class="dm-input" id="wsContact" placeholder="承办人" value="${esc(w.contact)}">
+        <input class="dm-input" id="wsTel" placeholder="座机" value="${esc(w.tel)}">
+      </div></div>` : ""}
+    <div><div class="dc-lab"><b>事实锚点</b><span id="wsAncCount"></span></div>${anc}</div>
+    <div><div class="dc-lab"><b>抄送</b><span>可空</span></div>
+      <input class="dm-input" id="wsCc" placeholder="例：市委办公室" value="${esc(w.cc)}"></div>
+    <div class="dc-tip">正文里提到台账和指标的那几句，由服务端按编号重新取一遍再写进去；模型只写缘由段，出现清单外的数字会被整段丢弃。</div>
+    <!-- 表单比侧栏长，主按钮钉在底部：滚到一半看不到「装配文稿」是常事 -->
+    <div class="dc-actions"><button class="mini dc-go" id="dcGenWs">装配文稿</button></div>`;
+}
+/* 换文种 = 换一份稿子。请示的「申请补助」原样出现在通知里，读的人会以为
+   这份通知在向上级要钱。所以每种文种各存一份要素，切过去取自己那份，
+   没有就空着——宁可重填三个字段，也不能让上一份的内容串到下一份里。 */
+const WS_FIELDS = ["subject", "basis", "to", "org", "no", "reason", "require", "contact", "tel", "cc", "attach"];
+
+function dcWsSwap(next) {
+  const w = DC.ws;
+  w.store = w.store || {};
+  w.store[w.kind] = {
+    items: (w.items || []).map((x) => ({ ...x })),
+    anchors: [...(w.anchors || [])],
+    ...Object.fromEntries(WS_FIELDS.map((k) => [k, w[k] || ""])),
+  };
+  const prev = w.store[next] || {};
+  WS_FIELDS.forEach((k) => { w[k] = prev[k] || ""; });
+  w.items = prev.items && prev.items.length ? prev.items : [{ text: "", unit: "", due: "" }];
+  w.anchors = prev.anchors || [];
+  w.kind = next;
+}
+
+/* 侧栏每次重画后都要把「输入即保存」接回去，否则切页签回来字就丢了 */
 function dcBindSide() {
   const bind = (id, key) => {
     const el = $(id);
@@ -6587,6 +6817,57 @@ function dcBindSide() {
   bind("#govUnit", "bulletin.unit");
   bind("#govOwner", "bulletin.owner");
   bind("#govDue", "bulletin.due");
+
+  // 文种要素：一律写进 DC.ws，切文种再切回来东西还在
+  [["#wsSubject", "ws.subject"], ["#wsBasis", "ws.basis"], ["#wsTo", "ws.to"],
+   ["#wsOrg", "ws.org"], ["#wsNo", "ws.no"], ["#wsRequire", "ws.require"],
+   ["#wsContact", "ws.contact"], ["#wsTel", "ws.tel"], ["#wsCc", "ws.cc"]]
+    .forEach(([id, key]) => bind(id, key));
+
+  // 事项行按索引绑：重画时行数可能变，不能靠 #id 定位
+  document.querySelectorAll("[data-wsi]").forEach((el) => {
+    const i = Number(el.dataset.wsi);
+    const k = el.dataset.wsk;
+    el.oninput = () => {
+      const row = (DC.ws.items || [])[i];
+      if (row) row[k] = el.value;
+    };
+  });
+
+  // 锚点：勾选即入列。上限在服务端也有一道，这里挡是为了当场给出反馈
+  document.querySelectorAll("[data-wsa]").forEach((el) => {
+    el.onchange = () => {
+      const key = el.dataset.wsa;
+      const set = new Set(DC.ws.anchors || []);
+      const cap = (DC.wsOpt && DC.wsOpt.max_anchors) || 6;
+      if (el.checked) {
+        if (set.size >= cap) {
+          el.checked = false;
+          toast(`最多勾 ${cap} 条：再多就不像一份文，像一张清单`);
+          return;
+        }
+        set.add(key);
+      } else {
+        set.delete(key);
+      }
+      DC.ws.anchors = [...set];
+      dcCounts();
+    };
+  });
+}
+
+/* 文种默认值和可勾选事实只在第一次进红头栏位时取，之后一直复用：
+   台账会变，但一份正在写的稿子不该因为台账动了就换掉左侧选项。 */
+async function dcLoadWsOpt() {
+  if (DC.wsOpt) return DC.wsOpt;
+  try {
+    const res = await fetch("/api/wenshu/options", { headers: { "X-Person-Id": PID.get() } });
+    const d = await res.json();
+    if (d && d.ok) DC.wsOpt = d;
+  } catch (e) {
+    DC.wsOpt = null;
+  }
+  return DC.wsOpt;
 }
 
 /* 会议材料上传：只收纯文本，读进内存随生成请求一起带上去（后端可选用） */
@@ -6624,41 +6905,65 @@ function dcRefreshPills() {
 
 function dcCounts() {
   const c = DC.cfg;
-  const secEl = $("#dcSecCount"), metEl = $("#dcMetCount");
+  const secEl = $("#dcSecCount"), metEl = $("#dcMetCount"), ancEl = $("#wsAncCount");
   if (secEl) secEl.textContent = `${(c.sections || []).length} 节`;
   if (metEl) metEl.textContent = `${dcEffectiveCodes().length} 项`;
+  if (ancEl) {
+    const cap = (DC.wsOpt && DC.wsOpt.max_anchors) || 6;
+    const n = (DC.ws.anchors || []).length;
+    ancEl.textContent = n ? `${n} / ${cap}` : "勾了才进正文";
+  }
 }
 
 function dcTools() {
-  // 栏位决定看到哪一份材料：红头栏位下汇报的「N 节 · 期次」不属于当前纸面
+  // 栏位决定看到哪一份纸面：红头栏位下汇报的「N 节 · 期次」不属于当前纸面
   const onGov = DC.tab === "bulletin";
+  const ws = onGov && DC.ws.kind !== "bulletin" ? DC.wsDoc : null;
   const d = onGov ? null : DC.doc;
-  const badge = !d
-    ? DC.gov
-      ? `<span class="mbadge ok">红头公文 · 已按公文格式排版</span>`
-      : ""
-    : d.model && d.model.source === "model"
+  const ready = !!(d || DC.gov || ws);
+
+  let badge = "";
+  if (ws) {
+    const c = ws.check || {};
+    const tone = c.verdict === "block" ? "err" : c.verdict === "review" ? "warn" : "ok";
+    const size = (c.summary && c.summary.total) || 0;
+    badge = `<span class="mbadge ${tone}">体例${tone === "ok" ? "无硬错" : ` ${size} 处`} · ${esc(c.score || 0)} 分</span>`;
+    if (ws.model && ws.model.source === "model") badge += `<span class="mbadge ok">缘由段由模型撰写</span>`;
+  } else if (d) {
+    badge = d.model && d.model.source === "model"
       ? `<span class="mbadge ok">「下一步」由模型撰写</span>`
       : `<span class="mbadge warn">按台账事实生成</span>`;
-  const state = d
-    ? `${d.blocks.length} 节 · ${esc(d.meta.period_label)} · ${esc(d.meta.generated_at)}`
-    : DC.gov
-      ? `督办通报 · ${esc(DC.gov.no)}`
-      : "尚未生成";
+  } else if (DC.gov) {
+    badge = `<span class="mbadge ok">红头公文 · 已按公文格式排版</span>`;
+  }
+
+  const evCount = d ? (d.blocks || []).reduce((n, b) => n + ((b.evidence || []).length), 0) : 0;
+  let state = "尚未生成";
+  if (ws) state = `${esc(ws.doc.kind_label)} · ${esc(ws.doc.no)} · ${esc(ws.meta.date_text)}`;
+  else if (d) state = `${d.blocks.length} 节 · ${esc(d.meta.period_label)} · ${esc(d.meta.generated_at)}`;
+  else if (DC.gov) state = `督办通报 · ${esc(DC.gov.no)}`;
+
   $("#dcTools").innerHTML = `
     <span class="dt-state">${state}</span>
     ${badge}
     <span class="sp"></span>
-    <button class="mini" id="dcCopy" ${(d || DC.gov) ? "" : "disabled"}>复制 Markdown</button>
-    <button class="mini" id="dcDown" ${(d || DC.gov) ? "" : "disabled"}>下载 .md</button>
-    <button class="mini" id="dcPrint" ${(d || DC.gov) ? "" : "disabled"}>打印</button>
+    ${d && evCount ? `<button class="mini" id="dcEv" title="把每一节的依据展开：台账办理经过、纪要原文、指标口径、资料库里相关的政策原文">依据 ${evCount} 条</button>` : ""}
+    <button class="mini" id="dcReviewBtn" ${(d || ws) ? "" : "disabled"} title="把这份稿子回查一遍：数字能否溯源、事实是否还在、体例是否合规">审校</button>
+    <button class="mini" id="dcCopy" ${ready ? "" : "disabled"}>复制 Markdown</button>
+    <button class="mini" id="dcDown" ${ready ? "" : "disabled"}>下载 .md</button>
+    <button class="mini" id="dcDocx" ${ready ? "" : "disabled"}>下载 .docx</button>
+    <button class="mini" id="dcPrint" ${ready ? "" : "disabled"}>打印</button>
     ${DC.busy && !onGov ? `<span class="dt-state">生成中…</span>` : ""}
+    ${DC.wsBusy ? `<span class="dt-state">装配中…</span>` : ""}
   `;
 }
 
 function dcActiveMarkdown() {
   // 复制/下载跟着当前栏位走：红头栏位下不能把汇报的 Markdown 复制出去
-  if (DC.tab === "bulletin") return DC.gov ? DC.gov.md : "";
+  if (DC.tab === "bulletin") {
+    if (DC.ws.kind !== "bulletin") return DC.wsDoc ? DC.wsDoc.markdown : "";
+    return DC.gov ? DC.gov.md : "";
+  }
   if (DC.doc && DC.doc.markdown) return DC.doc.markdown;
   if (DC.gov) return DC.gov.md;
   return "";
@@ -6672,6 +6977,7 @@ function dcTable(cols, rows, cell, widths) {
 }
 
 function dcBlock(b) {
+  // id 是给审校用的锚点：点问题要能滚到出问题的那一节，而不是让人自己找
   const head = `<h2 class="dp-h2">${esc(b.no)}、${esc(b.title)}</h2>`;
   const lead = b.lead ? `<p class="dp-lead">${esc(b.lead)}</p>` : "";
   let body = "";
@@ -6726,7 +7032,58 @@ function dcBlock(b) {
   }
 
   const note = b.note ? `<div class="dp-note">${esc(b.note)}</div>` : "";
-  return `<section>${head}${lead}${body}${note}</section>`;
+  return `<section data-blk="${esc(b.id || "")}">${head}${lead}${body}${note}${dpEv(b)}</section>`;
+}
+
+/* 一节的依据：这段文字背后，系统里存着什么原文。
+   默认折叠——纸面首先得是一份能看的材料，依据是核对时才打开的东西，
+   一上来全摊开会把人劝退，也会让人误以为依据是正文的一部分。
+   展开后每条都能点：台账跳台账、会议跳纪要，跳完回来纸面还在原处。 */
+function dpEv(b) {
+  const list = b.evidence || [];
+  if (!list.length) return "";
+  const open = DC.evOpen.has(b.id);
+  const items = list.map((e) => {
+    const jump = e.ref && (e.ref.type === "oversight" || e.ref.type === "meeting");
+    const ref = jump ? `${e.ref.type}:${e.ref.id}` : "";
+    // 谁说的、什么时候、为什么在这儿——三样缺一样，这段原文就得打折扣看
+    const meta = [e.by, e.when, e.why].filter(Boolean).map(esc).join("　·　");
+    return `<li class="dp-ev-i${ref ? " link" : ""}"${ref ? ` data-kbref="${esc(ref)}"` : ""}>
+      <p class="dp-ev-q">${esc(e.quote || "")}</p>
+      <div class="dp-ev-m"><span class="dp-ev-k">${esc(e.kind_label || "依据")}</span><span>${meta}</span></div>
+    </li>`;
+  }).join("");
+  return `<div class="dp-ev${open ? " open" : ""}">
+    <button class="dp-ev-h" data-evbtn="${esc(b.id || "")}">依据 <b>${list.length}</b> 条<span class="dp-ev-c">${open ? "收起" : "展开"}</span></button>
+    <ul class="dp-ev-list">${items}</ul>
+  </div>`;
+}
+
+function dcEvToggleOne(btn) {
+  const box = btn.closest(".dp-ev");
+  if (!box) return;
+  const open = box.classList.toggle("open");
+  const id = btn.dataset.evbtn || "";
+  if (open) DC.evOpen.add(id); else DC.evOpen.delete(id);
+  const hint = btn.querySelector(".dp-ev-c");
+  if (hint) hint.textContent = open ? "收起" : "展开";
+}
+
+function dcEvToggleAll() {
+  const boxes = [...document.querySelectorAll("#dcPaper .dp-ev")];
+  if (!boxes.length) return;
+  // 有一个是收着的就全展开：这样点一次必定「都能看到」，
+  // 而不是点一次翻转一半人的预期
+  const allOpen = boxes.every((x) => x.classList.contains("open"));
+  boxes.forEach((x) => {
+    const btn = x.querySelector("[data-evbtn]");
+    if (!btn) return;
+    const want = !allOpen;
+    x.classList.toggle("open", want);
+    if (want) DC.evOpen.add(btn.dataset.evbtn || ""); else DC.evOpen.delete(btn.dataset.evbtn || "");
+    const hint = btn.querySelector(".dp-ev-c");
+    if (hint) hint.textContent = want ? "收起" : "展开";
+  });
 }
 
 function dcRenderPaper() {
@@ -6734,9 +7091,13 @@ function dcRenderPaper() {
   // 红头栏位只画红头。切到督办通报后，汇报/落实那边迟到的结果不能再往纸上画 ——
   // 否则用户填着四要素，纸面自己跳回「溧阳市工作汇报」。
   if (DC.tab === "bulletin") {
-    if (DC.gov) return dcRenderBulletinPaper();
+    // 文种决定画哪一份：请示/通知有服务端装配结果，督办通报只有本地套红那一份
+    if (DC.ws.kind !== "bulletin" && DC.wsDoc) return dcRenderWsPaper();
+    if (DC.ws.kind === "bulletin" && DC.gov) return dcRenderBulletinPaper();
     p.className = "doc-paper blank";
-    p.textContent = "填好左侧四项要素，点「套用红头 · 生成公文」。";
+    p.textContent = DC.ws.kind === "bulletin"
+      ? "填好左侧四项要素，点「套用红头 · 生成公文」。"
+      : "填好事由和事项，点「装配文稿」。正文里要引台账或指标，到左侧「事实锚点」里勾。";
     return;
   }
   if (!d) {
@@ -6769,6 +7130,142 @@ function dcRenderPaper() {
   $("#dcWrap").scrollTop = 0;
 }
 
+/* ---------- 审校 ----------
+   不让模型参与判断。每条问题要么是「这个数查不到出处」，要么是「台账此刻不是这个状态」，
+   要么是「这句写法公文里不用」——可复现、能定位，点一下跳到出问题的那一节。 */
+const DR_RULE = {
+  "num-offlist": "无法溯源", "num-value": "与口径表不符", "num-stale": "台账已变动",
+  "num-selfcontradict": "前后不一致",
+  "ref-item": "台账查无此号", "ref-state": "与台账不一致", "ref-orphan": "无台账编号",
+  "ref-metric": "指标无出处", "ref-meeting": "会议查不到",
+  "sty-seq": "序号错乱", "sty-date": "日期写法", "sty-unit": "称谓不一",
+  "sty-commit": "承诺性表述", "sty-hw": "半角标点", "sty-empty": "空节",
+  // 文种稿的体例检查：查的是「这份文能不能签」，不是数字对不对
+  "ws-no": "文号待填", "ws-subject": "标题缺事由", "ws-title": "标题文种",
+  "ws-to": "缺主送机关", "ws-reason": "缘由段", "ws-items": "缺事项",
+  "ws-many": "一文一事", "ws-tail": "结语", "ws-contact": "缺联系人",
+  "ws-date": "成文日期", "ws-unit": "单位名未核", "ws-cliche": "套话",
+  "ws-cc": "抄送", "ws-require": "缺工作要求",
+};
+const DR_TONE = { error: "err", warn: "warn", info: "info" };
+const DR_VERDICT = { block: "不可出手", review: "建议复核", pass: "可以出手" };
+
+function dcDropReview() {
+  // 材料重出，旧结论立刻作废：拿着上一版的「全部通过」看新版，比不审还危险
+  DC.review = null;
+  DC.rfilter = "";
+  const box = $("#dcReview");
+  if (box) { box.classList.remove("on"); box.innerHTML = ""; }
+  const wrap = $("#dcWrap");
+  if (wrap) wrap.classList.remove("rv-open");
+  const shell = document.querySelector("#docModal .doc-box");
+  if (shell) shell.classList.remove("rv-open");
+}
+
+async function dcReview() {
+  // 两种纸面两种审法：材料回查台账和口径表（briefdoc/review），
+  // 文种稿没有指标章节，查的是要素齐不齐、体例对不对（wenshu/review）。
+  // 共用同一个侧栏，是因为用户关心的是「这份东西现在能不能签」，不是走哪条接口。
+  const ws = DC.tab === "bulletin" && DC.ws.kind !== "bulletin" ? DC.wsDoc : null;
+  const d = DC.doc;
+  if (!ws && !d) return;
+  const btn = $("#dcReviewBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "审校中…"; }
+  try {
+    const res = await fetch(ws ? "/api/wenshu/review" : "/api/briefdoc/review", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      body: JSON.stringify(ws ? { meta: ws.meta, doc: ws.doc } : { meta: d.meta, blocks: d.blocks }),
+    });
+    const r = await res.json();
+    if (!res.ok || !r.ok) throw new Error(r.error || "审校失败");
+    DC.review = r;
+    DC.rfilter = "";
+    dcRenderReview();
+  } catch (e) {
+    toast("审校没跑起来：" + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "审校"; }
+  }
+}
+
+function dcRenderReview() {
+  const box = $("#dcReview"), r = DC.review;
+  const wrap = $("#dcWrap");
+  if (!r) {
+    box.classList.remove("on");
+    box.innerHTML = "";
+    wrap.classList.remove("rv-open");
+    return;
+  }
+  box.classList.add("on");
+  wrap.classList.add("rv-open");
+  const shell = document.querySelector("#docModal .doc-box");
+  if (shell) shell.classList.add("rv-open");
+  const s = r.summary;
+  // 材料审校和文种体例检查共用这块侧栏，但两件事查的不是一回事：
+  // 材料查「数字能不能溯源」，文种查「要素齐不齐、体例对不对」。
+  // 共用统计口径会显示成「表格行 0／可追溯 100%」这种自己骗自己的话。
+  const isWs = !!(r.checked && r.checked.kind);
+  const tone = r.verdict === "block" ? "var(--danger)" : r.verdict === "review" ? "var(--warn)" : "var(--ok)";
+  const rate = s.rows ? Math.round((s.rows_traced / s.rows) * 100) : 100;
+  const kindName = isWs
+    ? ((DC_KINDS.find((k) => k.id === r.checked.kind) || {}).name || "文稿")
+    : "";
+  const numsLine = isWs
+    ? `<span>${esc(kindName)} · 正文 <b>${r.checked.paras || 0}</b> 段</span><span>待改 <b>${s.error}</b>／<b>${s.warn}</b>／<b>${s.info}</b></span>`
+    : `<span>数字 <b>${s.numbers}</b> 处／未溯源 <b>${s.untraced}</b></span>
+       <span>表格行 <b>${s.rows}</b>／可追溯 <b>${rate}%</b></span>`;
+  const tabs = [["", `全部 ${s.total}`], ["error", `必须改 ${s.error}`],
+                ["warn", `建议改 ${s.warn}`], ["info", `可斟酌 ${s.info}`]]
+    .filter(([k, t]) => !k || !t.endsWith(" 0"))
+    .map(([k, t]) => `<button class="rv-tab${(DC.rfilter || "") === k ? " on" : ""}" data-f="${k}">${esc(t)}</button>`)
+    .join("");
+  const list = (r.issues || []).filter((i) => !DC.rfilter || i.level === DC.rfilter);
+  const body = list.length
+    ? list.map((i) => `
+      <div class="rv-item ${DR_TONE[i.level] || "info"}" data-blk="${esc(i.block || "")}">
+        <div class="rv-where">${esc(i.where || "全文")}<span class="rv-rule">${esc(DR_RULE[i.rule] || i.rule)}</span></div>
+        <div class="rv-detail">${esc(i.detail || "")}</div>
+        ${i.snippet ? `<div class="rv-snip">${esc(i.snippet)}</div>` : ""}
+        ${i.fix ? `<div class="rv-fix">改法：${esc(i.fix)}</div>` : ""}
+      </div>`).join("")
+    : `<div class="rv-empty">${s.total
+        ? "这一类没有问题。切回「全部」看其他条目。"
+        : (isWs
+            ? "没有发现体例问题。<br>要素齐、文种对、结语有，<br>可以拿去送签了。"
+            : "没有发现问题。<br>数字都能溯源，引用都对得上，<br>体例也过得去。")}</div>`;
+
+  box.innerHTML = `
+    <div class="rv-head">
+      <div class="rv-top">
+        <b>审校</b>
+        <span class="rv-score" style="color:${tone}">${r.score} 分</span>
+        <span class="sp"></span>
+        <span class="mbadge ${r.verdict === "block" ? "warn" : "ok"}">${esc(DR_VERDICT[r.verdict] || "")}</span>
+        <span class="rv-close" id="rvClose" style="cursor:pointer;color:var(--faint)">✕</span>
+      </div>
+      <div class="rv-verdict" style="color:${tone}">${esc(r.verdict_text)}</div>
+      <div class="rv-nums">${numsLine}</div>
+    </div>
+    <div class="rv-tabs">${tabs}</div>
+    <div class="rv-list">${body}</div>
+    <div class="rv-foot">${isWs
+      ? "体例检查按《党政机关公文处理工作条例》和 GB/T 9704 逐项过：文种、主送、缘由、事项、结语、成文日期。这里不看数字对不对——数字的出处是左边勾的那些台账和指标。"
+      : "审校回查的是「此刻的」指标库与台账，不是纸面自己。生成之后台账有过变动，这里就会报「已变动」——那不是写错了，是材料过期了。"}</div>
+  `;
+}
+
+function dcJump(blk) {
+  const wrap = $("#dcWrap");
+  const sec = blk ? wrap.querySelector(`section[data-blk="${blk}"]`) : null;
+  if (!sec) return;
+  const top = sec.getBoundingClientRect().top - wrap.getBoundingClientRect().top + wrap.scrollTop - 36;
+  wrap.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+  sec.classList.add("rv-hit");
+  setTimeout(() => sec.classList.remove("rv-hit"), 1800);
+}
+
 async function dcPost(payload) {
   const res = await fetch("/api/briefdoc", {
     method: "POST",
@@ -6797,6 +7294,7 @@ async function dcGenerate() {
     if (seq !== DC.seq) return;
     if (!quick || !quick.blocks) throw new Error("材料接口没有返回正文，检查本地服务是否正常");
     DC.doc = quick;
+    dcDropReview();
     dcRenderPaper();
     dcRefreshPills();
     dcTools();
@@ -6806,6 +7304,7 @@ async function dcGenerate() {
       if (seq !== DC.seq) return;
       if (full.ok) {
         DC.doc = full;
+        dcDropReview();
         dcRenderPaper();
         dcRefreshPills();
       }
@@ -6885,20 +7384,78 @@ function dcFallbackCopy(text, done) {
 }
 
 function dcDownload() {
-  const d = DC.tab === "bulletin" ? null : DC.doc; // 文件名跟着当前栏位走
+  // 文件名跟着当前栏位走：红头栏位下不能叫「工作汇报」，请示也不能叫「督办通报」
+  const onGov = DC.tab === "bulletin";
+  const ws = onGov && DC.ws.kind !== "bulletin" ? DC.wsDoc : null;
+  const d = onGov ? null : DC.doc;
   const md = dcActiveMarkdown();
   if (!md) return;
   const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
   const a = document.createElement("a");
-  const day = ((d && d.meta.generated_at) || (DC.gov && DC.gov.dateText) || "").slice(0, 10) || "draft";
+  const day = ((d && d.meta.generated_at) || (ws && ws.meta.generated_at)
+    || (DC.gov && DC.gov.dateText) || "").slice(0, 10) || "draft";
   a.href = URL.createObjectURL(blob);
-  a.download = d ? `${d.meta.title}-${day}.md` : `督办通报-${day}.md`;
+  a.download = d || ws ? `${(d || ws).meta.title}-${day}.md` : `督办通报-${day}.md`;
   document.body.appendChild(a);
   a.click();
   setTimeout(() => {
     URL.revokeObjectURL(a.href);
     document.body.removeChild(a);
   }, 0);
+}
+
+/* 导出 .docx：排版交给服务端，前端不拼 XML。
+   两个来源：① 纸面上的材料——把服务端刚算出来的 meta/blocks 原样回灌，
+   保证文件与屏幕一字不差；② 红头公文——事实来自左侧表单，字段一一对应。 */
+async function dcDownloadDocx() {
+  const btn = $("#dcDocx");
+  const label = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "生成中…"; }
+  try {
+    let payload;
+    if (DC.tab === "bulletin" && DC.ws.kind !== "bulletin") {
+      const w = DC.wsDoc;
+      if (!w) throw new Error("先点「装配文稿」");
+      // 纸面回灌：服务端刚排好的那份 doc 原样送回来排版，不重新装配
+      payload = { meta: w.meta, doc: w.doc };
+    } else if (DC.tab === "bulletin") {
+      const g = DC.gov;
+      if (!g) throw new Error("先点「套用红头 · 生成公文」");
+      payload = { source: "bulletin", fields: {
+        task: g.task, unit: g.unit, owner: g.owner,
+        due_text: g.dueText, no: g.no, date_text: g.dateText,
+      } };
+    } else {
+      const d = DC.doc;
+      if (!d || !d.blocks) throw new Error("还没有可导出的材料");
+      payload = { meta: d.meta, blocks: d.blocks };
+    }
+    const wsExport = DC.tab === "bulletin" && DC.ws.kind !== "bulletin";
+    const res = await fetch(wsExport ? "/api/wenshu/docx" : "/api/briefdoc/docx", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      body: JSON.stringify(payload),
+    });
+    const out = await res.json();
+    if (!res.ok || !out.ok) throw new Error(out.error || "导出失败");
+    const bin = atob(out.docx);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) buf[i] = bin.charCodeAt(i);
+    const blob = new Blob([buf], {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = out.filename || "材料.docx";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 0);
+    toast(`已导出 Word：${out.filename}`);
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label || "下载 .docx"; }
+  }
 }
 
 $("#dcSide").onclick = (e) => {
@@ -6918,10 +7475,40 @@ $("#dcSide").onclick = (e) => {
     dcRenderSide();
     dcRenderPaper();
     dcTools();
+    // 请示/通知要一份可勾选的事实清单。没取到就先画空表，取到再补——
+    // 不能为了等这份清单让人对着白屏站着
+    if (DC.ws.kind !== "bulletin" && !DC.wsOpt) {
+      dcLoadWsOpt().then(() => { if (DC.tab === "bulletin") { dcRenderSide(); } });
+    }
     return;
   }
   if (e.target.id === "dcGo") return dcGenerate();
   if (e.target.id === "dcGenGov") return dcGenerateBulletin();
+  if (e.target.id === "dcGenWs") return dcGenerateWs();
+
+  // 切文种：通报是本地套红，请示/通知走服务端装配，切过去要顺手把选项取回来
+  const kindBtn = e.target.closest("[data-wskind]");
+  if (kindBtn) {
+    const id = kindBtn.dataset.wskind;
+    if (id === DC.ws.kind) return;
+    dcWsSwap(id);
+    // 换文种就是换一份稿子：上一份不能留在纸上，否则左边填着通知、
+    // 右边还是那份请示，用户会以为系统串了
+    DC.wsDoc = null;
+    dcDropReview();
+    if (id !== "bulletin") DC.gov = null;
+    dcRenderSide(); dcRenderPaper(); dcTools();
+    if (id !== "bulletin" && !DC.wsOpt) dcLoadWsOpt().then(() => { if (DC.tab === "bulletin") dcRenderSide(); });
+    return;
+  }
+
+  // 再加一条事项。已有行的值随输入实时写进了 DC.ws.items，这里只补空行再重画
+  if (e.target.id === "dcWsAdd") {
+    const cap = (DC.wsOpt && DC.wsOpt.max_items) || 6;
+    if ((DC.ws.items || []).length >= cap) return;
+    DC.ws.items = [...(DC.ws.items || []), { text: "", unit: "", due: "" }];
+    return dcRenderSide();
+  }
   // 已上传材料上的 ✕：按索引移除
   const uprm = e.target.closest("[data-dcuprm]");
   if (uprm) {
@@ -6973,9 +7560,31 @@ $("#dcSide").onchange = (e) => {
 
 $("#dcTools").onclick = (e) => {
   const id = e.target.id;
+  if (id === "dcReviewBtn") return dcReview();
+  if (id === "dcEv") return dcEvToggleAll();
   if (id === "dcCopy") return dcCopyMarkdown();
   if (id === "dcDown") return dcDownload();
+  if (id === "dcDocx") return dcDownloadDocx();
   if (id === "dcPrint") return window.print();
+};
+// 依据的展开/收起不重绘整张纸：重绘会把滚动位置打回顶部，
+// 人正看到第五节，点一下跳回第一行，比不给依据还难受
+$("#dcPaper").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-evbtn]");
+  if (btn) dcEvToggleOne(btn);
+});
+$("#dcReview").onclick = (e) => {
+  // 侧栏是整块重绘的，事件只能挂在容器上做代理——挂在每条问题上，重绘一次就全丢
+  const tab = e.target.closest(".rv-tab");
+  if (tab) { DC.rfilter = tab.dataset.f || ""; return dcRenderReview(); }
+  if (e.target.closest("#rvClose")) {
+    $("#dcReview").classList.remove("on");
+    $("#dcWrap").classList.remove("rv-open");
+    document.querySelector("#docModal .doc-box").classList.remove("rv-open");
+    return;
+  }
+  const item = e.target.closest(".rv-item");
+  if (item && item.dataset.blk) dcJump(item.dataset.blk);
 };
 $("#dcClose").onclick = closeDocModal;
 $("#docModal").onclick = (e) => { if (e.target.id === "docModal") closeDocModal(); };
@@ -7019,9 +7628,92 @@ function dcGenerateBulletin() {
       dateText,
     ].join("\n") };
   DC.doc = null; // 红头版与服务器版互斥：纸面同一时间只显示一份
+  dcDropReview();
   dcRenderBulletinPaper();
   dcTools();
   toast(`已按红头公文生成，文号 ${no}`);
+}
+
+/* 装配一份请示 / 通知。前端只交要素和勾选的编号，事实句由服务端按编号重取。 */
+async function dcGenerateWs() {
+  const w = DC.ws;
+  const val = (id, cur) => { const el = $(id); return el ? el.value.trim() : cur; };
+  w.subject = val("#wsSubject", w.subject);
+  w.basis = val("#wsBasis", w.basis);
+  w.to = val("#wsTo", w.to);
+  w.org = val("#wsOrg", w.org);
+  w.no = val("#wsNo", w.no);
+  w.require = val("#wsRequire", w.require);
+  w.contact = val("#wsContact", w.contact);
+  w.tel = val("#wsTel", w.tel);
+  w.cc = val("#wsCc", w.cc);
+  if (!w.subject) return toast("先写一句事由：它进标题，也进缘由段");
+
+  const items = (w.items || []).filter((it) => (it.text || "").trim());
+  const anchors = (w.anchors || []).map((k) => {
+    const [type, ref] = String(k).split(":");
+    return { type, ref };
+  });
+
+  DC.wsBusy = true;
+  dcTools();
+  try {
+    const res = await fetch("/api/wenshu", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      body: JSON.stringify({
+        kind: w.kind,
+        fields: {
+          subject: w.subject, basis: w.basis, to: w.to, org: w.org, no: w.no,
+          reason: w.reason, require: w.require, contact: w.contact, tel: w.tel,
+          cc: w.cc, attach: w.attach, items, anchors,
+        },
+      }),
+    });
+    const d = await res.json();
+    if (!res.ok || !d.ok) throw new Error(d.error || "装配失败");
+    DC.wsDoc = d;
+    // 三份纸面互斥：同一时间只显示刚生成的这一份
+    DC.doc = null;
+    DC.gov = null;
+    dcDropReview();
+    dcRenderPaper();
+    if (d.warnings && d.warnings.length) toast(d.warnings[0]);
+    else toast(`${d.doc.kind_label}已装配：体例 ${d.check.score} 分`);
+  } catch (e) {
+    toast("装配没跑起来：" + e.message);
+  } finally {
+    DC.wsBusy = false;
+    dcTools();
+  }
+}
+
+/* 请示 / 通知的纸面。和 docx 共用同一份 doc 字段，所以屏幕上看到的就是打印出来的。
+   每段带 data-blk：体例检查点上「缘由太短」，能直接滚到那一段。 */
+function dcRenderWsPaper() {
+  const r = DC.wsDoc, d = r.doc;
+  const p = $("#dcPaper");
+  p.className = "doc-paper gov";
+  const warns = (r.warnings || []).map((w) => `<div class="gov-warn">${esc(w)}</div>`).join("");
+  const attach = (d.attach || "").split("\n").filter(Boolean)
+    .map((t, i) => `<p class="gov-p gov-attach" style="text-indent:${i ? "3em" : "0"}">${esc(t)}</p>`).join("");
+  p.innerHTML = `
+    <div class="gov-org">${esc(d.org)}</div>
+    <div class="gov-no">${esc(d.no)}</div>
+    <div class="gov-line"></div>
+    <h1 class="gov-title">${esc(d.title)}</h1>
+    <p class="gov-p gov-to">${esc(d.to)}：</p>
+    ${warns}
+    ${d.paras.map((x) => `<p class="gov-p" data-blk="${esc(x.id)}">${esc(x.text)}</p>`).join("")}
+    <p class="gov-p">${esc(d.tail)}</p>
+    ${attach}
+    <div class="gov-sign">${esc(d.sign)}<br>${esc(d.date)}</div>
+    ${d.note ? `<p class="gov-note">${esc(d.note)}</p>` : ""}
+    ${d.cc ? `<p class="gov-cc">${esc(d.cc)}</p>` : ""}
+    ${d.facts && d.facts.length ? `<div class="gov-facts">依据：${d.facts.map((f) =>
+      `<span title="${esc(f.source || "")}">${esc(f.label)}</span>`).join("　")}</div>` : ""}
+  `;
+  $("#dcWrap").scrollTop = 0;
 }
 
 function dcRenderBulletinPaper() {
