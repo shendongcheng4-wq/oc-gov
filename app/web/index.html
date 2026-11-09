@@ -1096,6 +1096,18 @@ html.embedded .drawer{top:0;height:100%}
 .modal-x{cursor:pointer;color:var(--faint);font-size:15px;line-height:1}
 .modal-x:hover{color:var(--ink)}
 .modal-body{padding:14px 18px 18px;overflow:auto}
+/* 会议通知：正文是给人改的正式文本，用仿宋、行距按公文来 */
+.notice-box{width:min(760px,94vw)}
+/* 会议助手本身也是一个 .modal（同 z-index 60，且在本弹窗之后入 DOM），
+   不抬高就会被它盖住 —— 而通知恰恰是从那个弹窗里点开的。 */
+#noticeModal{z-index:70}
+.notice-ta{
+  width:100%;min-height:44vh;max-height:70vh;padding:14px 16px;border:1px solid var(--line);border-radius:10px;
+  background:var(--surface);color:var(--ink);font-size:13px;line-height:1.95;resize:vertical;
+  font-family:"仿宋","FangSong","Songti SC","STSong",serif;
+}
+.notice-bar{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap}
+.notice-bar .hint{font-size:11px;color:var(--muted);word-break:break-all}
 .prov{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px}
 .prov.off{opacity:.6}
 .prov-hd{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
@@ -2058,6 +2070,28 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
       <button class="set-tab" data-stab="about">关于</button>
     </div>
     <div class="modal-body" id="mmBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="noticeModal">
+  <div class="modal-box notice-box">
+    <div class="modal-head">
+      <div>
+        <h3>会议通知</h3>
+        <p>正文可以直接改。系统只负责成文，不发送、不记录谁收到了 —— 复制或导出后由你发到单位群／邮箱。</p>
+      </div>
+      <span class="modal-x" id="ntClose">✕</span>
+    </div>
+    <div class="modal-body">
+      <div id="ntWarn"></div>
+      <textarea class="notice-ta" id="ntText" spellcheck="false"></textarea>
+      <div class="notice-bar">
+        <button class="mini" id="ntCopy">复制全文</button>
+        <button class="mini" id="ntExport">导出到桌面</button>
+        <span class="hint" id="ntPath"></span>
+        <span class="hint" id="ntLines"></span>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -7337,7 +7371,8 @@ function renderMeetDetail(m) {
     <p class="mt-meta">${where}</p>
     <div class="mt-acts">
       ${planned
-        ? ""
+        ? `<button class="mini" id="mtNotice">生成会议通知</button>
+           <span class="hint" style="margin:6px 0 0">成文后可复制或导出到桌面，由你自行下发</span>`
         : `<button class="mini" id="mtParse" ${committed ? "disabled" : ""}>${items.length ? "重新解析" : "解析议定事项"}</button>
            <span class="hint" style="margin:6px 0 0">${MT.model_ready ? "模型就绪" : "未配置模型，无法解析"} · 事项 ${items.length} 条，已落督办 ${committed} 条</span>`}
       <button class="mini" id="mtDel">删除会议</button>
@@ -7352,6 +7387,77 @@ function renderMeetDetail(m) {
     </div>` : ""}`;
 
   bindMeetDetail();
+}
+
+/* 会议通知：成文在服务端（纯拼装、不经模型），这里只负责呈现和改字。
+   导出走 POST，是因为要往本机桌面写文件 —— 浏览器下载会被下载目录接管，
+   而这个场景要的恰恰是「就在桌面上」。 */
+async function openNotice() {
+  if (!MT.current) return;
+  try {
+    const d = await (await fetch(`/api/meetings/${encodeURIComponent(MT.current)}/notice`)).json();
+    if (!d.ok) { toast("生成失败：" + (d.error || "未知错误")); return; }
+    const n = d.notice;
+    $("#ntWarn").innerHTML = (n.warnings || [])
+      .map((w) => `<div class="mt-warn info">${esc(w)}</div>`).join("");
+    // 两个弹窗叠着显示，底下那个会从边上露出来，看着像页面坏了。
+    // 通知是从会议助手里点开的，先把它收起来，关掉通知再放回去。
+    $("#meetModal").classList.remove("on");
+    $("#noticeModal").classList.add("on");
+    const ta = $("#ntText");
+    ta.value = n.text;
+    // 打开后按内容撑高：不撑的话公文正文会缩在 400px 里，人以为后面没字
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight + 8, Math.round(innerHeight * 0.68)) + "px";
+    $("#ntLines").textContent = `共 ${n.text.split("\n").length} 行 · 可直接改，改完再复制或导出`;
+    $("#ntPath").textContent = "";
+  } catch (e) {
+    toast("生成失败：" + e.message);
+  }
+}
+
+function bindNoticeModal() {
+  const closeNotice = () => {
+    $("#noticeModal").classList.remove("on");
+    if (MT.current) $("#meetModal").classList.add("on");  // 从哪来回哪去
+  };
+  $("#ntClose").onclick = closeNotice;
+  $("#noticeModal").onclick = (e) => { if (e.target.id === "noticeModal") closeNotice(); };
+
+  $("#ntCopy").onclick = async () => {
+    const ta = $("#ntText");
+    try {
+      await navigator.clipboard.writeText(ta.value);
+      toast("已复制全文，粘到群里即可");
+    } catch (e) {
+      // 非 https / 内嵌 iframe 里 clipboard 会被拒，退回选中 + execCommand
+      ta.focus(); ta.select();
+      const ok = document.execCommand && document.execCommand("copy");
+      toast(ok ? "已复制全文" : "复制失败：浏览器不让写剪贴板，请手动选中");
+    }
+  };
+
+  $("#ntExport").onclick = async () => {
+    const btn = $("#ntExport");
+    btn.disabled = true;
+    try {
+      const r = await fetch(`/api/meetings/${encodeURIComponent(MT.current)}/notice/export`, {
+        method: "POST",
+        headers: authHeaders(),
+        // 带上改过的正文：用户调过措辞，导出的就该是他看到的那版
+        body: JSON.stringify({ text: $("#ntText").value }),
+      });
+      const d = await r.json();
+      if (r.status === 403) return handleWriteDeny(d);
+      if (!d.ok) { toast("导出失败：" + (d.error || "未知错误")); return; }
+      $("#ntPath").textContent = "已导出：" + d.path;
+      toast("已导出到桌面");
+    } catch (e) {
+      toast("导出失败：" + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  };
 }
 
 function bindMeetDetail() {
@@ -7419,6 +7525,9 @@ function bindMeetDetail() {
     newMeetingForm();
     toast("已删除会议记录");
   };
+
+  const noticeBtn = $("#mtNotice");
+  if (noticeBtn) noticeBtn.onclick = openNotice;
 
   const selOk = $("#mtSelOk");
   if (selOk) selOk.onclick = () => {
@@ -7488,7 +7597,7 @@ function newMeetingForm() {
     $("#mtf_text").value = [
       "一、关于高铁东站周边路网配套工程。会议听取了市住建局的汇报。会议议定：由市住建局牵头，市交通运输局配合，11月20日前完成管线迁改和路面恢复，验收标准为管线全部入地并通过竣工验收。",
       "二、关于冬季供暖保障。会议议定：由市城管局负责，11月10日前完成全市供热管网排查，形成隐患清单并逐项整改，确保按期开栓供暖。",
-      "三、关于12345热线反映的停车难问题。会议要求市城管局会同云山区政府，年底前完成主城区停车泊位施划，具体数量另行研究。",
+      "三、关于12345热线反映的停车难问题。会议要求市城管局牵头，年底前完成主城区停车泊位施划，具体数量另行研究。",
       "四、会议强调，各项工作要压实责任，确保落实到位。",
     ].join("\n\n");
   };
@@ -8351,6 +8460,7 @@ $("#mtList").onclick = (e) => {
   if (it && it.dataset.mt !== MT.current) selectMeeting(it.dataset.mt);
 };
 $("#modelModal").onclick = (e) => { if (e.target.id === "modelModal") closeModelModal(); };
+bindNoticeModal();
 $("#tmClose").onclick = () => $("#themeModal").classList.remove("on");
 $("#themeModal").onclick = (e) => { if (e.target.id === "themeModal") $("#themeModal").classList.remove("on"); };
 $("#ragClose").onclick = () => $("#ragModal").classList.remove("on");

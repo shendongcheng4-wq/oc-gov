@@ -84,6 +84,7 @@ import chat  # noqa: E402
 import docparse  # noqa: E402
 import extract as meeting_extract  # noqa: E402
 import ledger as meetings  # noqa: E402
+import notice as meeting_notice  # noqa: E402
 import llm  # noqa: E402
 import llmclient  # noqa: E402
 import memory as memory_mod  # noqa: E402
@@ -398,6 +399,8 @@ WRITE_POLICY: tuple[tuple[str, str, str | None], ...] = (
     ("POST", r"/api/meetplan", authz.MEETING_COMMIT),
     ("PATCH", r"/api/meetings/[^/]+/items/[^/]+", authz.MEETING_EDIT),
     ("DELETE", r"/api/meetings/[^/]+", authz.MEETING_EDIT),
+    # 导出通知会往本机磁盘写文件（默认桌面）。不往外发，但发文口径是市级的事。
+    ("POST", r"/api/meetings/[^/]+/notice/export", authz.MEETING_NOTICE),
 
     # ── 配置类：全局共享状态，只有市领导 ──
     ("POST", r"/api/models", authz.CONFIG_MODEL),
@@ -1010,6 +1013,13 @@ class Handler(BaseHTTPRequestHandler):
                 )
 
             parts = _parts(path, "/api/meetings/")
+            if len(parts) == 2 and parts[1] == "notice":
+                one = meetings.get(parts[0])
+                if one is None:
+                    return self._json({"ok": False, "error": "meeting_not_found"}, 404)
+                # 只读：纯拼装，不落盘、不改数据。导出才走 POST。
+                return self._json({"ok": True, "notice": meeting_notice.build(one)})
+
             if len(parts) == 1:
                 one = meetings.get(parts[0])
                 if one is None:
@@ -1378,6 +1388,33 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "meeting": meetings.brief(meeting)})
 
             parts = _parts(path, "/api/meetings/")
+            if len(parts) == 3 and parts[1] == "notice" and parts[2] == "export":
+                scope, allowed, why = self._require(authz.MEETING_NOTICE)
+                if not allowed:
+                    audit.user_event(scope.get("person") if scope else None, "access.denied",
+                                     target="meeting.notice_export", payload={"reason": why})
+                    return self._json({"ok": False, "error": why}, 403)
+                one = meetings.get(parts[0])
+                if one is None:
+                    return self._json({"ok": False, "error": "meeting_not_found"}, 404)
+                try:
+                    res = meeting_notice.export(
+                        one,
+                        issuer=str(body.get("issuer") or "").strip() or meeting_notice.DEFAULT_ISSUER,
+                        text=body.get("text") if isinstance(body.get("text"), str) else None,
+                    )
+                except OSError as exc:
+                    # 桌面被安全软件锁了、路径不存在、磁盘满 —— 如实报，别假装导出成功
+                    return self._json({"ok": False, "error": f"写入桌面失败：{exc}"}, 500)
+                audit.user_event(scope["person"], "meeting.notice_export",
+                                 target=one.get("id"), payload={"path": res.get("path")})
+                return self._json({
+                    "ok": True,
+                    "path": res.get("path"),
+                    "filename": res.get("filename"),
+                    "warnings": res.get("warnings") or [],
+                })
+
             if len(parts) == 2 and parts[1] == "parse":
                 return self._parse_meeting(parts[0], body)
             if len(parts) == 2 and parts[1] == "commit":

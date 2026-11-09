@@ -46,6 +46,7 @@ OVERSIGHT_REJECT = "oversight.reject"      # 退回
 OVERSIGHT_URGE = "oversight.urge"         # 催办
 MEETING_COMMIT = "meeting.commit"          # 会议落库
 MEETING_EDIT = "meeting.edit"              # 删会议、改议定事项（会进日程/提醒，市级动作）
+MEETING_NOTICE = "meeting.notice"          # 导出会议通知到本机（发文口径由市领导定）
 
 # 配置类：改一次影响所有人，不是「某个单位的数据」。
 # 判定的输入只有角色，不看 units —— 单位口径对这些动作没有意义。
@@ -68,6 +69,7 @@ _ACTION_LABEL: dict[str, str] = {
     CONFIG_PLUGIN: "改插件开关",
     NOTIFY_DISPATCH: "群发提醒",
     MEETING_EDIT: "改会议记录",
+    MEETING_NOTICE: "导出会议通知",
 }
 
 # 只认角色的动作：市领导独占。
@@ -77,6 +79,7 @@ _LEADER_ONLY: tuple[str, ...] = (
     CONFIG_PLUGIN,
     NOTIFY_DISPATCH,
     MEETING_EDIT,
+    MEETING_NOTICE,
 )
 
 # 动作 → 它对应的督办流转 action（oversight.advance 的 action 名）。
