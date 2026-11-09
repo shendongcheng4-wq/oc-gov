@@ -17,7 +17,15 @@
 地方维护，别处只能引用。点材料里的台账编号会回到督办详情，而不是在材料里签收。
 
 **没有存档。** 材料不落盘：一旦存起来就会出现「文件里的数和台账不一致」的问题，
-而那正是这类系统最容易失信的地方。要留存就导出 Markdown / 打印。
+而那正是这类系统最容易失信的地方。要留存就导出 Markdown / Word（`to_docx`）或打印。
+
+**审校在隔壁。** 出手前的回查放在 `proofread.py`：它不信任这里装配出来的东西，而是
+回到指标库和台账重新取一遍数来比。所以它连「材料是旧的」都能查出来——那种错看起来
+最像真的，也就最容易被直接交上去。
+
+**原文依据也在隔壁。** 每一节该配哪些原话，交给 `evidence.py`：按编号精确取台账办理经过
+和会议议定原文，只有资料库那一路才真的检索。依据挂在这里的 blocks 上，但不上纸、
+不进导出——它是核对用的，不是正文的一部分。
 """
 
 from __future__ import annotations
@@ -35,6 +43,8 @@ for _p in (ROOT / "core", ROOT / "core" / "metrics", ROOT / "core" / "oversight"
         sys.path.insert(0, str(_p))
 
 import ask as ask_mod  # noqa: E402
+import docxgen as dg  # noqa: E402
+import evidence as evidence_mod  # noqa: E402
 import llmclient  # noqa: E402
 import mockdata as md  # noqa: E402
 import oversight as ov  # noqa: E402
@@ -369,6 +379,8 @@ def _meeting_block(ctx: dict[str, Any]) -> dict[str, Any] | None:
             "attendees": "、".join(m.get("attendees") or []) or "未填参会单位",
             "items": m.get("item_count", 0),
             "committed": m.get("committed_count", 0),
+            # 会议列表也要能点回去：没有 ref 的行在审校里会被算成「不可追溯」
+            "ref": f"meeting:{m['id']}",
         }
         for m in meetings
     ]
@@ -385,6 +397,12 @@ def _meeting_block(ctx: dict[str, Any]) -> dict[str, Any] | None:
 # --------------------------------------------------------------------------
 # 披露：没到日子的数据要说明白，不能让读者以为是漏了
 # --------------------------------------------------------------------------
+def _cn_date(d: date) -> str:
+    """公文里的日期写「2026年11月7日」。ISO 写法（2026-11-07）是给机器看的，
+    写进正文会显得是直接贴了数据库字段——审校也会把它挑出来。"""
+    return f"{d.year}年{d.month}月{d.day}日"
+
+
 def _pending_block(ctx: dict[str, Any]) -> dict[str, Any] | None:
     pend = md.pending_periods(ctx["today"])
     if not pend:
@@ -395,7 +413,7 @@ def _pending_block(ctx: dict[str, Any]) -> dict[str, Any] | None:
         rows.append(
             {
                 "period": ask_mod.period_text({"code": "", "period_label": f"{p[:4]}年{int(p[5:7])}月"}),
-                "due": due.isoformat(),
+                "due": _cn_date(due),
             }
         )
     first = rows[0]
@@ -407,7 +425,6 @@ def _pending_block(ctx: dict[str, Any]) -> dict[str, Any] | None:
         "rows": rows,
         "note": f"披露日为每月 {md.DISCLOSURE_DAY} 日（遇节假日顺延的处理尚未实现）。",
     }
-
 
 # --------------------------------------------------------------------------
 # 下一步：唯一由模型写的段落
@@ -660,7 +677,14 @@ def compose(
     if kind == "minutes":
         # 要取完整记录而不是列表摘要：摘要里只有条目数量，没有条目本身。
         # 之前这里直接用 list_meetings() 的元素，会写成「没有抽取到交办内容」——数据明明在。
-        mid = meeting_id or (meetings[0]["id"] if meetings else None)
+        #
+        # 默认不取列表第一条：那往往是刚建好的**待召开**的会（kind=plan），
+        # 没有纪要也没有交办事项，按它生成出来整节都是空壳。用户自己指定了就照办，
+        # 因为「这场会为什么还没落实」本身也是要写的。
+        mid = meeting_id or (next(
+            (m["id"] for m in meetings if m.get("kind") == "record"),
+            meetings[0]["id"] if meetings else None,
+        ))
         chosen = meeting_get(mid) if mid else None
         # 可见性再判一次：指定了别人的会，不能靠前端不显示来兜底
         if chosen and not schedule.meeting_visible(chosen, person):
@@ -669,6 +693,8 @@ def compose(
             chosen = meeting_get(mid) if mid else None
         if chosen is None:
             warnings.append("没有可用的会议记录，会议落实材料退化为工作汇报。")
+        elif chosen.get("kind") == "plan" and not chosen.get("text"):
+            warnings.append(f"{chosen['title']}还没召开或未录入纪要，这一节只能列出待办，没有落实情况可写。")
 
     # 指标：明确指定（含空数组）> 会议材料按参会单位匹配 > 身份关注。
     # 空数组和 None 要分开：前者是「我不要指标」，后者是「你替我挑」
@@ -759,6 +785,11 @@ def compose(
     for i, b in enumerate(blocks):
         b["no"] = _CN[i] if i < len(_CN) else str(i + 1)
 
+    # 依据在编号之后挂：它按节归属，不参与排版，也不进正文和导出。
+    # 装配只管把事实排好，原文出处是另一件事，交给 evidence 单独取——
+    # 两者的取数方式不同（这里是结构化字段，那里要逐字原文）。
+    ev = evidence_mod.attach(blocks)
+
     model = _enrich_next(blocks, ctx, use_model=use_model) if any(b["id"] == "next" for b in blocks) else {"source": "rule", "note": "未选用「下一步」章节", "degraded": True}
 
     titles = {"report": "工作汇报", "minutes": "会议落实材料", "bulletin": "重点工作督办通报"}
@@ -778,6 +809,10 @@ def compose(
         "metric_codes": picked,
         "mock": True,
     }
+    if ev.get("items"):
+        # 只带统计，不带明细：明细已经按节挂在 blocks 上，meta 再存一份就成了两处
+        # 真相，改一处忘一处。前端用这个数画工具栏上的「依据 N 条」。
+        meta["evidence"] = ev
     if chosen:
         meta["meeting"] = {
             "id": chosen["id"],
@@ -815,3 +850,153 @@ def _norm_sections(raw: Any, default: list[str]) -> list[str]:
     # 注意不能 `or default`：空数组是用户「一节都不要」，回落默认会让"取消全选"
     # 反而变成"全选"。没传（None）才用骨架默认。
     return out
+
+
+# --------------------------------------------------------------------------
+# docx：纸面给人看，Word 给人改
+# --------------------------------------------------------------------------
+# 为什么单独一条出口而不是把 Markdown 丢给前端转：
+# 转换在前端做，字体字号就得写在 JS 里，服务端出的稿和浏览器出的稿会慢慢分叉。
+# 排版口径只允许有一个地方，就在这儿。
+
+_GRAY = "808080"
+
+
+def docx_filename(meta: dict[str, Any]) -> str:
+    """文件名跟着材料走：标题 + 生成日。日期用紧凑格式，避免「-」在部分系统里出错。"""
+    day = str(meta.get("generated_at") or "").replace("-", "")[:8] or "draft"
+    return f"{meta.get('title') or '材料'}-{day}.docx"
+
+
+def _meta_line(meta: dict[str, Any]) -> str:
+    mt = meta.get("meeting")
+    if mt:
+        return (f"会议：{mt['title']}（{mt.get('held_at') or '时间待定'}）　"
+                f"范围：{meta['scope_text']}　生成时间：{meta['generated_at']}")
+    return (f"报告期：{meta['period_label']}　范围：{meta['scope_text']}　"
+            f"生成时间：{meta['generated_at']}")
+
+
+def to_docx(meta: dict[str, Any], blocks: list[dict[str, Any]]) -> bytes:
+    """把装配结果排成一份 docx。
+
+    数字、单位、台账编号都直接取 block 里的字段，和 Markdown 出口共用同一份数据 ——
+    两个出口如果各自从 ctx 里再取一遍数，迟早会出现「纸面 8.9、Word 里 8.5」。
+    """
+    d = dg.Doc(title=str(meta.get("title") or ""),
+               author=f"{meta.get('city') or ''}人民政府办公室")
+
+    d.title(str(meta.get("title") or ""))
+    d.para(_meta_line(meta), size=dg.SZ_5, align="center", indent=False, after=120)
+    if meta.get("mock"):
+        d.para("演示数据：本材料取自内置样例库，未接入真实数据源，不可用于对外报送。",
+               size=dg.SZ_5, color=_GRAY, align="center", indent=False, after=240)
+
+    for b in blocks:
+        # 一级标题用黑体三号，和正文同字号不同字体，这是公文里最省事的层级区分
+        d.para(f"{b['no']}、{b['title']}", font=dg.FONT_HEI, indent=True,
+               before=160, after=60, keep_next=True)
+        if b.get("lead"):
+            d.para(str(b["lead"]))
+
+        kind = b.get("kind")
+        if kind == "table":
+            cols = b.get("columns") or []
+            labels = [str(c["label"]) for c in cols]
+            rows = [[str(r.get(c["k"]) if r.get(c["k"]) not in (None, "") else "—") for c in cols]
+                    for r in (b.get("rows") or [])]
+            # 第 1 列是指标名，左对齐；其余是数值，右对齐才好对小数点
+            d.table(labels, rows, align_right=tuple(range(1, len(labels))))
+        elif kind == "oversight":
+            stats = b.get("stats") or []
+            if stats:
+                d.para("　".join(f"{s['label']} {s['value']}" for s in stats), indent=False)
+            if b.get("rows"):
+                d.table(
+                    ["事项", "责任单位", "时限", "状态", "风险", "台账编号"],
+                    [[r["title"], r["assignee"], r["deadline"] or "—", r["status"],
+                      r["risk"] or "—", r["code"] or "未落库"] for r in b["rows"]],
+                    widths=[34, 20, 13, 12, 10, 11],
+                )
+            if b.get("assignees"):
+                d.para("按责任单位统计：", before=120, keep_next=True)
+                d.table(["责任单位", "在办", "已办结", "逾期"],
+                        [[a["unit"], a["open"], a["closed"], a["overdue"]]
+                         for a in b["assignees"]],
+                        widths=[52, 16, 16, 16], align_right=(1, 2, 3))
+        elif kind == "meeting":
+            m = b["meeting"]
+            for label, val in (
+                ("会议", f"{m['title']}（{m['id']}）"),
+                ("时间", m["held_at"] or "待定"),
+                ("主持人", m["host"] or "未填"),
+                ("参会单位", "、".join(m["attendees"]) or "未填"),
+            ):
+                d.para([(f"{label}：", True), (val, False)])
+            if b.get("rows"):
+                d.table(["交办事项", "责任单位", "时限", "状态"],
+                        [[r["title"], r["assignee"], r["deadline"] or "—", r["status"]]
+                         for r in b["rows"]],
+                        widths=[46, 22, 16, 16])
+        elif kind == "list":
+            d.table(["会议", "时间", "主持人", "参会单位", "交办", "已落库"],
+                    [[r["title"], r["held_at"], r["host"], r["attendees"],
+                      r["items"], r["committed"]] for r in b["rows"]],
+                    widths=[26, 13, 10, 25, 8, 10], align_right=(4, 5))
+        elif kind == "pending":
+            d.table(["期次", "预计披露日"],
+                    [[r["period"], r["due"]] for r in b["rows"]],
+                    widths=[40, 40])
+        elif kind == "text":
+            d.para(str(b.get("text") or ""))
+
+        if b.get("note"):
+            # 页脚注用小五灰字：它是给审稿人看的，不能长得像正文
+            d.para(str(b["note"]), size=dg.SZ_5, color=_GRAY, indent=False, before=60)
+
+    sources = meta.get("sources") or []
+    if sources:
+        d.blank(line=120)
+        d.para("资料来源", font=dg.FONT_HEI, before=120, keep_next=True)
+        for s in sources:
+            d.para(f"{s['department']}　{s['report']}　{s['published_at']} 披露",
+                   size=dg.SZ_S4)
+
+    return d.build()
+
+
+def bulletin_docx(fields: dict[str, Any]) -> bytes:
+    """红头督办通报。
+
+    这条和各栏位的材料不同：它不是从台账装配的，事实全部来自用户填的那张表。
+    所以这里只做排版，不校验、不补全——补全就成了「系统替领导编了一件事」。
+    """
+    org = str(fields.get("org") or "溧阳市人民政府办公室").strip()
+    task = str(fields.get("task") or "").strip()
+    unit = str(fields.get("unit") or "").strip()
+    owner = str(fields.get("owner") or "").strip() or "待明确"
+    due_text = str(fields.get("due_text") or "").strip() or "____年__月__日"
+    no = str(fields.get("no") or "").strip()
+    date_text = str(fields.get("date_text") or "").strip()
+    addressee = str(fields.get("addressee") or "各镇（区）人民政府，市各委办局、市各直属单位：").strip()
+    title = f"关于{task}的督办通报"
+
+    d = dg.Doc(title=title, author=org)
+    d.red_head(org)
+    if no:
+        d.para(no, align="center", indent=False, after=180)
+    d.red_line()
+    d.title(title)
+    d.para(addressee, indent=False)
+    d.para(f"为推动重点工作落地见效，现将「{task}」督办事项及要求通报如下：")
+    d.para([("一、督办事项。", True), (f"{task}。", False)])
+    d.para([("二、责任与时限。", True),
+            (f"责任落实部门（单位）：{unit}；责任人：{owner}；办结时限：{due_text}。", False)])
+    d.para([("三、工作要求。", True),
+            (f"请{unit}高度重视，对照时限倒排工期、挂图作战，每周五前将进展情况报市政府办公室；"
+             "对推进不力、进度滞后的，将予以通报批评。", False)])
+    d.blank()
+    d.right(org)
+    d.right(date_text or _now().strftime("%Y年%m月%d日"))
+    return d.build()
+
