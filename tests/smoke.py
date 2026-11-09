@@ -1340,13 +1340,19 @@ def test_notify() -> None:
         "第二天没有新 id，说明去重桶没跟着日期走",
     )
 
+    # 推送口径是「承办或协办」，与 detail() 的行级拒绝同一条线：assignee 不在 scope
+    # 且 co_assignees 也不相交，才返回 None。只判 assignee 会把协办事项误报成越权 ——
+    # DB2026-0031 主办是市发改委、市生态环境局是协办，局长本来就该收到这条提醒。
+    BUREAU_UNIT = "市生态环境局"
     bureau = notify.build("bureau", now=now)
-    wrong = [
-        n["ref"]["id"]
-        for n in bureau["notes"]
-        if n["ref"]["type"] == "oversight" and (ov.detail(n["ref"]["id"]) or {}).get("assignee") != "市生态环境局"
-    ]
-    check("局长只收到本单位事项", not wrong, str(wrong)[:70])
+    wrong = []
+    for n in bureau["notes"]:
+        if n["ref"]["type"] != "oversight":
+            continue
+        one = ov.detail(n["ref"]["id"]) or {}
+        if one.get("assignee") != BUREAU_UNIT and BUREAU_UNIT not in (one.get("co_assignees") or []):
+            wrong.append(n["ref"]["id"])
+    check("局长只收到本单位承办或协办的事项", not wrong, str(wrong)[:70])
 
     if view["notes"]:
         target = view["notes"][0]["id"]
