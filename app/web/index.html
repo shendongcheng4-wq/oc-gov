@@ -9772,6 +9772,12 @@ document.addEventListener("click", (e) => {
   const f = e.target.closest("[data-focus]");
   if (f) return openFocus(f.dataset.focus);
 
+  // 罗盘内嵌台账（统筹推进）的分类 chips。以前模板只把 data-coordfilter 画进了
+  // DOM，全局委托里没有对应分支 —— chips 有 hover、有高亮样式，点了却什么都不发生，
+  // 列表始终是全量。这里补上切换（AO.filter 只在 aoRows/aoCount 里用，重绘一次即可）。
+  const cof = e.target.closest("[data-coordfilter]");
+  if (cof) { AO.filter = cof.dataset.coordfilter; renderCoord(); return; }
+
   // 督办台账的三种点击：切分类 / 选事项 / 执行流转。必须放在 [data-item] 之前，
   // 否则台账里的卡片会被预警条那条老规则接走。
   const ovf = e.target.closest("[data-ovfilter]");
