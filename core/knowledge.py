@@ -481,6 +481,33 @@ def index(person: dict[str, Any] | None = None, domain: dict[str, Any] | None = 
     return rows
 
 
+# 浏览清单时的分类次序。指标口径排第一是因为它条目数固定、天然像目录；
+# 会议记录垫底是因为它最长，逐字原文摆在前面对翻目录的人没有帮助。
+_BROWSE_KINDS = ("metric", "oversight", "decision", "meeting")
+
+
+def browse(person: dict[str, Any] | None = None, kind: str | None = None) -> list[dict[str, Any]]:
+    """清单视图：把索引原样列出来，供知识库页面浏览。
+
+    和 `search` 是两件事，不能合并：
+    - **不设阈值**。检索不敢给低分条目，是因为它要在回答里当依据；翻目录正相反，
+      漏掉一条就会让人以为库里没有。所以这里一条都不滤，只排序。
+    - **不打分**。分数是「这条和那个问题有多像」，没有问题时它没有意义，
+      算一遍还会让人以为清单是按相关度排的。
+
+    `kind` 收窄到某一类（metric / oversight / meeting / decision）。
+    """
+    rows = index(person)
+    if kind:
+        rows = [r for r in rows if r.get("kind") == kind]
+    # 三遍排序：先定次级键，再用稳定排序压主键。和 search_in 同一手法。
+    # 指标没有 when，排到同类里按标题走；其余按时间新→旧。
+    rows.sort(key=lambda e: e["title"])
+    rows.sort(key=lambda e: str(e.get("when") or ""), reverse=True)
+    rows.sort(key=lambda e: _BROWSE_KINDS.index(e["kind"]) if e["kind"] in _BROWSE_KINDS else 9)
+    return rows
+
+
 # --------------------------------------------------------------------------
 # 检索
 # --------------------------------------------------------------------------
@@ -568,6 +595,23 @@ def score(query: str, entry: dict[str, Any]) -> float:
 _KIND_ORDER = {"oversight": 0, "decision": 1, "metric": 2, "meeting": 3}
 
 
+def _id_hit(query: str, entry: dict[str, Any]) -> bool:
+    """问句里是否原样出现了这条记录的编号（DB2026-0033 / MT2026-0002）。
+
+    编号是**唯一键**，命中就是命中，不该再被语义阈值筛一遍：用户把台账编号
+    贴进搜索框，要的就是那一条，而一串编号在向量空间里几乎没有语义（实测
+    余弦 0.2 上下），按阈值走会被整条挡掉，表现为「明明有这个编号，搜不到」。
+
+    议定事项的编号是「会议号#事项号」，所以会议号命中时它的议定事项也一起放行
+    —— 这是对的：问会议号的人，多半就是要看这场会定了什么。
+    """
+    low = str(query or "").lower()
+    if not low:
+        return False
+    eid = str(entry.get("id") or "").lower()
+    return bool(eid) and (eid in low or eid.split("#")[0] in low)
+
+
 def search_in(entries: list[dict[str, Any]], query: str, limit: int = 6) -> list[dict[str, Any]]:
     """在一份**已经建好的**索引里检索。
 
@@ -581,6 +625,9 @@ def search_in(entries: list[dict[str, Any]], query: str, limit: int = 6) -> list
       余弦落在灰度区（见 `GRAY_VECTOR_FLOOR`）时要求字面佐证再放行：那个区间
       里真命中（0.540）和通用词假命中（0.528）只差 0.012，单靠一个阈值分不开。
     - **向量不可用**：退回原 bigram 覆盖率 + 硬信号，行为与以前完全一致。
+
+    两路都有一条例外：**编号命中不看阈值**（见 `_id_hit`）。用户把 DB2026-0033
+    贴进来时，语义分和字面覆盖率都可能很低，但那正是他最确定知道的一条。
     """
     q = str(query or "").strip()
     if not q:
@@ -598,11 +645,13 @@ def search_in(entries: list[dict[str, Any]], query: str, limit: int = 6) -> list
     hits: list[dict[str, Any]] = []
     for entry in entries:
         hard = _hard_signals(q, entry)
+        by_id = _id_hit(q, entry)
         if vec_scores is not None:
             # 向量分（0~1 的余弦）＋硬信号。向量分设一个下限，语义上完全不沾边的
             # 条目即使硬信号勉强命中也不放行——「数据」这种通用词不会再擦线进来。
+            # 编号命中是例外：唯一键对上就是唯一键对上，语义阈值在这里只会帮倒忙。
             v = vec_scores.get(entry["id"], 0.0)
-            if v < MIN_VECTOR_SIM and not (
+            if not by_id and v < MIN_VECTOR_SIM and not (
                 v >= GRAY_VECTOR_FLOOR and _lexical_score(q, entry) >= GRAY_LEX_SUPPORT
             ):
                 continue
@@ -610,8 +659,11 @@ def search_in(entries: list[dict[str, Any]], query: str, limit: int = 6) -> list
         else:
             # bigram 兜底：保留原 threshold 语义
             s = score(q, entry)
-            if s < MIN_SCORE:
+            if s < MIN_SCORE and not by_id:
                 continue
+            # 只有编号命中时 score() 是 0（bigram 覆盖率算不出来，硬信号被它连带丢掉），
+            # 把它补回来，否则这条会被排到最后，等于搜了却看不见。
+            s = max(s, hard) if by_id else s
         hits.append(
             {**entry, "score": s, "unit_hit": bool(entry.get("unit") and unit_hit(low, entry["unit"]))}
         )

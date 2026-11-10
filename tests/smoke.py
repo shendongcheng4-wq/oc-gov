@@ -15,6 +15,7 @@ import re
 import shutil
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -38,6 +39,7 @@ import extract as mt_extract  # noqa: E402
 import ledger as mt_ledger  # noqa: E402
 import modelcfg  # noqa: E402
 import oversight as ov  # noqa: E402
+import rag as rag_mod  # noqa: E402
 import workbench as wb  # noqa: E402
 from mockdata import DISCLOSURE_DAY, METRICS, query_metric  # noqa: E402
 
@@ -1260,6 +1262,22 @@ def test_knowledge() -> None:
         check("回放裁剪去掉 score", "score" not in meta[0], str(sorted(meta[0])))
         check("回放保留跳转与引句", bool(meta[0].get("ref")) and "quote" in meta[0], str(sorted(meta[0])))
 
+    # 清单（知识库页面）：和检索是两件事 —— 不设阈值、不打分、一条都不漏。
+    # 翻目录时漏一条，看到的是「库里没有」，而不是「没搜到」。
+    rows = kb.browse(mayor)
+    check("browse 返回全部条目", len(rows) == len(kb.index(mayor)), f"{len(rows)} vs {len(kb.index(mayor))}")
+    check("browse 覆盖全部类型", {"metric", "oversight"} <= {r["kind"] for r in rows}, "")
+    check("browse 不带分数", all("score" not in r for r in rows), "")
+    only_metric = kb.browse(mayor, "metric")
+    check("browse 可按类型收窄", bool(only_metric) and all(r["kind"] == "metric" for r in only_metric), "")
+    check("browse 不掉条目", len(only_metric) == len([r for r in rows if r["kind"] == "metric"]), "")
+
+    # 编号命中不看阈值。贴一个台账编号进搜索框，语义余弦只有 0.2 上下、
+    # 字面覆盖率也低，按阈值走会被整条挡掉 —— 表现为「明明有这个编号却搜不到」。
+    probe = {"kind": "oversight", "id": "DB2026-0033"}
+    check("编号命中被识别", kb._id_hit("db2026-0033 现在怎么样", probe) and not kb._id_hit("入河排污口", probe), "")
+    check("会议号命中放行它的议定事项", kb._id_hit("MT2026-0002", {"kind": "decision", "id": "MT2026-0002#MI-01"}), "")
+
     # 问数分支：什么话术算「问事项」
     check("事项类话术被识别", ask._wants_matter("环保局那件事办到哪了"), "")
     check("数值类话术不被误判为事项", not ask._wants_matter("规上工业增加值是多少"), "")
@@ -1285,6 +1303,65 @@ def test_knowledge() -> None:
     check("知识库卡片可跳回出处", "data-kbref" in html, "")
     # showOvItem 只渲染不打开弹窗，用它会出现「点了没反应」
     check("跳转用 openOversight 而非 showOvItem", 'return openOversight(id)' in html, "")
+
+    # 知识库清单页：左边目录、右边原文、顶端检索，只读
+    check("知识库清单页存在", 'id="kbModal"' in html and 'id="kbList"' in html and 'id="kbMain"' in html, "")
+    check("知识库清单页有顶栏入口", 'data-tool="kb"' in html, "")
+    check("清单页用自己的类名前缀", ".kl-box{" in html and ".kl-meta{" in html, "")
+    # 清单页复用 ov-* 骨架，但类名必须和对话卡片那套 kb-* 分开：两套同名时后定义的
+    # 会静默盖掉前面的，页面上表现为「对话里的条目卡片突然变样」，而这种错不会报错。
+    check("清单页不覆盖对话卡片样式", ".kl-kind{" in html and ".kb-item{" in html and ".kb-tx{" in html, "")
+    # 知识库和上传文档合成一页：chips 里必须有 doc 这一类，否则文件进了库也看不见
+    check("清单页有「上传文档」一类", '{ id: "doc", label: "上传文档" }' in html, "")
+    # 上传文档并进知识库：写入口就在这一页（顶栏按钮 + 面板），不再有独立的
+    # 「上传文档」弹窗。两个入口时用户会以为库只有清单里那几条，找不到自己传的文件。
+    check(
+        "上传文档并入知识库，不再有独立弹窗",
+        'id="kbUpload"' in html
+        and 'id="ragModal"' not in html
+        and "function renderRagPanel(" not in html
+        and "async function openKbUpload(" in html
+        and 'data-kbjump="upload"' in html,
+        "",
+    )
+    # 上传面板和清单共用右半边：loadKb 必须尊重 pane 标记，否则一次后台刷新
+    # 会把正在填的上传面板顶成某篇原文（只在点开上传时出现，不点看不到）。
+    check(
+        "清单刷新不覆盖上传面板",
+        'KB.pane = "upload"' in html and 'if (opts.keepMain || KB.pane === "upload") return;' in html,
+        "",
+    )
+    # 写操作都在知识库里：文档可就地删，分类库可建可删
+    check(
+        "文档可就地删除",
+        'data-kbdocdel=' in html and "async function deleteKbDoc(" in html,
+        "",
+    )
+    check(
+        "分类库可就地新建与删除",
+        "async function createKbBase(" in html and 'data-kbupdel=' in html,
+        "",
+    )
+    # 上传必须分块转 base64：String.fromCharCode(...bytes) 在 9MB 文件上会
+    # 撑爆调用栈（参数展开上限约 12 万），表现是「选了大文件没反应」。
+    check(
+        "上传按块拼 base64",
+        "String.fromCharCode.apply(null, bytes.subarray(" in html
+        and "String.fromCharCode(...new Uint8Array" not in html,
+        "",
+    )
+    # 文档预览是阅读视图：文件头 + 章节正文，不是四个固定字段的格子
+    check(
+        "文档预览按章节渲染",
+        'id="kbDocBody"' in html and "function renderDocReader(" in html and 'data-docsec=' in html,
+        "",
+    )
+    check(
+        "命中章节可跳转",
+        'data-dochit=' in html and "function scrollDocTo(" in html,
+        "",
+    )
+    check("文档预览向阅读视图取数", "/doc?doc=" in html, "")
 
 
 def test_notify() -> None:
@@ -2173,6 +2250,34 @@ def test_rag() -> None:
         expect_method = "vector" if vec_avail else "bigram"
         check("检索方法与向量可用性一致", hits[0].get("method") == expect_method, str(hits[0].get("method")))
 
+    # 阅读视图：文件不是"一条记录"，它有章节；检索命中的是某一节。
+    view = rag.doc_view(base["id"], doc["id"], "老旧小区改造")
+    check("阅读视图能还原全文", bool(view) and abs(view["doc"]["chars"] - len(body.strip())) <= 2, str(view and view["doc"]["chars"]))
+    check("阅读视图切出章节", bool(view) and len(view["chapters"]) >= 2, str(len(view["chapters"]) if view else 0))
+    check(
+        "章节标题与正文分开",
+        bool(view) and any(c["title"] == "一、总体目标" for c in view["chapters"]),
+        str([c["title"] for c in view["chapters"]] if view else "")[:90],
+    )
+    # 「一、总体目标：到2026年底……」标题和第一句同行，整行当标题会把内容吞掉
+    check(
+        "标题行里的正文没被吞掉",
+        bool(view) and any("到2026年底" in c["text"] for c in view["chapters"]),
+        "",
+    )
+    check(
+        "命中落到章节上",
+        bool(view) and bool(view["hits"]) and all(0 <= h["chapter"] < len(view["chapters"]) for h in view["hits"]),
+        str(view["hits"] if view else "")[:90],
+    )
+    check("无关键词时不给命中", bool(rag.doc_view(base["id"], doc["id"])) and not rag.doc_view(base["id"], doc["id"])["hits"], "")
+    check("不存在的文档返回 None", rag.doc_view(base["id"], "doc_nope") is None, "")
+
+    # 文件名命中：用户打全名时想找的就是这份文件
+    check("文件名整串命中", rag.name_hit("城市更新实施意见.txt", "城市更新实施意见"), "")
+    check("文件名中间隔字也能命中", rag.name_hit("既有多层住宅加装电梯办事指南.md", "加装电梯指南"), "")
+    check("文件名不命中无关词", not rag.name_hit("城市更新实施意见.txt", "火星基地"), "")
+
     # 检索结果必须是原文，不允许凭空多出数字
     all_text = "".join(h["text"] for h in hits)
     check("检索片段不含原文没有的数字", "999" not in all_text, "")
@@ -2951,6 +3056,90 @@ def test_http(port: int | None = None) -> None:
     check("知识库报告索引规模", int(kres.get("index_size") or 0) >= len(METRICS), str(kres.get("index_size")))
     empty = get("/api/knowledge?q=%E7%81%AB%E6%98%9F%E5%9F%BA%E5%9C%B0%E5%BB%BA%E8%AE%BE")
     check("/api/knowledge 无命中返回空而不是硬凑", empty.get("ok") is True and not empty.get("hits"), str(empty.get("total")))
+
+    # 清单页：不带 q 是目录，不是「搜了空词所以没结果」
+    browsed = get("/api/knowledge")
+    check(
+        "不带 q 返回清单而不是空",
+        browsed.get("ok") is True and bool(browsed.get("items")) and not browsed.get("hits"),
+        str(browsed.get("total")),
+    )
+    check(
+        "清单带各类型条数",
+        isinstance(browsed.get("counts"), dict) and browsed["counts"].get("metric", 0) >= 1,
+        str(browsed.get("counts")),
+    )
+    # 系统记录和上传文档合成一个清单后，最容易出的错是「计数里有 doc、列表里没有」
+    # （或者反过来）：来源只有一个时永远发现不了，两个都非空才暴露。所以钉住
+    # total 必须等于各类型计数之和 —— 这条在空库上也是对的。
+    check(
+        "清单 total 等于各类型计数之和",
+        int(browsed.get("total") or 0) == sum(int(v or 0) for v in (browsed.get("counts") or {}).values()),
+        f"{browsed.get('total')} vs {browsed.get('counts')}",
+    )
+    doc_only = get("/api/knowledge?kind=doc")
+    check(
+        "可按「上传文档」收窄且只回文档",
+        doc_only.get("ok") is True and all(i.get("kind") == "doc" for i in (doc_only.get("items") or [])),
+        str(doc_only.get("total")),
+    )
+    # 阅读视图接口：只能用**服务里真实存在**的文档来打。测试进程自己造的库
+    # 服务看不到（两边 OCGOV_DATA 不是同一个目录），拿 tbase 去打必定 404。
+    docs_live = doc_only.get("items") or []
+    if docs_live:
+        d0 = docs_live[0]
+        kb0 = (d0.get("ref") or {}).get("kb_id") or ""
+        dv = get(f"/api/rag/bases/{kb0}/doc?doc={d0['id']}")
+        check(
+            "/api/rag/bases/<kb>/doc 返回章节",
+            dv.get("ok") is True and bool(dv.get("chapters")),
+            str(dv.get("error")),
+        )
+        dv2 = get(f"/api/rag/bases/{kb0}/doc?doc={d0['id']}&q={urllib.parse.quote('改造')}")
+        check(
+            "/doc 带 q 时给命中章节",
+            dv2.get("ok") is True and isinstance(dv2.get("hits"), list),
+            str(dv2.get("error")),
+        )
+    else:
+        print("  SKIP  服务里没有上传文档，/doc 接口跳过")
+    # 这条走的是真实链路（向量可用时那一路）：编号贴进来必须能搜到那一条。
+    # 阈值先跑的话，一串编号的余弦只有 0.2 上下，会被整条挡掉。
+    by_id = get("/api/knowledge?q=DB2026-0027")
+    check(
+        "按台账编号能搜到那一条",
+        any(h.get("id") == "DB2026-0027" for h in (by_id.get("hits") or [])),
+        str(by_id.get("total")),
+    )
+
+    # 上传文档的字面召回：片段长 800 字，一个短词落在里面会被稀释到 0.3~0.5，
+    # 只看向量阈值就会「文件里原样写着也搜不到」（实测「双随机」0.296）。这里
+    # 造一篇自己可控的长文，把关键词埋在大量无关内容中间，钉住「字面命中不看分」。
+    for b in rag_mod.list_bases():
+        if b["name"] == "冒烟临时库":
+            rag_mod.delete_base(b["id"])
+    tbase = rag_mod.create_base("冒烟临时库", "仅测试用，跑完就删")
+    try:
+        body = (
+            "# 临时文件\n\n"
+            + "以下内容与关键词无关，只用来把片段撑长。" * 30
+            + "\n\n本单位对甲醇罐区实行双人双锁，每月核对一次台账。\n\n"
+            + "以上内容同样无关，继续占位。" * 30
+        )
+        tdoc = rag_mod.upload_document(
+            tbase["id"], "临时文件.md", body.encode("utf-8"), content_type="text/markdown"
+        )
+        literal = rag_mod.search([tbase["id"]], "双人双锁", k=4, char_budget=99999)
+        check(
+            "上传文档按字面能召回（不看向量阈值）",
+            any(h["doc_id"] == tdoc["id"] and "双人双锁" in h["text"] for h in literal),
+            f"分数 {[round(h['score'], 3) for h in literal]}",
+        )
+        # 反方向：这一路放宽后不能变成「什么都放行」
+        miss = rag_mod.search([tbase["id"]], "火星基地建设进度", k=4, char_budget=99999)
+        check("放宽字面召回后不相关内容仍不返回", not miss, str(len(miss)))
+    finally:
+        rag_mod.delete_base(tbase["id"])
 
     # 下面这条断言依赖「库里至少有一条会议记录」。但 data/ 不入库，CI 和新人
     # clone 下来都是空的 —— 以前它靠本机残留的演示数据才通过，一旦换到干净环境

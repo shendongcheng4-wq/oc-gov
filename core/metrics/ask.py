@@ -779,7 +779,7 @@ def _ask_impl(
                     "tool": "rag.search",
                     "call": f"rag.search(q={question!r})",
                     "status": "ok",
-                    "summary": "命中资料库 " + "、".join(
+                    "summary": "命中上传文档 " + "、".join(
                         f"《{h['doc_name']}》" for h in rag_hits[:4]
                     ),
                 }
@@ -789,7 +789,7 @@ def _ask_impl(
                 "question": question,
                 "planner": planner,
                 "intent": "rag",
-                "headline": f"资料库里检索到 {len(rag_hits)} 段相关内容，原文如下。",
+                "headline": f"上传文档里检索到 {len(rag_hits)} 段相关内容，原文如下。",
                 "rag": [
                     {
                         "kb_name": h["kb_name"],

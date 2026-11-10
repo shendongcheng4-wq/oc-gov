@@ -4,7 +4,11 @@
 - knowledge.py 检索的是**系统内部已有的结构化数据**（指标口径、督办台账、会议记录），
   用 bigram + 术语加权，零依赖，返回的每条都带出处。
 - 本模块检索的是**用户上传的任意文档**（政策文件、报告、汇报材料），落盘成
-  知识库，切块建索引，问句来了按相关度召回原文片段。
+  分类库，切块建索引，问句来了按相关度召回原文片段。
+
+界面上两者合并成一个「知识库」：清单页把系统记录和上传文档排在一起，靠
+`kind == "doc"` 区分。合并发生在 app/main.py（`_kb_doc_entries`），不在这里 ——
+两个模块谁也不该成为对方的下游。
 
 两条链路都守同一条边界：**检索到的永远是真实存在的原文，模型不参与复述**。
 数字进不进模型与"怎么检索"无关 —— 向量也好、bigram 也好，找到的都是原文，
@@ -299,12 +303,12 @@ def list_bases() -> list[dict[str, Any]]:
 def create_base(name: str, description: str = "") -> dict[str, Any]:
     name = str(name or "").strip()
     if not name:
-        raise ValueError("知识库名称不能为空")
+        raise ValueError("分类库名称不能为空")
     state = _state()
     if len(state["bases"]) >= MAX_BASES:
-        raise ValueError(f"最多创建 {MAX_BASES} 个知识库")
+        raise ValueError(f"最多创建 {MAX_BASES} 个分类库")
     if any(b["name"] == name for b in state["bases"]):
-        raise ValueError(f"已存在同名知识库「{name}」")
+        raise ValueError(f"已存在同名分类库「{name}」")
     import time
 
     base = {
@@ -399,9 +403,9 @@ def upload_document(
 ) -> dict[str, Any]:
     base = get_base(kb_id)
     if base is None:
-        raise LookupError("知识库不存在")
+        raise LookupError("分类库不存在")
     if len(base["documents"]) >= MAX_DOCS_PER_BASE:
-        raise ValueError(f"一个知识库最多 {MAX_DOCS_PER_BASE} 个文档")
+        raise ValueError(f"一个分类库最多 {MAX_DOCS_PER_BASE} 个文档")
     if len(content) > MAX_DOC_BYTES:
         raise ValueError(f"文件超过 {MAX_DOC_BYTES // (1024 * 1024)}MB")
 
@@ -451,6 +455,280 @@ def list_documents(kb_id: str) -> list[dict[str, Any]]:
     return list(base.get("documents") or [])
 
 
+def browse_documents() -> list[dict[str, Any]]:
+    """跨库列出全部文档，新→旧。
+
+    和 `list_documents` 是两个用途：那个要指定库、给单库的管理面板用；
+    这个供知识库页面当条目浏览，所以要带上库名，否则「XX政策.pdf」看不出
+    它属于哪个库、为什么会被召回。
+    """
+    out: list[dict[str, Any]] = []
+    for b in _state()["bases"]:
+        for d in b.get("documents") or []:
+            out.append({**d, "kb_id": b["id"], "kb_name": b["name"]})
+    out.sort(key=lambda d: int(d.get("created_at") or 0), reverse=True)
+    return out
+
+
+def preview_chunks(kb_id: str, doc_id: str, limit: int = 3) -> list[str]:
+    """取一篇文档开头的若干块，给清单页做预览。
+
+    不重新解析原文件：索引里存的就是切好的原文，再解一遍只为得到同样的
+    结果，还多一次格式兼容的风险。
+    """
+    path = INDEX_DIR / kb_id / "index.sqlite"
+    if not path.exists():
+        return []
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute(
+            "SELECT text FROM chunks WHERE doc_id = ? ORDER BY ordinal LIMIT ?",
+            (doc_id, max(1, int(limit))),
+        ).fetchall()
+    return [str(r[0]) for r in rows]
+
+
+# ── 阅读视图：全文还原、章节切分、命中定位 ──────────────────────────────
+#
+# 清单页原先只给「前 3 块 + 四格元信息」，读起来像一张表。文件不是表格，
+# 它是章节结构；检索命中的也不是"某个 800 字窗口"，而是"某份文件的某一节"。
+# 这里把两件事补齐：还原全文、认出章节，再把命中块映射到章节上。
+
+
+def document_chunks(kb_id: str, doc_id: str) -> list[dict[str, Any]]:
+    """按顺序取一篇文档的全部块（原文，不含向量）。"""
+    path = INDEX_DIR / kb_id / "index.sqlite"
+    if not path.exists():
+        return []
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute(
+            "SELECT ordinal, text FROM chunks WHERE doc_id = ? ORDER BY ordinal",
+            (doc_id,),
+        ).fetchall()
+    return [{"ordinal": int(o), "text": str(t)} for o, t in rows]
+
+
+def document_text(kb_id: str, doc_id: str) -> str:
+    """从索引还原全文。
+
+    不重新解析原文件：索引里的块就是当初解析出来的那一份，重解只会多一次
+    格式兼容的风险。切块是固定步长（size - overlap），拼回去时每块去掉与
+    已拼文本尾部重叠的那 `CHUNK_OVERLAP` 个字即可。
+    """
+    chunks = document_chunks(kb_id, doc_id)
+    if not chunks:
+        return ""
+    acc = chunks[0]["text"]
+    for c in chunks[1:]:
+        cut = min(CHUNK_OVERLAP, len(c["text"]))
+        acc += c["text"][cut:]
+    return acc
+
+
+# 章节标题识别。政策文件的层级就这几种写法，一份文件里常混着用：
+#   # 一级 / ## （一）…   （markdown）
+#   第一章 / 第一部分
+#   一、总体目标
+#   （一）主要任务
+#   1. 具体措施
+# 只认「整行就是标题」，且不超过 _MAX_HEADING_CHARS 字 —— 正文里
+# 「一、二、三产业融合」这种句子不该把文档切成两半。
+_MAX_HEADING_CHARS = 40
+# 纯数字编号（1. / 2、）在公文里既可能是小标题，也可能是条款。条款的特征是
+# 带冒号/句号、句子长 —— 「1. 本单元业主表决通过：专有部分面积占……」当标题
+# 认会把正文切得七零八落，所以这一路额外收紧。
+_MAX_DIGIT_HEADING_CHARS = 24
+_HEADING_RE = re.compile(
+    r"^(?:(?P<md>#{1,6})\s*(?P<md_t>.+?)"
+    r"|(?P<cn>第[一二三四五六七八九十百零〇\d]+[章节篇部分])\s*(?P<cn_t>.*)"
+    r"|(?P<num>[一二三四五六七八九十百零〇]{1,4})、\s*(?P<num_t>.+)"
+    r"|(?P<paren>[（(][一二三四五六七八九十百零〇\d]{1,4}[）)])\s*(?P<paren_t>.+)"
+    r"|(?P<digit>\d{1,2}(?:\.\d{1,2})*)[、.．]\s*(?P<digit_t>\S.*)"
+    r")$"
+)
+
+
+def _split_head(text: str) -> tuple[str, str]:
+    """把「一、总体目标：到 2026 年底……」拆成标题和同行正文。
+
+    公文里标题和第一句经常写在同一行（尤其是「一、总体目标：……」），整行当
+    标题会把这段内容吞掉 —— 阅读视图上只剩一个标题、正文空着。有冒号就拆，
+    没有就是纯标题。
+    """
+    m = re.match(r"^(.{1,30}?)[：:]\s*(.+)$", (text or "").strip())
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return (text or "").strip(), ""
+
+
+def _heading_of(line: str) -> tuple[str, int, str] | None:
+    """一行如果像标题，返回 (标题文本, 层级, 同行正文)，否则 None。"""
+    stripped = (line or "").strip()
+    if not stripped or len(stripped) > _MAX_HEADING_CHARS:
+        return None
+    m = _HEADING_RE.match(stripped)
+    if not m:
+        return None
+    if m.group("md"):
+        title, rest = _split_head(m.group("md_t"))
+        return title, len(m.group("md")), rest
+    if m.group("cn"):
+        title, rest = _split_head(stripped)
+        return title, 1, rest
+    if m.group("num"):
+        title, rest = _split_head(stripped)
+        return title, 1, rest
+    if m.group("paren"):
+        title, rest = _split_head(stripped)
+        return title, 2, rest
+    if len(stripped) > _MAX_DIGIT_HEADING_CHARS or re.search(r"[：:。；;]", stripped):
+        return None
+    return stripped, 3, ""
+
+
+def split_chapters(text: str) -> list[dict[str, Any]]:
+    """按标题行把正文切成章节。
+
+    返回 [{title, level, start, end, text}]，按原文顺序。第一个标题之前的内容
+    单独成一段（title 为空、level 0）—— 政策文件开头常有发文单位、成文日期，
+    丢掉它们会让预览从半句话开始。整篇没有标题时，全文就是一段。
+    """
+    content = str(text or "")
+    if not content.strip():
+        return []
+
+    marks: list[tuple[int, str, int, str]] = []
+    pos = 0
+    for line in content.split("\n"):
+        hit = _heading_of(line)
+        if hit:
+            # 行首可能有缩进，偏移要算到标题真正开始的位置
+            offset = len(line) - len(line.lstrip())
+            marks.append((pos + offset, hit[0], hit[1], hit[2]))
+        pos += len(line) + 1
+
+    if not marks:
+        return [{"title": "", "level": 0, "start": 0, "end": len(content), "text": content.strip("\n")}]
+
+    out: list[dict[str, Any]] = []
+    if marks[0][0] > 0:
+        head = content[: marks[0][0]]
+        if head.strip():
+            out.append({"title": "", "level": 0, "start": 0, "end": marks[0][0], "text": head.strip("\n")})
+    for i, (start, title, level, rest) in enumerate(marks):
+        end = marks[i + 1][0] if i + 1 < len(marks) else len(content)
+        segment = content[start:end]
+        # 标题单独给，正文从标题那一行剩下的部分（冒号后的内容）+ 后续行开始，
+        # 前端才不会把标题显示两遍，也不会丢掉写在标题行里的第一句。
+        after = segment.split("\n", 1)[1].lstrip("\n") if "\n" in segment else ""
+        body = f"{rest}\n{after}".strip("\n") if rest else after
+        out.append({"title": title, "level": level, "start": start, "end": end, "text": body})
+    return out
+
+
+def _chapter_index(chapters: list[dict[str, Any]], pos: int) -> int:
+    """字符偏移落在第几章。章节按 start 升序，线性扫足够（一章几千字以内）。"""
+    if not chapters:
+        return 0
+    for i, c in enumerate(chapters):
+        if int(c["start"]) <= pos < int(c["end"]):
+            return i
+    return len(chapters) - 1
+
+
+def doc_hits(kb_id: str, doc_id: str, query: str, k: int = 6) -> list[dict[str, Any]]:
+    """一篇文档内部的命中块（带 ordinal，供映射到章节）。
+
+    复用 `search` 而不是再写一套打分：同一个问句对同一份文件，问答复用的
+    召回结果和这里看到的应该是同一批块，否则「页面说命中第 3 章、问答却引
+    第 5 段」只是时间问题。
+    """
+    q = str(query or "").strip()
+    if not q:
+        return []
+    hits = search([kb_id], q, k=max(24, k * 6), char_budget=10**9)
+    mine = [h for h in hits if h["doc_id"] == doc_id]
+    return mine[:k]
+
+
+def doc_view(
+    kb_id: str,
+    doc_id: str,
+    query: str = "",
+    *,
+    max_chars: int = 40000,
+) -> dict[str, Any] | None:
+    """一篇文档的阅读视图：元信息 + 章节 + 命中章节。
+
+    `max_chars` 是上限不是目标：正常政策文件几千到两万字，全给。只有病态的
+    超大文本才截断，并在返回值里如实标 `truncated`，前端不能假装它是全文。
+    """
+    base = get_base(kb_id)
+    if base is None:
+        return None
+    doc = next((d for d in base["documents"] if d["id"] == doc_id), None)
+    if doc is None:
+        return None
+
+    text = document_text(kb_id, doc_id)
+    truncated = False
+    if max_chars and len(text) > max_chars:
+        text = text[:max_chars]
+        truncated = True
+    chapters = split_chapters(text)
+
+    hits: list[dict[str, Any]] = []
+    q = str(query or "").strip()
+    if q:
+        step = CHUNK_SIZE - CHUNK_OVERLAP
+        for h in doc_hits(kb_id, doc_id, q):
+            chunk_text_ = str(h["text"])
+            # 章节定位用「块起点 + 词在块内的位置」，不是块起点：一个块常横跨
+            # 两三节，只按起点算会把它整段记到上一节头上。字面找不到（换了说法、
+            # 只靠语义命中）时退回块中点，比起点更不容易指错。
+            idx = chunk_text_.find(q)
+            pos = int(h["ordinal"]) * step + (idx if idx >= 0 else len(chunk_text_) // 2)
+            ch = _chapter_index(chapters, pos)
+            # 命中片段：语义命中时正文里根本没有原词（换说法也能召回），只高亮
+            # 正文等于什么都没标。给一小段命中原文，让人看见"凭什么是这一节"。
+            anchor = idx if idx >= 0 else 0
+            snip_start = max(0, anchor - 100)
+            snippet = chunk_text_[snip_start : snip_start + 320].strip()
+            if snip_start > 0:
+                snippet = "…" + snippet
+            if snip_start + 320 < len(chunk_text_):
+                snippet += "…"
+            hits.append(
+                {
+                    "chapter": ch,
+                    "chapter_title": chapters[ch]["title"] if chapters else "",
+                    "ordinal": h["ordinal"],
+                    "score": round(float(h.get("score") or 0), 3),
+                    "count": chunk_text_.count(q) if q else 0,
+                    "snippet": snippet,
+                }
+            )
+
+    return {
+        "ok": True,
+        "doc": {
+            "id": doc["id"],
+            "name": doc["name"],
+            "kb_id": kb_id,
+            "kb_name": base["name"],
+            "byte_size": int(doc.get("byte_size") or 0),
+            "chars": len(text),
+            "chunk_count": int(doc.get("chunk_count") or 0),
+            "embedded": bool(doc.get("embedded")),
+            "created_at": int(doc.get("created_at") or 0),
+            "chapters": len(chapters),
+        },
+        "chapters": chapters,
+        "truncated": truncated,
+        "hits": hits,
+        "query": q,
+    }
+
+
 def delete_document(kb_id: str, doc_id: str) -> bool:
     base = get_base(kb_id)
     if base is None:
@@ -474,7 +752,64 @@ def delete_document(kb_id: str, doc_id: str) -> bool:
 # （实测「银河系有多少颗恒星」与「海绵城市导则」余弦 0.378，误召回导致
 # 问数把「拒答」误判成「命中资料库」）。真命中都在 0.6 以上。定 0.55，
 # 低于它不召回，宁可说没有也不硬凑。
+#
+# 但**字面命中不看这个分**（见 `_literal_hit`）。这里的片段长 800 字，一个三四字
+# 的词落在里面会被稀释：实测「双随机」对确实写了这三个字的那一块只有 0.296，
+# 「消防通道」0.337，「预付卡」0.408。照 0.55 一刀切，用户搜一个文件里原样写着
+# 的词，得到的是「没有相关文件」——这是最难解释的一种错。字面对上就是字面上对，
+# 和 knowledge.py 里「编号命中不看阈值」同一条道理：确定的证据比阈值可靠。
 MIN_VECTOR_SIM = 0.55
+
+# 字面命中也要有下界：查询太短会把整个库翻出来（搜「水」应该走语义，不该把写了
+# 「水」字的每块都列出来），所以 2 个字以上才启用。
+# 候选池放宽到 60：字面命中的块排名可能很靠后（那条 0.296 的排第 5），只取 top-k
+# 会先被截掉；`_Index.search` 本来就要算遍全库再切片，放宽不增加成本。
+_MIN_LITERAL_CHARS = 2
+_LITERAL_POOL = 60
+
+
+def _plain(text: str) -> str:
+    """只留字：去掉空白、标点和 markdown 记号。
+
+    切块是纯字符窗口，片段里常带「## 三、分类整治要求」这种标题记号，用户搜
+    「分类整治要求」时字面是对的，但原样比对会被「三、」和空格卡住。两边都先
+    去干净再比，口径才一致。
+    """
+    return re.sub(r"[\s\W_]+", "", str(text or "").lower())
+
+
+def _literal_hit(query: str, text: str) -> bool:
+    """问句是否原样落在这段里（去标点空白后逐字比对）。
+
+    刻意不做同义、不做词干：这一路只证明一件事——他说的字，这段里真有。语义
+    相关但换了说法的交给向量分，两路各管一段，不互相替。
+    """
+    q = _plain(query)
+    if len(q) < _MIN_LITERAL_CHARS:
+        return False
+    return q in _plain(text)
+
+
+def name_hit(filename: str, query: str) -> bool:
+    """问句是否落在文件名里。
+
+    单列一路是因为文件名比正文短得多：搜「加装电梯办事指南」，正文里这个词
+    会被 800 字窗口稀释到 0.3 上下，而文件名本来就是那个名字。用户打全名时
+    要找的就是这份文件，不该让它排在一堆正文命中后面。
+
+    中文文件名常被中间几个字隔开（「加装电梯办事指南」vs 搜「加装电梯指南」），
+    逐字 in 会漏，所以整串没对上时再看二字组覆盖率。
+    """
+    q = _plain(query)
+    if len(q) < _MIN_LITERAL_CHARS:
+        return False
+    name = _plain(filename)
+    if q in name:
+        return True
+    parts = _bigrams(q)
+    if not parts:
+        return False
+    return sum(1 for p in parts if p in name) / len(parts) >= 0.7
 
 
 def search(
@@ -484,7 +819,12 @@ def search(
     k: int = DEFAULT_K,
     char_budget: int = DEFAULT_CHAR_BUDGET,
 ) -> list[dict[str, Any]]:
-    """跨库检索，返回按相关度降序的原文片段，每条带出处。"""
+    """跨库检索，返回按相关度降序的原文片段，每条带出处。
+
+    两个信号取并集：向量分够高（语义相关，允许换说法），或者字面命中（他说的
+    字这段里原样有）。只留向量分一条路的话，800 字片段会把短查询稀释到 0.3 上下，
+    字面上明摆着写着也检不出来。
+    """
     q = str(query or "").strip()
     if not q or not kb_ids or k <= 0 or char_budget <= 0:
         return []
@@ -498,9 +838,11 @@ def search(
             continue
         doc_by_id = {d["id"]: d for d in base["documents"]}
         if query_vec is not None:
-            hits = _Index(kb_id).search(query_vec[0], k=k)
-            # 向量路设下限：语义不沾边的背景相似度不进结果
-            hits = [h for h in hits if h["score"] >= MIN_VECTOR_SIM]
+            # 候选池放宽：字面命中可能排名很靠后，先取 top-k 会把它们截掉
+            hits = _Index(kb_id).search(query_vec[0], k=max(k, _LITERAL_POOL))
+            # 向量路设下限，挡掉语义不沾边的背景相似度；字面命中的例外见
+            # `_literal_hit` —— 那一路不看分。
+            hits = [h for h in hits if h["score"] >= MIN_VECTOR_SIM or _literal_hit(q, h["text"])]
         else:
             hits = _bigram_search(kb_id, q, k=k)
         for h in hits:

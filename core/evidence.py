@@ -324,7 +324,7 @@ def _from_docs(block: dict[str, Any], ready: dict[str, Any]) -> list[dict[str, A
         out.append(
             _item(
                 kind="doc",
-                kind_label="资料库",
+                kind_label="上传文档",
                 title=str(h.get("doc_name") or ""),
                 quote=_clip(h.get("text") or ""),
                 # 检索词要留出来：一件事挂回来一段政策原文，得说清是照着哪件事找的，

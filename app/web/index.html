@@ -1458,6 +1458,144 @@ html.embedded .drawer{top:0;height:100%}
   background:var(--brand-soft);color:var(--brand)
 }
 
+/* ---------------- 知识库 ----------------
+   左边清单、右边原文，和督办台账共用 ov-* 骨架：读的是同一种东西 ——
+   一条一条带编号、带出处的记录。区别只在右边没有任何操作按钮：知识库是只读的。 */
+.kl-box{width:min(1240px,97vw);height:min(720px,86vh)}
+.kl-bar{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+/* 搜索框用 label 包住，点放大镜也能聚焦（和会话搜索同一个手感） */
+.kl-search{
+  display:flex;align-items:center;gap:6px;flex:1;min-width:240px;padding:0 9px;
+  background:var(--surface-2);border:1px solid var(--line);border-radius:8px;cursor:text
+}
+.kl-search:focus-within{border-color:var(--brand);background:var(--surface)}
+.kl-search svg{width:12px;height:12px;color:var(--faint);flex:0 0 auto}
+.kl-search input{
+  flex:1;min-width:0;border:0;background:transparent;outline:none;
+  font:inherit;font-size:12px;color:var(--ink);padding:6px 0
+}
+/* type=search 自带一个清除叉，和我们那个 ✕ 并排会长出两个，去掉原生的 */
+.kl-search input::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none}
+.kl-search button{
+  border:0;background:transparent;color:var(--faint);cursor:pointer;
+  font:inherit;font-size:11px;padding:2px 3px;border-radius:4px;flex:0 0 auto
+}
+.kl-search button:hover{color:var(--ink);background:var(--surface-4)}
+.kl-search button[hidden]{display:none}
+.kl-chips{display:flex;gap:5px;flex-wrap:wrap}
+.kl-count{font-size:10.5px;color:var(--faint);margin-left:auto;white-space:nowrap}
+/* 知识库的左右栏要各自滚：隐式行高默认取内容高度，不钉成 1fr 的话
+   `.kb-main{height:100%}` 量到的是内容高度，正文会一直撑到弹窗外面去。 */
+.kl-body{flex:1;min-height:0;grid-template-rows:minmax(0,1fr)}
+/* 类型色块：四类记录在清单里要一眼分得开，否则标题全是「关于…的…」，
+   看列表分不出这条是口径还是台账 */
+.kl-kind{
+  font-size:10px;padding:1px 6px;border-radius:20px;flex:0 0 auto;
+  border:1px solid var(--line);background:var(--surface-3);color:var(--muted)
+}
+.kl-kind.metric{background:var(--info-bg);border-color:var(--info-line);color:var(--info)}
+.kl-kind.oversight{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-ink)}
+.kl-kind.decision{background:var(--ok-bg);border-color:var(--ok-line);color:var(--ok)}
+.kl-kind.meeting{background:var(--brand-soft);color:var(--brand)}
+/* 上传文档不是系统产出的记录（可能过期、随时可删），用虚线边把它和四类记录
+   分开。不给第五种颜色：颜色已经用到四个语义色，再加一个就分不清了。 */
+.kl-kind.doc{background:var(--surface-2);border-style:dashed;border-color:var(--faint);color:var(--muted)}
+.kl-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.kl-h h4{margin:0;font-size:15px;line-height:1.45}
+/* 出处用 1px 网格拼，比一堆卡片干净：它是一张表，不是四块内容 */
+.kl-meta{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;
+  background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden
+}
+.kl-meta>div{background:var(--surface);padding:7px 10px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.kl-meta>div.full{grid-column:1/-1}
+.kl-meta span{font-size:10px;color:var(--faint)}
+.kl-meta b{font-size:12px;font-weight:600;color:var(--ink-2);word-break:break-word}
+.kl-sec h5{margin:0 0 6px;font-size:11.5px;color:var(--muted);font-weight:600;letter-spacing:.2px}
+.kl-text{
+  margin:0;padding:11px 13px;border-radius:8px;border:1px solid var(--line-2);background:var(--surface-2);
+  font-size:12.5px;line-height:1.95;color:var(--ink-2);white-space:pre-wrap;word-break:break-word
+}
+/* 引句用左侧竖线，不用全底色：它是被引的一段原文，不是一块提示 */
+.kl-quote{
+  margin:0;padding:10px 13px;border-left:3px solid var(--brand);border-radius:0 8px 8px 0;
+  background:var(--brand-soft);font-size:12.5px;line-height:1.9;color:var(--ink-2);
+  white-space:pre-wrap;word-break:break-word
+}
+/* 文档阅读视图：文件头 → 命中导航 → 章节正文。正文自己滚，头部和命中导航
+   留在原处 —— 否则翻到第 5 章想换一节，还得先滚回顶上。
+   `kb-main` 才是 #kbMain 的类名（`kl-main` 从来没被用上过，别照抄）。 */
+.kb-main{height:100%;min-height:0}
+.kl-docwrap{display:flex;flex-direction:column;gap:12px;height:100%;min-height:0}
+.kl-dochead{display:flex;flex-direction:column;gap:7px;flex:0 0 auto}
+.kl-docmeta{font-size:11px;color:var(--faint);line-height:1.7}
+.kl-docnav{
+  flex:0 0 auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  padding:8px 10px;border-radius:8px;background:var(--warn-bg);border:1px solid var(--warn-line);
+  font-size:11.5px;color:var(--muted)
+}
+.kl-docnav>b{color:var(--warn-ink);font-weight:600;margin-right:4px}
+.kl-docnav>span{color:var(--muted)}
+.kl-hitbtn{
+  display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:14px;
+  border:1px solid var(--line);background:var(--surface);cursor:pointer;
+  font:inherit;font-size:11px;color:var(--ink-2)
+}
+.kl-hitbtn i{font-style:normal;font-size:10px;color:var(--faint)}
+.kl-hitbtn:hover{border-color:var(--brand)}
+.kl-hitbtn.on{border-color:var(--brand);color:var(--brand);background:var(--brand-soft)}
+.kl-docbody{
+  flex:1;min-height:0;overflow:auto;
+  /* 底部留白让最后一章也能滚到顶部：不留的话「五、常见问题」只能停在
+     视口中间，点了命中导航像是没反应。 */
+  padding:4px 16px min(34vh,260px);
+  border:1px solid var(--line);border-radius:8px;background:var(--surface-2)
+}
+.kl-docsec{padding:11px 0;border-bottom:1px dashed var(--line-2)}
+.kl-docsec:last-child{border-bottom:0}
+.kl-docsec.hit{border-left:3px solid var(--brand);padding-left:11px;margin-left:-3px}
+.kl-docsec-h{margin:0 0 6px;font-weight:700;color:var(--ink);font-size:13px;line-height:1.6}
+.kl-docsec-h.lv1{font-size:13.5px}
+.kl-docsec-h.lv2{font-size:12.5px;color:var(--ink-2)}
+.kl-docsec-h.lv3{font-size:12px;color:var(--muted)}
+.kl-docsec-b{white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.95;color:var(--ink-2);max-width:78ch}
+.kl-docsnip{
+  margin:0 0 10px;padding:8px 12px;border-left:3px solid var(--brand);border-radius:0 7px 7px 0;
+  background:var(--brand-soft);font-size:12px;line-height:1.85;color:var(--ink-2);
+  white-space:pre-wrap;word-break:break-word;max-width:78ch
+}
+.kl-docsnip>span{display:block;font-size:10px;color:var(--brand);margin-bottom:3px;letter-spacing:.3px}
+.kl-jump{display:flex;gap:8px;flex-wrap:wrap}
+.kl-mark{background:var(--warn-bg);color:inherit;border-radius:3px;padding:0 1px}
+.kl-empty{color:var(--faint);font-size:12px;text-align:center;padding:44px 16px;line-height:1.9}
+/* 上传面板：上传文档并进知识库后才有的写入侧。和预览共用 kl-main 的纵向流，
+   所以各块之间靠 .kl-sec 的间距，不另起一套卡片。 */
+.kl-up-note{font-size:11.5px;line-height:1.85;padding:9px 11px;color:var(--muted)}
+.kl-up-act{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.kl-up-pick{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
+.kl-up-pick select{
+  padding:5px 8px;border:1px solid var(--line);border-radius:7px;background:var(--surface);
+  font:inherit;font-size:12px;color:var(--ink);max-width:260px
+}
+.kl-up-new{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:10px;
+  border:1px solid var(--line);border-radius:8px;background:var(--surface-2)
+}
+.kl-up-new label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted)}
+.kl-up-new input{
+  padding:6px 9px;border:1px solid var(--line);border-radius:7px;
+  font:inherit;font-size:12px;color:var(--ink);background:var(--surface)
+}
+.kl-up-new input:focus{outline:none;border-color:var(--brand)}
+.kl-up-new button{grid-column:1/-1;justify-self:start}
+.kl-up-base{display:flex;align-items:center;gap:10px;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line-2)}
+.kl-up-base:last-child{border-bottom:0}
+.kl-up-base-txt{display:flex;flex-direction:column;gap:2px;min-width:0}
+.kl-up-base-txt b{font-size:12.5px;font-weight:600;color:var(--ink-2)}
+.kl-up-base-txt span{font-size:11px;color:var(--faint);word-break:break-word}
+.file-pick.off{opacity:.45;pointer-events:none}
+@media (max-width:900px){.kl-meta{grid-template-columns:1fr}.kl-up-new{grid-template-columns:1fr}}
+
 /* ---------------- AI 日程 ----------------
    V3：改为月历视图 —— 一屏看清整月安排，日期格内摆事项；
    点某天在下方看当天清单。不做假数据：14 天窗口外的日期就是空格。 */
@@ -1984,6 +2122,7 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
     <span data-tool="meeting"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H4z"/><path d="M9 20h6M12 16v4"/></svg>会议助手</span>
     <span data-tool="cal"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></svg>AI日程</span>
     <span data-tool="doc"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>材料助手</span>
+    <span data-tool="kb" title="知识库 · 口径、台账、会议记录的清单与原文"><svg viewBox="0 0 24 24"><path d="M4 4.5h6a2 2 0 012 2V19a2 2 0 00-2-2H4z"/><path d="M20 4.5h-6a2 2 0 00-2 2V19a2 2 0 012-2h6z"/></svg>知识库</span>
     <span data-tool="bell" title="消息提醒 · 到期、逾期、会前、指标"><svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 20h4"/></svg>消息提醒<i class="tool-badge" id="ntBadge" hidden></i></span>
   </div>
   <div class="id-wrap">
@@ -2218,19 +2357,6 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
   </div>
 </div>
 
-<div class="modal" id="ragModal">
-  <div class="modal-box theme-box">
-    <div class="modal-head">
-      <div>
-        <h3>资料库</h3>
-        <p>上传政策文件、报告等，问答时召回相关原文片段。检索到的是原文、带出处，模型不转述数字。</p>
-      </div>
-      <span class="modal-x" id="ragClose">✕</span>
-    </div>
-    <div class="modal-body" id="ragBody"></div>
-  </div>
-</div>
-
 <div class="modal" id="pluginsModal">
   <div class="modal-box theme-box">
     <div class="modal-head">
@@ -2398,6 +2524,40 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
         <div class="ov-list" id="fxList"></div>
       </aside>
       <section class="ov-main" id="fxMain"></section>
+    </div>
+  </div>
+</div>
+
+<!-- 知识库：口径 / 督办 / 会议三类记录的全部条目 + 原文预览 + 检索。
+     它不是又一个问答入口 —— 条目就是系统里已经存着的原文，列出来给人翻；
+     搜到了点开看原文，出处、编号、部门都在，能点回台账或会议。 -->
+<div class="modal" id="kbModal">
+  <div class="modal-box kl-box">
+    <div class="modal-head">
+      <div>
+        <h3>知识库</h3>
+        <p>两个来源放在一处：系统自己产出的记录（指标口径、督办事项、会议记录与议定），以及上传的政策文件、报告。全部是原文，检索不经过模型；每条都带出处，能点回台账、会议或原文件。</p>
+      </div>
+      <span class="modal-x" id="kbClose">✕</span>
+    </div>
+    <div class="kl-bar">
+      <div class="kl-search" id="kbSearch">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-3.6-3.6"/></svg>
+        <input id="kbQ" type="search" placeholder="搜条目：事项名称、单位、指标别名、台账编号、文件内容…" autocomplete="off">
+        <button id="kbQClear" type="button" hidden title="清空">✕</button>
+      </div>
+      <div class="kl-chips" id="kbChips"></div>
+      <!-- 上传入口就在知识库里：上传、建库、删库都在这页完成，不再另开一个
+           「上传文档」弹窗。两个入口是上一版留下的问题 —— 用户只认「库」这一个
+           概念，另一个入口只会让人以为库就这些。 -->
+      <button class="mini kl-upbtn" id="kbUpload" title="把政策文件、报告放进知识库，问答时可召回原文片段">＋ 上传文档</button>
+      <span class="kl-count" id="kbCount"></span>
+    </div>
+    <div class="ov-body kl-body">
+      <aside class="ov-side">
+        <div class="ov-list" id="kbList"></div>
+      </aside>
+      <section class="ov-main kb-main" id="kbMain"></section>
     </div>
   </div>
 </div>
@@ -4735,144 +4895,177 @@ async function loadPlugins() {
   }
 }
 
-let RAG = { bases: [], active: null, stats: {} };
+// 上传面板唯一要记的状态就是分类库列表；不再有「当前库」这种跨面板状态，
+// 选中哪个库由 KB_UP.base 管。
+let RAG = { bases: [] };
 
 async function loadRag() {
   try {
     RAG = await (await fetch("/api/rag/bases")).json();
   } catch (_) {
-    RAG = { bases: [], active: null, stats: {} };
+    RAG = { bases: [] };
   }
 }
 
-function openRagModal() {
-  $("#ragModal").classList.add("on");
-  loadRag().then(() => renderRagPanel()).catch(() => renderRagPanel());
-}
-function closeRagModal() { $("#ragModal").classList.remove("on"); }
+/* ---------- 上传文档（知识库的写入侧） ----------
+   上传、建库、删库都在知识库页面里做，不再另开一个「上传文档」弹窗：
+   浏览和写入面对的是同一个库，拆成两个入口时用户会以为「库」就是那份清单。
+   这里只管写；清单仍然走 /api/knowledge?kind=doc，一份数据一个来源。 */
+const KB_UP = { base: "", creating: false };
 
-function renderRagPanel() {
+async function openKbUpload(kbId) {
+  $("#kbModal").classList.add("on");
+  // 先立起 pane 标记再发请求：这之前可能有一次 loadKb 在飞，它回来时
+  // 看到 pane=upload 就不会把上传面板换成某篇原文。
+  KB.pane = "upload";
+  KB.sel = "";
+  // 新建表单是上一次留下的展开态，重新进来先收起
+  KB_UP.creating = false;
+  if (KB.items.length) renderKbList();
+  await loadRag();
   const bases = RAG.bases || [];
-  const stats = RAG.stats || {};
-  const cards = bases.map((b) => `<div class="prov" data-rag-base="${esc(b.id)}" style="cursor:pointer">
-    <div class="prov-hd"><b>${esc(b.name)}</b><span class="mbadge">${b.doc_count} 篇</span><span class="mbadge">${b.chunk_count} 块</span></div>
-    ${b.description ? `<div class="prov-url">${esc(b.description)}</div>` : ""}
-  </div>`).join("");
+  if (kbId && bases.some((b) => b.id === kbId)) KB_UP.base = kbId;
+  if (!KB_UP.base || !bases.some((b) => b.id === KB_UP.base)) {
+    KB_UP.base = bases.length ? bases[0].id : "";
+  }
+  renderKbUpload();
+}
 
-  $("#ragBody").innerHTML = `
-    <div class="set-row" style="border-bottom:0;padding-top:0">
-      <div class="set-l"><b>通用文档检索</b><span>上传政策文件、报告等，问答时可召回相关原文片段。检索到的是原文、带出处，模型不转述数字。</span></div>
-      <span class="set-v">${stats.bases || 0} 个库 · ${stats.documents || 0} 篇 · ${stats.chunks || 0} 块</span>
-    </div>
-    <div class="set-row" style="border-top:0">
-      <div class="set-l"><b>向量化</b><span>装了 fastembed 走本地 ONNX 语义检索；没装自动退回关键词检索，功能照常。</span></div>
-      <span class="set-v ${stats.embedding ? "" : "hint"}">${stats.embedding ? "本地向量已启用" : "关键词检索（未装向量依赖）"}</span>
-    </div>
-    ${cards || `<div class="hint" style="margin:0 0 6px">还没有资料库。</div>`}
-    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
-      <b style="font-size:12.5px">新建资料库</b>
-      <div class="form-grid">
-        <label>名称<input id="rag_name" placeholder="例如：营商环境政策"></label>
-        <label class="full">说明（可选）<input id="rag_desc" placeholder="放什么文件，供谁查"></label>
+function renderKbUpload() {
+  const bases = RAG.bases || [];
+  const opts = bases.map((b) =>
+    `<option value="${esc(b.id)}" ${b.id === KB_UP.base ? "selected" : ""}>${esc(b.name)}（${b.doc_count} 篇）</option>`
+  ).join("");
+  // 库列表兼做管理：篇数、块数、说明，加一个删库。删库会把文件一起删掉，
+  // 所以确认框里写清楚篇数 —— 「删除分类库」听起来像只删个空壳。
+  const rows = bases.map((b) => `<div class="kl-up-base">
+      <div class="kl-up-base-txt">
+        <b>${esc(b.name)}</b>
+        <span>${b.doc_count} 篇 · ${b.chunk_count} 块${b.description ? ` · ${esc(b.description)}` : ""}</span>
       </div>
-      <div class="prow-acts"><button class="mini" id="rag_create">创建</button></div>
-    </div>`;
+      <button class="mini" data-kbupdel="${esc(b.id)}">删除库</button>
+    </div>`).join("");
 
-  $("#rag_create").onclick = async () => {
-    const name = ($("#rag_name").value || "").trim();
-    if (!name) return toast("名称不能为空");
-    const d = await (await fetch("/api/rag/bases", {
-      method: "POST", headers: authHeaders(),
-      body: JSON.stringify({ name, description: ($("#rag_desc").value || "").trim() }),
-    })).json();
-    if (!d.ok) return handleWriteDeny(d);
-    await loadRag();
-    RAG.active = d.base;
-    renderRagPanel();
-    toast(`已创建「${name}」`);
-  };
+  $("#kbMain").innerHTML = `
+    <div class="kl-h">
+      <span class="kl-kind doc">上传文档</span>
+      <h4>上传政策文件、报告</h4>
+    </div>
+    <div class="kl-sec">
+      <p class="kl-text kl-up-note">支持 md / txt / csv / tsv / json / html / docx / xlsx，单文件不超过 9MB。文件按段切块建索引，问答时召回的是原文片段、带文件名出处，模型不转述数字。</p>
+    </div>
+    <div class="kl-up-act">
+      ${bases.length
+        ? `<label class="kl-up-pick">放进哪个分类库<select id="kbUpBase">${opts}</select></label>`
+        : `<span class="hint">还没有分类库，先建一个再把文件放进去。</span>`}
+      <label class="mini file-pick${bases.length ? "" : " off"}"${bases.length ? "" : ' title="先建一个分类库"'}>选择文件
+        <input type="file" id="kbUpFile" multiple${bases.length ? "" : " disabled"} style="display:none">
+      </label>
+      <button class="mini" id="kbUpNew">${KB_UP.creating ? "取消新建" : "新建分类库"}</button>
+    </div>
+    ${KB_UP.creating
+      ? `<div class="kl-up-new">
+          <label>名称<input id="kbUpName" placeholder="例如：营商环境政策" maxlength="24"></label>
+          <label>说明（可选）<input id="kbUpDesc" placeholder="放什么文件，供谁查"></label>
+          <button class="mini" id="kbUpCreate">创建</button>
+        </div>`
+      : ""}
+    <div class="kl-sec">
+      <h5>分类库 · ${bases.length} 个</h5>
+      ${rows || `<div class="hint">还没有分类库。</div>`}
+    </div>
+    <div class="hint" style="font-size:11px;line-height:1.7">删除单份文件：回到左边清单点开它，在预览底部删。原件和索引一起删，问答里不再召回。</div>`;
 
-  document.querySelectorAll("[data-rag-base]").forEach((el) => {
-    el.onclick = () => {
-      const id = el.dataset.ragBase;
-      renderRagBasePanel(id);
-    };
+  const sel = $("#kbUpBase");
+  if (sel) sel.onchange = () => { KB_UP.base = sel.value; };
+  $("#kbUpNew").onclick = () => { KB_UP.creating = !KB_UP.creating; renderKbUpload(); };
+  if ($("#kbUpCreate")) $("#kbUpCreate").onclick = createKbBase;
+  $("#kbUpFile").onchange = (e) => uploadKbFiles(e.target.files);
+  document.querySelectorAll("[data-kbupdel]").forEach((btn) => {
+    btn.onclick = () => deleteKbBase(btn.dataset.kbupdel);
   });
 }
 
-async function renderRagBasePanel(kbId) {
-  const d = await (await fetch(`/api/rag/bases/${encodeURIComponent(kbId)}`)).json();
-  if (!d.ok) return renderRagPanel();
-  const base = d.base;
-  const docs = d.documents || [];
-  const docRows = docs.map((d) => `<div class="set-row" style="padding:7px 0">
-    <div class="set-l"><b>${esc(d.name)}</b><span>${d.chunk_count} 块 · ${d.embedded ? "已向量化" : "关键词"}</span></div>
-    <button class="mini" data-rag-del-doc="${esc(d.id)}">删除</button>
-  </div>`).join("");
+async function createKbBase() {
+  const name = ($("#kbUpName").value || "").trim();
+  if (!name) return toast("名称不能为空");
+  const d = await (await fetch("/api/rag/bases", {
+    method: "POST", headers: authHeaders(),
+    body: JSON.stringify({ name, description: ($("#kbUpDesc").value || "").trim() }),
+  })).json();
+  if (!d.ok) return handleWriteDeny(d);
+  await loadRag();
+  KB_UP.base = (d.base && d.base.id) || KB_UP.base;
+  KB_UP.creating = false;
+  await loadKb({ keepMain: true });
+  renderKbUpload();
+  toast(`已创建「${name}」`);
+}
 
-  $("#ragBody").innerHTML = `
-    <div class="set-row" style="padding-top:0">
-      <div class="set-l"><b>${esc(base.name)}</b><span>${esc(base.description || "无说明")}</span></div>
-      <button class="mini" id="rag_back">← 返回</button>
-    </div>
-    <div class="set-row">
-      <div class="set-l"><b>上传文档</b><span>支持 md/txt/csv/tsv/json/html/docx/xlsx，单文件不超过 9MB。</span></div>
-      <label class="mini file-pick">选择文件<input type="file" id="rag_file" multiple style="display:none"></label>
-    </div>
-    ${docRows || `<div class="hint">还没有文档，先上传一份。</div>`}
-    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
-      <b style="font-size:12.5px">在这个库里检索</b>
-      <div class="form-grid">
-        <label class="full"><input id="rag_q" placeholder="例如：老旧小区改造的完成目标是多少"></label>
-      </div>
-      <div class="prow-acts"><button class="mini" id="rag_search">检索</button></div>
-      <div id="rag_out"></div>
-    </div>`;
-
-  $("#rag_back").onclick = () => { RAG.active = null; renderRagPanel(); };
-
-  $("#rag_file").onchange = async (e) => {
-    const files = [...(e.target.files || [])];
-    for (const f of files) {
-      const buf = await f.arrayBuffer();
-      const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-      const d = await (await fetch(`/api/rag/bases/${encodeURIComponent(kbId)}/upload`, {
-        method: "POST", headers: authHeaders(),
-        body: JSON.stringify({ name: f.name, data: b64, content_type: f.type }),
-      })).json();
-      // 一批文件里第一条被拒就够了：后面几条会是同一个原因（没登录/不够级），
-      // 逐条弹对话框只会盖住第一条。
-      if (!d.ok) { handleWriteDeny(d); break; }
-      toast(`已入库「${f.name}」`);
+async function uploadKbFiles(fileList) {
+  const files = [...(fileList || [])];
+  if (!files.length) return;
+  const kbId = KB_UP.base;
+  if (!kbId) return toast("先建一个分类库");
+  let done = 0;
+  for (const f of files) {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    // 分块拼字符串：String.fromCharCode(...bytes) 在 9MB 文件上会撑爆调用栈
+    // （展开参数上限约 12 万），表现是「选了大文件没反应」。
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     }
-    await loadRag();
-    renderRagBasePanel(kbId);
-  };
+    const d = await (await fetch(`/api/rag/bases/${encodeURIComponent(kbId)}/upload`, {
+      method: "POST", headers: authHeaders(),
+      body: JSON.stringify({ name: f.name, data: btoa(bin), content_type: f.type }),
+    })).json();
+    // 一批文件里第一条被拒就够了：后面几条是同一个原因（没登录/不够级），
+    // 逐条弹框只会盖住第一条。
+    if (!d.ok) { handleWriteDeny(d); break; }
+    done += 1;
+    toast(`已入库「${f.name}」`);
+  }
+  if (!done) return;
+  await loadRag();
+  // 传完切到「上传文档」这一类：刚传的文件就在最上面（清单新→旧），
+  // 能立刻看到自己传进去了什么，而不是停在原来的搜索结果上。
+  KB.pane = "";
+  KB.kind = "doc"; KB.q = ""; KB.sel = "";
+  if ($("#kbQ")) $("#kbQ").value = "";
+  if ($("#kbQClear")) $("#kbQClear").hidden = true;
+  await loadKb();
+}
 
-  $("#rag_search").onclick = async () => {
-    const q = ($("#rag_q").value || "").trim();
-    if (!q) return toast("先输入要查的内容");
-    const out = $("#rag_out");
-    out.innerHTML = `<div class="test-out">检索中…</div>`;
-    const d = await (await fetch(`/api/rag/bases/${encodeURIComponent(kbId)}/search?q=${encodeURIComponent(q)}`)).json();
-    if (!d.ok) { out.innerHTML = `<div class="test-out bad">${esc(d.error)}</div>`; return; }
-    if (!d.hits.length) { out.innerHTML = `<div class="test-out">没有召回相关片段。</div>`; return; }
-    out.innerHTML = d.hits.map((h) => `<div class="rag-hit">
-      <div class="rag-hit-meta">${esc(h.doc_name)} · 相关度 ${h.score.toFixed(3)} · ${esc(h.method === "vector" ? "向量" : "关键词")}</div>
-      <div class="rag-hit-text">${esc(h.text)}</div>
-    </div>`).join("");
-  };
+async function deleteKbBase(kbId) {
+  const b = (RAG.bases || []).find((x) => x.id === kbId);
+  const n = b ? b.doc_count : 0;
+  if (!confirm(`删除分类库「${b ? b.name : kbId}」？\n库里的 ${n} 份文件会一起删掉，问答里也不再召回。`)) return;
+  const d = await (await fetch(`/api/rag/bases/${encodeURIComponent(kbId)}`, {
+    method: "DELETE", headers: authHeaders(),
+  })).json();
+  if (!d.ok) return handleWriteDeny(d);
+  await loadRag();
+  if (KB_UP.base === kbId) KB_UP.base = (RAG.bases[0] || {}).id || "";
+  await loadKb({ keepMain: true });
+  renderKbUpload();
+  toast("已删除分类库");
+}
 
-  document.querySelectorAll("[data-rag-del-doc]").forEach((btn) => {
-    btn.onclick = async () => {
-      const id = btn.dataset.ragDelDoc;
-      if (!confirm("删除这份文档？")) return;
-      const d = await (await fetch(`/api/rag/bases/${encodeURIComponent(kbId)}/doc?doc=${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() })).json();
-      if (!d.ok) return handleWriteDeny(d);
-      await loadRag();
-      renderRagBasePanel(kbId);
-    };
-  });
+/* 删单份文件：入口在文档预览底部。删完回到清单，不停在一条已经不存在的条目上。 */
+async function deleteKbDoc(it) {
+  const ref = it.ref || {};
+  if (!ref.kb_id) return;
+  if (!confirm(`删除「${it.title}」？\n原件和索引一起删掉，问答里不再召回。`)) return;
+  const d = await (await fetch(`/api/rag/bases/${encodeURIComponent(ref.kb_id)}/doc?doc=${encodeURIComponent(it.id)}`, {
+    method: "DELETE", headers: authHeaders(),
+  })).json();
+  if (!d.ok) return handleWriteDeny(d);
+  KB.sel = "";
+  KB.pane = "";
+  await loadRag();
+  await loadKb();
+  toast("已删除");
 }
 
 function renderGeneralPanel() {
@@ -5584,7 +5777,6 @@ function renderIdMenu() {
   ACCT_ACTIONS = {
     settings: () => openSettings("model"),
     theme: () => openThemeModal(),
-    rag: () => openRagModal(),
     plugins: () => openPluginsModal(),
     experts: () => openExpertsModal(),
     data: () => openSettings("general"),
@@ -5603,7 +5795,6 @@ function renderIdMenu() {
   const items = [
     { id: "settings", icon: "gear", name: "设置", hint: "Ctrl+," },
     { id: "theme", icon: "palette", name: "外观", hint: () => THEME.label() },
-    { id: "rag", icon: "db", name: "资料库", hint: "上传文件供问答召回" },
     { id: "plugins", icon: "plug", name: "插件", hint: "插件与连接器" },
     { id: "experts", icon: "users", name: "专家", hint: "管理参谋团的人设与视角" },
     { sep: 1 },
@@ -6990,7 +7181,7 @@ function dcTools() {
     <span class="dt-state">${state}</span>
     ${badge}
     <span class="sp"></span>
-    ${d && evCount ? `<button class="mini" id="dcEv" title="把每一节的依据展开：台账办理经过、纪要原文、指标口径、资料库里相关的政策原文">依据 ${evCount} 条</button>` : ""}
+    ${d && evCount ? `<button class="mini" id="dcEv" title="把每一节的依据展开：台账办理经过、纪要原文、指标口径、上传文档里相关的政策原文">依据 ${evCount} 条</button>` : ""}
     <button class="mini" id="dcReviewBtn" ${(d || ws) ? "" : "disabled"} title="把这份稿子回查一遍：数字能否溯源、事实是否还在、体例是否合规">审校</button>
     <button class="mini" id="dcCopy" ${ready ? "" : "disabled"}>复制 Markdown</button>
     <button class="mini" id="dcDown" ${ready ? "" : "disabled"}>下载 .md</button>
@@ -8750,6 +8941,16 @@ async function boot() {
   if (location.hash === "#doc") openDocModal();
   // #cal 直达 AI 日程（日程按当前身份现算，收藏链接换人也跟着换）
   if (location.hash === "#cal") openCalModal();
+  // #knowledge 直达知识库（#knowledge=关键词 连搜索一起带上，方便把一次检索发给同事）
+  const kbHash = location.hash.match(/^#knowledge(?:=(.+))?$/);
+  if (kbHash) {
+    if (kbHash[1]) {
+      KB.q = decodeURIComponent(kbHash[1]);
+      $("#kbQ").value = KB.q;
+      $("#kbQClear").hidden = false;
+    }
+    openKbModal();
+  }
   // #chats 直达历史对话（侧栏收起时也能用，收藏一个"我的会话"链接）
   if (location.hash === "#chats") showChats(true);
 
@@ -8779,6 +8980,359 @@ function switchView(which) {
   });
 }
 
+/* ---------- 知识库 ----------
+   两个来源合在一页：系统自己产出的四类记录（knowledge），和人上传的文档（rag）。
+   合成一页的理由是用户只认「库」这一个概念 —— 分开放两个入口时，看完清单页
+   会以为库就这些，找不到自己传的那份政策文件。
+   清单和检索共用 /api/knowledge：不带 q 是目录（后端 browse，不打分不过滤），
+   带 q 是命中（search_in，带分数）。分类 chips 两种模式都生效 ——
+   先按类型收窄，再在类内搜，这样「只看会议里提到环保的」一句话就能表达。
+   检索不到时如实说没有：把相近的条目凑上来，等于让用户把检索结果当答案。 */
+const KB_KINDS = [
+  { id: "", label: "全部" },
+  { id: "metric", label: "指标口径" },
+  { id: "oversight", label: "督办事项" },
+  { id: "decision", label: "会议议定" },
+  { id: "meeting", label: "会议记录" },
+  { id: "doc", label: "上传文档" },
+];
+/* pane：右边显示的是清单选中项的原文（""），还是上传面板（"upload"）。
+   上传面板和清单共用右半边，靠这个标记挡住「加载完清单顺手画了第一项」，
+   否则点开上传到一半会被一次后台刷新顶掉。 */
+const KB = { items: [], counts: {}, kind: "", q: "", sel: "", pane: "", timer: 0, searching: false };
+const kbKey = (it) => `${it.kind}|${it.id}`;
+
+function openKbModal() {
+  $("#kbModal").classList.add("on");
+  // 每次打开都回到清单：上次停在上传面板是上一次的事
+  KB.pane = "";
+  // 已经读过就先把上次的清单摆出来，避免每次打开都闪一下「正在读取」
+  if (!KB.items.length) {
+    $("#kbList").innerHTML = "";
+    $("#kbMain").innerHTML = `<div class="kl-empty">正在读取知识库…</div>`;
+  }
+  loadKb();
+  // 这个页面最主要的动作就是搜，打开就聚焦
+  setTimeout(() => { const el = $("#kbQ"); if (el) el.focus(); }, 60);
+}
+function closeKbModal() { $("#kbModal").classList.remove("on"); }
+
+async function loadKb(opts = {}) {
+  const qs = new URLSearchParams();
+  if (KB.q) { qs.set("q", KB.q); qs.set("limit", "100"); }
+  if (KB.kind) qs.set("kind", KB.kind);
+  let d;
+  try {
+    d = await (await fetch(`/api/knowledge?${qs.toString()}`)).json();
+  } catch (e) {
+    $("#kbMain").innerHTML = `<div class="kl-empty">知识库读取失败：${esc(e.message)}</div>`;
+    return;
+  }
+  if (!d || !d.ok) {
+    $("#kbMain").innerHTML = `<div class="kl-empty">知识库读取失败</div>`;
+    return;
+  }
+  KB.items = d.items || [];
+  KB.counts = d.counts || {};
+  KB.searching = !!(d.query || "").trim();
+  renderKbChips();
+  renderKbList();
+  // 上传/建库/删库之后只刷新目录和计数，右边要留在上传面板上：
+  // 每建一个库就被踢回某篇原文，会让人以为自己点错了。
+  if (opts.keepMain || KB.pane === "upload") return;
+  // 选中项按「类型+编号」记，不记下标：搜完之后列表变了，下标会指到别人身上
+  const at = KB.items.findIndex((x) => kbKey(x) === KB.sel);
+  const pick = at >= 0 ? at : (KB.items.length ? 0 : -1);
+  if (pick < 0) {
+    $("#kbMain").innerHTML = kbEmptyHtml();
+    return;
+  }
+  KB.sel = kbKey(KB.items[pick]);
+  renderKbList();
+  renderKbPreview(KB.items[pick]);
+}
+
+function kbEmptyHtml() {
+  if (KB.searching) {
+    return `<div class="kl-empty">没有对得上的条目。<br>换个说法，或去掉类型筛选 —— 检索只返回原文能对上的记录，不拿相近的凑数。</div>`;
+  }
+  // 上传文档这一类空着，多半是还没建库。直接把人带到本页的上传面板，
+  // 不再跳去另一个弹窗 —— 那个弹窗已经并进来了。
+  if (KB.kind === "doc") {
+    return `<div class="kl-empty">还没有上传过文档。<br>政策文件、报告、汇报材料传上来之后，会在这里按文件列出来，也能被搜索命中。<br><button class="mini" data-kbjump="upload" style="margin-top:10px">上传文档</button></div>`;
+  }
+  return `<div class="kl-empty">这一类下还没有记录。</div>`;
+}
+
+function renderKbChips() {
+  const total = Object.values(KB.counts).reduce((a, b) => a + b, 0);
+  $("#kbChips").innerHTML = KB_KINDS.map((k) => {
+    const n = k.id ? (KB.counts[k.id] || 0) : total;
+    return `<button type="button" class="ov-chip ${KB.kind === k.id ? "on" : ""}" data-kbkind="${k.id}">${esc(k.label)}<b>${n}</b></button>`;
+  }).join("");
+}
+
+function renderKbList() {
+  $("#kbCount").textContent = KB.searching
+    ? `命中 ${KB.items.length} 条${KB.items.length >= 100 ? "（只显示前 100）" : ""}`
+    : `共 ${KB.items.length} 条`;
+  if (!KB.items.length) {
+    $("#kbList").innerHTML = `<div class="hint" style="margin:8px 2px">${KB.searching ? "没有对得上的条目" : "这一类下没有条目"}</div>`;
+    return;
+  }
+  $("#kbList").innerHTML = KB.items.map((it, i) => {
+    const s = it.source || {};
+    // 指标条目的 period 就是「指标字典」，和左边的类型标签重复，所以不拼进去
+    const sub = [s.department, it.kind === "metric" ? "" : s.period].filter(Boolean).join(" · ");
+    // 上传文档的 id 是 doc_xxx，对用户没有意义；块数也是内部概念。给文件大小 ——
+    // 那才是人在认一份文件时会看的东西（章节和字数在右边阅读视图的头部）。
+    const tail = it.kind === "doc" ? (s.report || "") : it.id;
+    return `
+    <div class="ov-card ${KB.sel === kbKey(it) ? "on" : ""}" data-kbi="${i}">
+      <div class="ov-card-top">
+        <span class="kl-kind ${esc(it.kind)}">${esc(it.kind_label)}</span>
+        <span style="font-size:10px;color:var(--faint);margin-left:auto;white-space:nowrap">${esc(tail)}</span>
+      </div>
+      <b>${kbHl(it.title, KB.q)}</b>
+      <span class="ov-sub">${esc(sub || "—")}</span>
+    </div>`;
+  }).join("");
+}
+
+/* ---------- 文档阅读视图 ----------
+   文件不是"一条记录"：它有章节结构，检索命中的是某一节，而不是一个 800 字窗口。
+   点开一篇文档时单独取 /api/rag/bases/<kb>/doc（带 q 时附命中章节），右边按
+   「文件头 → 命中导航 → 章节正文」排，不套系统记录那套四格字段 —— 四个固定格子
+   装不下一份政策文件。 */
+const DOC = { seq: 0, view: null, q: "", sel: -1 };
+
+function kbBytes(n) {
+  const kb = (Number(n) || 0) / 1024;
+  if (kb < 1) return `${Math.max(1, Math.round(kb * 1024))} B`;
+  return kb < 10 ? `${kb.toFixed(1)} KB` : `${Math.round(kb)} KB`;
+}
+function kbStamp(ts) {
+  if (!ts) return "";
+  const d = new Date(Number(ts) * 1000);
+  const p = (x) => String(x).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+async function renderDocPreview(it) {
+  const ref = it.ref || {};
+  if (!ref.kb_id) return;
+  const q = KB.searching ? KB.q : "";
+  const seq = ++DOC.seq;   // 连点两份文件时只认最后一次，别让先回来的盖掉后点的
+  $("#kbMain").innerHTML = `<div class="kl-empty">正在打开「${esc(it.title)}」…</div>`;
+  let d;
+  try {
+    d = await (await fetch(
+      `/api/rag/bases/${encodeURIComponent(ref.kb_id)}/doc?doc=${encodeURIComponent(it.id)}&q=${encodeURIComponent(q)}`
+    )).json();
+  } catch (e) {
+    if (seq !== DOC.seq) return;
+    $("#kbMain").innerHTML = `<div class="kl-empty">文件读取失败：${esc(e.message)}</div>`;
+    return;
+  }
+  if (seq !== DOC.seq) return;
+  if (!d || !d.ok) {
+    $("#kbMain").innerHTML = `<div class="kl-empty">文件读取失败${d && d.error ? "：" + esc(d.error) : ""}</div>`;
+    return;
+  }
+  DOC.view = d;
+  DOC.q = q;
+  // 默认停在第一个「有正文的」命中章节：第一章常是文档大标题 + 成文日期那一小段，
+  // 跳过去几乎等于停在顶部。优先正文章节，实在没有再退回来。
+  const hitArr = d.hits || [];
+  const bodyOf = (h) => String((d.chapters[h.chapter] || {}).text || "").trim();
+  const pick = hitArr.find((h) => h.chapter > 0 && bodyOf(h)) || hitArr.find(bodyOf) || hitArr[0];
+  DOC.sel = pick ? pick.chapter : -1;
+  renderDocReader();
+}
+
+function renderDocReader() {
+  const v = DOC.view || {};
+  const doc = v.doc || {};
+  const q = DOC.q || "";
+  const chapters = v.chapters || [];
+  const hits = v.hits || [];
+  // 一章可能命中好几块，导航里一章只出现一次，角标给命中段数
+  const perChapter = new Map();
+  const snipByChapter = new Map();
+  hits.forEach((h) => {
+    perChapter.set(h.chapter, (perChapter.get(h.chapter) || 0) + 1);
+    if (!snipByChapter.has(h.chapter) && h.snippet) snipByChapter.set(h.chapter, h.snippet);
+  });
+
+  const meta = [
+    doc.kb_name,
+    kbBytes(doc.byte_size),
+    doc.created_at ? `上传于 ${kbStamp(doc.created_at)}` : "",
+    doc.chars ? `${doc.chars} 字` : "",
+    chapters.length ? `${chapters.length} 个章节` : "",
+  ].filter(Boolean).join(" · ");
+
+  const nav = q
+    ? hits.length
+      ? `<div class="kl-docnav"><b>命中 ${hits.length} 段，分布在 ${perChapter.size} 个章节</b>
+          ${[...perChapter.keys()].map((ci) => {
+            const c = chapters[ci] || {};
+            const stem = String(doc.name || "").replace(/\.[^.]+$/, "");
+            let label = c.title;
+            if (label === doc.name || (stem && label === stem)) label = "文首";
+            if (!label) label = ci === 0 ? "开头" : `第 ${ci + 1} 节`;
+            return `<button class="kl-hitbtn${ci === DOC.sel ? " on" : ""}" data-dochit="${ci}">${esc(label)}${perChapter.get(ci) ? `<i>${perChapter.get(ci)}</i>` : ""}</button>`;
+          }).join("")}
+        </div>`
+      : `<div class="kl-docnav"><b>这份文件里没有对得上的段落</b>
+          <span>文件名命中不等于正文提到；下面是整篇原文，可以自己翻。</span></div>`
+    : "";
+
+  const secs = chapters.map((c, i) => {
+    const isHit = perChapter.has(i);
+    // md 文件的第一行常是文档大标题，和文件名一模一样。再当章节标题写一遍，
+    // 屏幕上会出现两个同名标题，看着像渲染重复了。
+    const stem = String(doc.name || "").replace(/\.[^.]+$/, "");
+    const sameAsName = c.title && (c.title === doc.name || c.title === stem);
+    // 命中片段单独一块放在正文前面：语义命中的那一段里可能没有原词，
+    // 只在正文里标黄等于什么都没标，得让人看见"凭什么是这一节"。
+    // 但片段如果本来就落在这一章的正文里（小文件整篇就一两块），再列一遍
+    // 就是把同一段话印两次 —— 这种情况直接省掉。
+    const rawSnip = isHit ? snipByChapter.get(i) || "" : "";
+    const plainOf = (x) => String(x || "").replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, "");
+    // 片段常从章节标题前一点开始（块是固定 800 字切的），整段未必包含在正文里，
+    // 所以比尾部而不是比整段。尾段能在本章正文里找到，就说明是同一段话。
+    const snipTail = plainOf(rawSnip).slice(-120);
+    const dupSnip = snipTail.length >= 40 && plainOf(c.text).includes(snipTail);
+    const snip = rawSnip && !dupSnip ? rawSnip : "";
+    // 正文按原文保留换行，只标命中词；不做加粗或链接渲染 —— 那一步之后
+    // 就不是原文了，而这里承诺的是原文。
+    return `<section class="kl-docsec${isHit ? " hit" : ""}" id="kbDocSec${i}" data-docsec="${i}">
+      ${c.title && !sameAsName ? `<h6 class="kl-docsec-h lv${Number(c.level) || 1}">${kbHl(c.title, q)}</h6>` : ""}
+      ${snip ? `<blockquote class="kl-docsnip"><span>命中片段</span>${kbHl(docPlain(snip), q)}</blockquote>` : ""}
+      <div class="kl-docsec-b">${kbHl(docPlain(c.text), q)}</div>
+    </section>`;
+  }).join("");
+
+  $("#kbMain").innerHTML = `
+    <div class="kl-docwrap">
+      <div class="kl-dochead">
+        <div class="kl-h">
+          <span class="kl-kind doc">上传文档</span>
+          <h4>${esc(doc.name || "")}</h4>
+        </div>
+        <div class="kl-docmeta">${esc(meta)}</div>
+        <div class="kl-jump">
+          <button class="mini" data-kbdocdel="${esc(doc.id)}">删除这份文件</button>
+          <button class="mini" data-kbjump="upload" data-kbid="${esc(doc.kb_id)}">管理分类库</button>
+        </div>
+      </div>
+      ${nav}
+      ${v.truncated ? `<div class="hint" style="font-size:11px">文件很长，这里只放到 4 万字，后面的内容没有显示。</div>` : ""}
+      <div class="kl-docbody" id="kbDocBody">
+        ${secs || `<div class="kl-empty">这份文件没有可读的正文。</div>`}
+      </div>
+    </div>`;
+
+  // 检索命中：正文直接滚到第一处命中的章节，不用人自己在几万字里找。
+  // 等一帧再算位置：刚写进 innerHTML 时布局还没完成，量出来的偏移是旧值。
+  if (DOC.sel >= 0) {
+    requestAnimationFrame(() => setTimeout(() => scrollDocTo(DOC.sel, false), 60));
+  }
+}
+
+/* md 的行首 # 是标记，不是正文。只去掉记号，不做加粗/链接渲染 —— 那一步之后
+   就不是原文了。snippet 来自切块，块里自然带标题行，所以两处都要过一遍。 */
+const docPlain = (t) => String(t || "").replace(/^#{1,6}[ \t]+/gm, "");
+
+function scrollDocTo(i, smooth = true) {
+  const box = $("#kbDocBody");
+  const sec = $(`#kbDocSec${i}`);
+  if (!box || !sec) return;
+  // offsetTop 比 getBoundingClientRect 稳：后者在弹窗还没定位完时算出来是旧的
+  const top = sec.offsetTop - box.offsetTop - 6;
+  box.scrollTo({ top: Math.max(0, top), behavior: smooth ? "smooth" : "auto" });
+  document.querySelectorAll("[data-dochit]").forEach((b) => {
+    b.classList.toggle("on", Number(b.dataset.dochit) === i);
+  });
+  DOC.sel = i;
+}
+
+function renderKbPreview(it) {
+  const s = it.source || {};
+  // 上传文档走另一套字段：它没有「责任部门」「台账状态」，有的是库、大小、
+  // 上传时间和切块数。硬套系统记录那四格，会有一半写着「—」。
+  // 上传文档不是"一条记录"，是一份文件：它有章节、有长度、检索命中要落到
+  // 某一节上。所以它走自己的阅读视图，不套系统记录那套四格字段。
+  if (it.kind === "doc") return renderDocPreview(it);
+  const jump = kbJump(it);
+  // 引句只在它不出现在正文里时才单独列。指标条目的 quote 就是口述定义那一句，
+  // 而正文第一句也是它 —— 原样摆两遍，读的人会以为是两段不同的原文。
+  const quote = it.quote && !String(it.text || "").includes(it.quote) ? it.quote : "";
+  // 期次这个词只在指标上讲得通：台账那边是状态、会议那边是时间。
+  // 四个类型共用一个标签，读起来会是「期次 / 状态：2026-11-11 09:00」。
+  // 指标条目的 period 是「指标字典」，和标题上的类型标签重复，干脆不占一格。
+  const periodLabel = it.kind === "oversight" ? "状态" : "会议时间";
+  const cells = [
+    `<div><span>来源部门</span><b>${esc(s.department || "—")}</b></div>`,
+    `<div><span>出处</span><b>${esc(s.report || "—")}</b></div>`,
+  ];
+  if (it.kind !== "metric") {
+    cells.push(`<div><span>${esc(periodLabel)}</span><b>${esc(s.period || "—")}</b></div>`);
+  }
+  // 指标只有三格（部门 / 出处 / 编号），两列排下来最后一格右侧会留个空洞，
+  // 所以让编号通栏 —— 空白格比不对齐更显眼。
+  cells.push(
+    `<div${it.kind === "metric" ? ' class="full"' : ""}><span>条目编号</span><b>${esc(it.id)}</b></div>`
+  );
+  // 备注这一格装的东西按类型不一样：指标是更新频率、台账是最近一笔进展的时间、
+  // 会议是参会单位。统一叫「备注」，读的人得自己猜这是什么时间。
+  const noteLabel = it.kind === "metric" ? "更新频率" : it.kind === "oversight" ? "最近进展" : "备注";
+  if (s.note) cells.push(`<div class="full"><span>${esc(noteLabel)}</span><b>${esc(s.note)}</b></div>`);
+  // 待召开的会没有纪要原文，这不是缺数据。如实说明，别写「（无正文）」
+  // 让人以为是解析失败。
+  const body = it.text || (it.kind === "meeting" ? "这场会议还没有录入纪要原文，只有时间、主持人和参会单位。" : "（无正文）");
+  $("#kbMain").innerHTML = `
+    <div class="kl-h">
+      <span class="kl-kind ${esc(it.kind)}">${esc(it.kind_label)}</span>
+      <h4>${esc(it.title)}</h4>
+    </div>
+    <div class="kl-meta">${cells.join("")}</div>
+    <div class="kl-sec">
+      <h5>条目内容</h5>
+      <p class="kl-text">${esc(body)}</p>
+    </div>
+    ${quote ? `<div class="kl-sec"><h5>原文引句 · 可逐字核对</h5><blockquote class="kl-quote">${esc(quote)}</blockquote></div>` : ""}
+    ${jump ? `<div class="kl-jump">${jump}</div>` : ""}
+  `;
+}
+
+/* 预览底部的「去原处」：知识库是只读目录，真要办事/改数还得回各自的模块，
+   这里只负责把人送过去，不复刻那边的操作。 */
+function kbJump(it) {
+  const ref = it.ref || {};
+  if (it.kind === "metric") return `<button class="mini" data-kbjump="metric" data-kbid="${esc(it.id)}">查看口径与走势</button>`;
+  if (it.kind === "oversight") return `<button class="mini" data-kbjump="oversight" data-kbid="${esc(it.id)}">打开台账办理详情</button>`;
+  // 上传文档的写入动作就在这一页：删除在预览底部，上传/建库在右上角。
+  // 它的按钮由 renderDocReader 直接给（那份文件有章节和命中导航，不是一条记录）。
+  if (it.kind === "doc" && ref.kb_id) {
+    return `<button class="mini" data-kbdocdel="${esc(it.id)}">删除这份文件</button>
+      <button class="mini" data-kbjump="upload" data-kbid="${esc(ref.kb_id)}">管理分类库</button>`;
+  }
+  if (ref.type === "meeting" && ref.id) return `<button class="mini" data-kbjump="meeting" data-kbid="${esc(ref.id)}">打开会议记录</button>`;
+  return "";
+}
+
+/* 命中高亮：先转义再替换，绝不把用户输入当 HTML 拼进去。
+   词本身也要转义一次（esc 会把 & 变成 &amp;），否则搜「&」时两边对不上。 */
+function kbHl(text, q) {
+  const safe = esc(text);
+  const needle = esc(String(q || "").trim());
+  if (!needle) return safe;
+  const re = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  return safe.replace(re, (m) => `<mark class="kl-mark">${m}</mark>`);
+}
+
 /* ---------- 事件 ---------- */
 document.addEventListener("click", (e) => {
   // 点别处先收起身份菜单（菜单项自己也在 document 上，收起不影响下面的读取）
@@ -8788,6 +9342,57 @@ document.addEventListener("click", (e) => {
   // 星号长在答案气泡里，后面「点来源胶囊看口径」那类委托会抢走同一次点击。
   const starBtn = e.target.closest("[data-star]");
   if (starBtn) return toggleSaved(starBtn);
+
+  // 知识库：点清单里的一条 → 右边看原文；类型 chip → 换分类重取；
+  // 预览底部的按钮 → 先关掉本页再去原处（两个弹窗同 z-index，叠着会盖错）。
+  const kbRow = e.target.closest("[data-kbi]");
+  if (kbRow) {
+    const it = KB.items[Number(kbRow.dataset.kbi)];
+    if (!it) return;
+    KB.pane = "";
+    KB.sel = kbKey(it);
+    renderKbList();
+    renderKbPreview(it);
+    return;
+  }
+  // 预填只在输入框为空时做，不覆盖用户已经写了一半的问题。
+    const q = $("#q");
+    if (q && !q.value.trim()) {
+      q.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    return $("#attachInput").click();
+  }
+  const kbChip = e.target.closest("[data-kbkind]");
+  if (kbChip) {
+    KB.pane = "";
+    KB.kind = kbChip.dataset.kbkind || "";
+    KB.sel = "";
+    return loadKb();
+  }
+  const kbGo = e.target.closest("[data-kbjump]");
+  if (kbGo) {
+    const id = kbGo.dataset.kbid;
+    const to = kbGo.dataset.kbjump;
+    // 上传面板就在知识库这一页里，切过去就行，不关弹窗
+    if (to === "upload") return openKbUpload(id);
+    closeKbModal();
+    if (to === "metric") return showMetric(id);
+    if (to === "oversight") return openOversight(id);
+    if (to === "meeting") return openMeetModal(id);
+    return;
+  }
+  // 知识库右上角的「＋ 上传文档」
+  if (e.target.closest("#kbUpload")) return openKbUpload();
+  // 文档阅读视图里的章节跳转（命中导航）
+  const docHit = e.target.closest("[data-dochit]");
+  if (docHit) return scrollDocTo(Number(docHit.dataset.dochit));
+  // 文档预览底部的「删除这份文档」：写接口，未登录时由 handleWriteDeny 给登录引导
+  const kbDocDel = e.target.closest("[data-kbdocdel]");
+  if (kbDocDel) {
+    const it = KB.items.find((x) => x.kind === "doc" && x.id === kbDocDel.dataset.kbdocdel);
+    if (it) deleteKbDoc(it);
+    return;
+  }
 
   // V3 多工作台：删除 → 切换（先查删除，× 在页签内部，否则会被切换接走）
   const deskDel = e.target.closest("[data-deskdel]");
@@ -9015,6 +9620,7 @@ document.addEventListener("click", (e) => {
     if (tool.dataset.tool === "meeting") return openMeetModal();
     if (tool.dataset.tool === "doc") return openDocModal();
     if (tool.dataset.tool === "cal") return openCalModal();
+    if (tool.dataset.tool === "kb") return openKbModal();
     if (tool.dataset.tool === "bell") return openNtModal();
     return toast(`「${tool.textContent.trim()}」未接入，需要单独的连接器`);
   }
@@ -9131,6 +9737,44 @@ $("#layoutModal").onclick = (e) => { if (e.target.id === "layoutModal") $("#layo
 $("#watchModal").onclick = (e) => { if (e.target.id === "watchModal") $("#watchModal").classList.remove("on"); };
 $("#ovClose").onclick = () => $("#ovModal").classList.remove("on");
 
+/* 知识库：关闭 / 搜索。输入即搜（260ms 防抖）—— 索引是现算的内存数据，
+   一次全量比对是毫秒级，加个「搜索」按钮只是多一步。 */
+$("#kbClose").onclick = closeKbModal;
+$("#kbModal").onclick = (e) => { if (e.target.id === "kbModal") closeKbModal(); };
+function kbClear() {
+  const el = $("#kbQ");
+  clearTimeout(KB.timer);
+  if (el) el.value = "";
+  $("#kbQClear").hidden = true;
+  KB.q = "";
+  KB.sel = "";
+  KB.pane = "";
+  loadKb();
+}
+$("#kbQClear").onclick = kbClear;
+$("#kbQ").addEventListener("input", (e) => {
+  const v = e.target.value;
+  $("#kbQClear").hidden = !v;
+  clearTimeout(KB.timer);
+  // 组词期间照常防抖：等上屏再发，免得为半个拼音查两次
+  KB.timer = setTimeout(() => { KB.q = v.trim(); KB.sel = ""; KB.pane = ""; loadKb(); }, 260);
+});
+$("#kbQ").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    clearTimeout(KB.timer);
+    KB.q = e.target.value.trim();
+    KB.sel = "";
+    KB.pane = "";
+    loadKb();
+  }
+  // Escape 清空而不是关页面：搜索框里按 Esc 的惯例是「取消这次输入」
+  if (e.key === "Escape" && e.target.value) {
+    e.preventDefault();
+    kbClear();
+  }
+});
+
 /* 焦点弹窗自己的三个交互：关闭 / 分类筛选 / 选中焦点 */
 $("#focusClose").onclick = () => $("#focusModal").classList.remove("on");
 $("#fxFilters").onclick = (e) => {
@@ -9155,8 +9799,6 @@ $("#modelModal").onclick = (e) => { if (e.target.id === "modelModal") closeModel
 bindNoticeModal();
 $("#tmClose").onclick = () => $("#themeModal").classList.remove("on");
 $("#themeModal").onclick = (e) => { if (e.target.id === "themeModal") $("#themeModal").classList.remove("on"); };
-$("#ragClose").onclick = () => $("#ragModal").classList.remove("on");
-$("#ragModal").onclick = (e) => { if (e.target.id === "ragModal") $("#ragModal").classList.remove("on"); };
 $("#pluginsClose").onclick = () => $("#pluginsModal").classList.remove("on");
 $("#pluginsModal").onclick = (e) => { if (e.target.id === "pluginsModal") $("#pluginsModal").classList.remove("on"); };
 $("#expertsClose").onclick = () => $("#expertsModal").classList.remove("on");

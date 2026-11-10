@@ -481,6 +481,95 @@ def _attachments(body: dict) -> list[dict]:
     return out
 
 
+# ---- 知识库清单里的「上传文档」 ----
+# 知识库收系统自己产出的记录（knowledge.py），资料库收人上传的文件（rag.py），
+# 两者在 core 层互不依赖 —— 谁也不该成为对方的下游。清单要合成一页，就在
+# 这一层拼：多一条 import 边，好过让 core 里两个模块互相知道对方。
+
+_KB_DOC_LABEL = "上传文档"
+
+
+def _kb_doc_entry(doc: dict[str, Any], body: str) -> dict[str, Any]:
+    """把一篇上传文档装成知识库条目的形状，好让前端一套渲染吃到两种来源。"""
+    ts = int(doc.get("created_at") or 0)
+    stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "—"
+    # 300 字节的文件写「1 KB」是假话，小文件保留一位小数
+    kb_size = int(doc.get("byte_size") or 0) / 1024
+    size = f"{kb_size:.1f} KB" if kb_size < 10 else f"{kb_size:.0f} KB"
+    return {
+        "kind": "doc",
+        "kind_label": _KB_DOC_LABEL,
+        "id": doc["id"],
+        "title": doc["name"],
+        "text": body,
+        "quote": None,
+        "source": {
+            "department": doc.get("kb_name") or "",
+            "report": size,
+            "period": stamp,
+            "chunks": doc.get("chunk_count") or 0,
+            "note": f"{doc.get('chars') or 0} 字"
+            + (" · 已向量化" if doc.get("embedded") else " · 关键词索引"),
+        },
+        "ref": {"type": "rag", "kb_id": doc["kb_id"], "doc_id": doc["id"]},
+    }
+
+
+def _kb_doc_entries(q: str = "", limit: int = 0) -> list[dict[str, Any]]:
+    """资料库里的文档，按知识库条目的形状列出来。
+
+    - 不带 q：清单模式，取每篇开头三块当预览。**不设阈值、不过滤** —— 和
+      knowledge.browse 同一个立场，翻目录漏一篇会让人以为文件没上传成功。
+    - 带 q：走向量检索，命中的那一块当正文。**按文档去重** —— 一篇文件命中
+      十块，列十遍没有意义；取分最高的那块，并把分数留在条目上供排序。
+    """
+    bases = rag_mod.list_bases()
+    if not bases:
+        return []
+
+    if not q:
+        return [
+            _kb_doc_entry(d, "\n\n".join(rag_mod.preview_chunks(d["kb_id"], d["id"], 3)))
+            for d in rag_mod.browse_documents()
+        ]
+
+    k = max(1, int(limit or rag_mod.DEFAULT_K))
+    docs = rag_mod.browse_documents()
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    # 文件名的字面命中先放进来，并给一个高于正文余弦的分：用户打全名时想找的
+    # 就是这份文件，不该因为它排在正文命中后面而翻第二页。
+    for d in docs:
+        if rag_mod.name_hit(d["name"], q):
+            e = _kb_doc_entry(d, "\n\n".join(rag_mod.preview_chunks(d["kb_id"], d["id"], 2)))
+            e["score"] = 2.5
+            out.append(e)
+            seen.add(d["id"])
+
+    hits = rag_mod.search([b["id"] for b in bases], q, k=k)
+    if not hits:
+        return out
+    by_id = {d["id"]: d for d in docs}
+    best: dict[str, dict[str, Any]] = {}
+    for h in hits:  # search() 已按分降序，第一篇即为该文档的最高分
+        if h["doc_id"] in best:
+            continue
+        best[h["doc_id"]] = h
+
+    for doc_id, h in best.items():
+        if doc_id in seen:
+            continue
+        doc = by_id.get(doc_id)
+        if doc is None:  # 索引里有、控制面没有：已经删过，跳过
+            continue
+        e = _kb_doc_entry(doc, h["text"])
+        e["score"] = h["score"]
+        out.append(e)
+    out.sort(key=lambda e: e["score"], reverse=True)
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "OcGovWorkbench/0.2"
     protocol_version = "HTTP/1.1"
@@ -861,21 +950,63 @@ class Handler(BaseHTTPRequestHandler):
 
             # ---- 知识库 ----
             # 只读检索：返回的是原文条目，不是模型生成的答案。
+            # 不带 q 就是清单（`knowledge.browse`）：知识库页面先列目录再搜。
+            # 两条路共用一个端点，因为对页面来说它们是同一个列表的两种填充方式，
+            # 分成两个接口会让「搜完清空搜索框」变成一次额外的请求。
             if path == "/api/knowledge":
                 qs = parse_qs(urlparse(self.path).query)
-                q = str((qs.get("q") or [""])[0])
+                q = str((qs.get("q") or [""])[0]).strip()
+                kind = str((qs.get("kind") or [""])[0]).strip()
                 try:
-                    limit = max(1, min(20, int((qs.get("limit") or ["6"])[0])))
+                    limit = max(1, min(200, int((qs.get("limit") or ["6"])[0])))
                 except ValueError:
                     limit = 6
-                hits = knowledge_mod.search(q, people.meta(self._person()), limit)
+                person = people.meta(self._person())
+                idx = knowledge_mod.index(person)
+                counts: dict[str, int] = {}
+                for e in idx:
+                    counts[e["kind"]] = counts.get(e["kind"], 0) + 1
+                # 上传文档不受身份收窄（沿用资料库原有的读口径：演示态不收窄），
+                # 所以单独数一遍，不从 idx 里推。
+                doc_total = len(rag_mod.browse_documents())
+                if doc_total:
+                    counts["doc"] = doc_total
+                if not q:
+                    items = [] if kind == "doc" else knowledge_mod.browse(person, kind or None)
+                    if kind in ("", "doc"):
+                        items += _kb_doc_entries()
+                    return self._json(
+                        {
+                            "ok": True,
+                            "query": "",
+                            "kind": kind,
+                            "total": len(items),
+                            "index_size": len(idx),
+                            "counts": counts,
+                            "items": knowledge_mod.to_meta(items),
+                            # 保留 hits 字段：老调用方（测试、脚本）读的是它。
+                            # 清单不是检索结果，这里如实给空。
+                            "hits": [],
+                        }
+                    )
+                pool = [e for e in idx if e["kind"] == kind] if kind else idx
+                items = [] if kind == "doc" else knowledge_mod.search_in(pool, q, limit)
+                if kind in ("", "doc"):
+                    # 两路分数不同源：系统记录是「余弦 + 硬信号」（编号精确命中能
+                    # 加到 1.0），上传文档是纯余弦。合并排序时系统记录天然靠前，
+                    # 这是想要的次序 —— 台账/口径是现成的答案，文件是要读的原文。
+                    items = items + _kb_doc_entries(q, limit)
+                    items.sort(key=lambda e: float(e.get("score") or 0), reverse=True)
                 return self._json(
                     {
                         "ok": True,
                         "query": q,
-                        "total": len(hits),
-                        "index_size": len(knowledge_mod.index(people.meta(self._person()))),
-                        "hits": knowledge_mod.to_meta(hits),
+                        "kind": kind,
+                        "total": len(items),
+                        "index_size": len(idx),
+                        "counts": counts,
+                        "items": knowledge_mod.to_meta(items),
+                        "hits": knowledge_mod.to_meta(items),
                     }
                 )
 
@@ -934,6 +1065,20 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"ok": False, "error": "q_required"}, 400)
                 hits = rag_mod.search([parts[0]], q)
                 return self._json({"ok": True, "query": q, "total": len(hits), "hits": hits})
+
+            # 阅读视图：?doc=<id>&q=<关键词>。不给 q 是整篇（章节 + 全文），
+            # 给 q 再附上命中章节 —— 页面要展示的是"这份文件的这一节"，
+            # 不是一个 800 字的切片。
+            if len(parts) == 2 and parts[1] == "doc":
+                qs = parse_qs(urlparse(self.path).query)
+                doc_id = str((qs.get("doc") or [""])[0]).strip()
+                if not doc_id:
+                    return self._json({"ok": False, "error": "doc_required"}, 400)
+                q = str((qs.get("q") or [""])[0]).strip()
+                view = rag_mod.doc_view(parts[0], doc_id, q)
+                if view is None:
+                    return self._json({"ok": False, "error": "doc_not_found"}, 404)
+                return self._json(view)
 
             if path.startswith("/api/metric/"):
                 code = path.rsplit("/", 1)[-1].upper()

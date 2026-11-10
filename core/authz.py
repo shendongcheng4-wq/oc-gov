@@ -216,7 +216,7 @@ def can(
         # 没有「这个单位的库」这种切法，硬切只会让人传完看不到自己传的东西。
         if _role_ok(scope, directory.ROLE_BUREAU):
             return True, ""
-        return False, "资料库写入需要登录。"
+        return False, "上传文档的写入需要登录。"
 
     if action == GATE_SESSION:
         # 身份闸门：有角色就放行。行级判定不在这里做（闸门看不到 units）。
