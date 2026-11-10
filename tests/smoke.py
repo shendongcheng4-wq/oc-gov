@@ -641,6 +641,40 @@ def test_external_digest() -> None:
     check("空 meta 不产生摘要", chat.external_digest(None) == "" and chat.external_digest({}) == "", "")
     check("摘要不超过预算量级", len(chat.external_digest(ext)) < 600, str(len(chat.external_digest(ext))))
 
+    # 追问点名某一期时，把那一期补进来 —— 一致的那几期原本不在摘要里，
+    # 「表里 8 月写的是多少」以前只能答「没有材料」。
+    asked = chat.external_digest(ext, "表里 2026-08 办结率写的是多少")
+    check(
+        "追问点名期次时补上那一期（含一致的）",
+        "问到的这一期" in asked and "2026-08" in asked and "98.6" in asked,
+        asked,
+    )
+    # 不问期次就不加这一段：把最近几期铺开是一千多 token，摘要的意义就没了
+    check("不问期次不展开那一期", "问到的这一期" not in chat.external_digest(ext, "哪期差最多"), "")
+    # 「3 个月」是时长，不是三月 —— 误判成期次会凭空多带一期不相干的数
+    check("「3 个月」不当作期次", "问到的这一期" not in chat.external_digest(ext, "3 个月前的数"), "")
+    # 期次不在对照范围内要如实说，不能静默，更不能拿相邻那期顶上
+    out_of = chat.external_digest(ext, "2026年5月呢")
+    check(
+        "期次不在对照范围内时如实说明",
+        "没有这一期" in out_of and "2026-07" in out_of,
+        out_of,
+    )
+
+    # 追问句必须真的从会话里取到：摘要挂在带对照的那条回答上，问句在它之后。
+    # 这一环断了，上面几条纯函数测试照样全绿，而线上一个字都不会变。
+    t2 = chat.create()
+    chat.append(t2["id"], "user", "对一下这份月报")
+    chat.append(t2["id"], "assistant", "对照结果见下方。", meta={"external": ext})
+    chat.append(t2["id"], "user", "表里 2026-08 是多少")
+    got = chat.context(t2["id"])[1]["content"]
+    check(
+        "context 把追问句递给摘要",
+        "问到的这一期" in got and "98.6" in got,
+        got[-160:],
+    )
+    chat.delete(t2["id"])
+
     chat.delete(t["id"])
 
 

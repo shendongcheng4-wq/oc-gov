@@ -479,13 +479,116 @@ def _summary(meta: dict[str, Any] | None) -> str:
 # prompt —— 而回灌的目的只是让模型听懂「那份表」「第三期」指的是什么。
 _DIGEST_METRICS = 4
 _DIGEST_ROWS = 2
+# 「问到的这一期」放宽到 6 个指标：用户是点名问的，漏掉他问的那一个比多带
+# 两行摘要更糟。这是这一期唯一会展开的地方，行数还是被期次卡住的。
+_ASKED_METRICS = 6
 
 
 def _row_label(row: dict[str, Any]) -> str:
     return str(row.get("label") or row.get("period") or "—")
 
 
-def external_digest(ext: dict[str, Any] | None) -> str:
+# 问句里的期次：「9 月」「2026年9月」「2026-09」。
+# 会话层不引 metrics 的 parse_period —— 那会让 chat 反向依赖 metrics，而摘要的
+# 全部字段都只取自落库的 meta.external，就是为了守住这条线。这里只用 rows 里
+# 已有的 period 做字面比对，够用，也不新增依赖。
+_PERIOD_RE = re.compile(r"^(\d{4})-(\d{1,2})$")
+_ASKED_ISO = re.compile(r"(?<!\d)(20\d{2})\s*[-/.]\s*(\d{1,2})(?!\d)")
+# 「3 个月」是时长不是期次，所以排除前面带「个」的
+_ASKED_MONTH = re.compile(r"(?:(20\d{2})\s*年\s*)?(?<![个\d])(\d{1,2})\s*月")
+
+
+def _asked_periods(query: str) -> list[tuple[int | None, int]]:
+    """问句里被问到的期次，最多两个（「9 月比 8 月」就到顶了，再多是罗列）。"""
+    if not query:
+        return []
+    got: list[tuple[int | None, int]] = []
+    for m in _ASKED_ISO.finditer(query):
+        got.append((int(m.group(1)), int(m.group(2))))
+    for m in _ASKED_MONTH.finditer(query):
+        month = int(m.group(2))
+        if 1 <= month <= 12:
+            got.append((int(m.group(1)) if m.group(1) else None, month))
+    out: list[tuple[int | None, int]] = []
+    for item in got:
+        if item not in out:
+            out.append(item)
+    return out[:2]
+
+
+def _month_text(year: int | None, month: int) -> str:
+    return f"{year}年{month}月" if year else f"{month}月"
+
+
+def _cell_of_period(rows: list[Any], year: int | None, month: int) -> dict[str, Any] | None:
+    """在一个指标的对照行里找被问到的那一期。
+
+    只说了「9 月」没说年份时取最近的一期 —— 跨年时 rows 里会同时有 2025-09
+    和 2026-09，猜前面那个不是保守，是答错。
+    """
+    best: dict[str, Any] | None = None
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        m = _PERIOD_RE.match(str(r.get("period") or ""))
+        if not m:
+            continue
+        py, pmo = int(m.group(1)), int(m.group(2))
+        if pmo != month or (year is not None and py != year):
+            continue
+        if best is None or str(r.get("period")) > str(best.get("period")):
+            best = r
+    return best
+
+
+def _asked_lines(metrics: list[dict[str, Any]], asked: list[tuple[int | None, int]]) -> list[str]:
+    """把「用户问到的那一期」按指标列出来 —— 一致的那几期原本不在摘要里。
+
+    摘要只列差异期，所以「表里 9 月写的是多少」这种问法，碰上一致的期次就没有
+    落点。这里按期次补一遍，而且两个数都给（表 / 库）：让模型分得清「表里这么
+    写」和「系统这么算」—— 这正是对照这件事本身的意义。
+    """
+    periods = [
+        str(r.get("period"))
+        for m in metrics
+        for r in (m.get("rows") or [])
+        if isinstance(r, dict) and _PERIOD_RE.match(str(r.get("period") or ""))
+    ]
+    if not periods:
+        return []
+    # 覆盖范围的上下界用中文期次说，和正文摘要同一个写法 —— 同一段话里
+    # 一半「2026年7月」一半「2026-07」，读起来像两个来源拼的。
+    labels = {
+        str(r.get("period")): _row_label(r)
+        for m in metrics
+        for r in (m.get("rows") or [])
+        if isinstance(r, dict)
+    }
+    lo, hi = min(periods), max(periods)
+    span = f"{labels.get(lo, lo)}–{labels.get(hi, hi)}"
+    out: list[str] = []
+    for year, month in asked:
+        bits: list[str] = []
+        label = ""
+        for m in metrics[:_ASKED_METRICS]:
+            r = _cell_of_period(m.get("rows") or [], year, month)
+            if not r:
+                continue
+            label = label or _row_label(r)
+            name = str(m.get("name") or m.get("code") or "指标")
+            unit = str(m.get("unit") or "")
+            tag = {"same": "一致", "diff": "不一致", "check": "口径待确认"}.get(str(r.get("state")), "")
+            bits.append(f"{name} 表 {r.get('external')}{unit} / 库 {r.get('internal')}{unit}（{tag}）")
+        if bits:
+            out.append(f"{label}：" + "；".join(bits))
+        else:
+            # 说清是「表里没有」还是「超出对照范围」：后者不是表的错，是只留了
+            # 最近几期，用户据此知道要不要重新附一次材料。
+            out.append(f"{_month_text(year, month)}：上一轮的对照里没有这一期（只对照了 {span}）")
+    return out
+
+
+def external_digest(ext: dict[str, Any] | None, query: str = "") -> str:
     """把一轮「外部数据 × 指标库」的对照结果压成可回灌的一段话。
 
     **为什么需要它**：B 档边界规定 headline / facts 里的数只能来自指标库，
@@ -498,6 +601,11 @@ def external_digest(ext: dict[str, Any] | None) -> str:
     装配（见 core/metrics/ask.py 的 headline），模型没有路径把这些数字写进
     答案。摘要里的字段全部取自落库时已经定稿的 meta.external，这里不重算、
     不读指标库，所以会话层不会反向依赖 metrics。
+
+    **`query` 是这一轮的追问句**：给了它，就把句子里问到的期次单独列一段，
+    连**一致**的那几期一起给。不给也能用 —— 那就只列差异期，和以前一样。
+    条件是「问到了才列」：把最近 8 期全量写进来是 1000 多 token，而摘要的
+    全部价值就在于它便宜。
     """
     if not isinstance(ext, dict) or not ext:
         return ""
@@ -544,6 +652,17 @@ def external_digest(ext: dict[str, Any] | None) -> str:
     rest = len(metrics) - _DIGEST_METRICS
     if rest > 0:
         lines.append(f"- 另有 {rest} 个指标也做了对照，未在此列出。")
+
+    # 问到哪一期就把那一期补上。只补被问到的，不铺全表 —— 6 个指标 × 8 期
+    # 铺开是一千多 token，而这段摘要的全部价值就是它便宜。
+    asked = _asked_periods(query)
+    if asked:
+        asked_lines = _asked_lines(metrics, asked)
+        if asked_lines:
+            lines.append("")
+            lines.append("【问到的这一期】")
+            lines.extend(asked_lines)
+
     lines.append("以上是上一轮已经算好的结论；取新的数仍然查指标库，不要从这段话里编数字。")
     return "\n".join(lines)
 
@@ -604,6 +723,7 @@ def context(
     # 只认**最后一条**带对照的回答：更早的对照早被后面的问题顶掉了，每轮都
     # 往回灌只会让 prompt 里堆一串过期的表，还挤掉真正有用的历史。
     last_ext: dict[str, Any] | None = None
+    last_ext_at: int | None = None
     for msg in thread.get("messages") or []:
         role = msg.get("role")
         if role == "user":
@@ -615,6 +735,7 @@ def context(
             entries.append(("assistant", text or _summary(msg.get("meta"))))
             ext = (msg.get("meta") or {}).get("external")
             last_ext = ext if isinstance(ext, dict) else None
+            last_ext_at = len(entries) - 1
 
     # 对照结论补在上一轮回答的末尾。B 档边界把外部数字挡在正文外，历史里于是
     # 只剩「一张表对过」的残影；不补这一段，「哪期差最多」这类追问会掉进拒答。
@@ -623,7 +744,16 @@ def context(
     # 问句落库了（重试、脚本、以后的别的入口），那时末尾是 user，判 entries[-1]
     # 就会静默不回灌 —— 这种错在界面上完全看不出来。
     if last_ext:
-        digest = external_digest(last_ext)
+        # 追问句 = 那条带对照的回答**之后**的第一条用户消息。摘要靠它把
+        # 「问到的这一期」补进来 —— 「表里 9 月多少」本来就是冲着上一轮那张
+        # 表问的，不带这句，一致的那几期永远没有落点。
+        query = ""
+        if last_ext_at is not None:
+            for role, text in entries[last_ext_at + 1:]:
+                if role == "user":
+                    query = text
+                    break
+        digest = external_digest(last_ext, query)
         if digest:
             for i in range(len(entries) - 1, -1, -1):
                 if entries[i][0] == "assistant":
