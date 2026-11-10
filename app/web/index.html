@@ -1782,6 +1782,13 @@ html.embedded .drawer{top:0;height:100%}
 /* 红头公文纸面：红机关名 + 文号 + 红色反线 + 仿宋正文 + 右落款。
    纸张不跟主题（同 .doc-paper 约定），红头红得更正式：#d40000。 */
 .doc-paper.gov{padding:52px 60px}
+/* 还没生成时纸面不空着：直接摆一份样例，让人一眼看出「套红之后长什么样」。
+   样例只画在纸上、不进 DC.gov / DC.wsDoc，复制/下载/审校都读状态，不会把它当成品。 */
+.gov-demo{
+  font-family:"FangSong","仿宋","SimSun","宋体",serif;font-size:11.5px;line-height:1.7;
+  border:1px dashed #e3b7a5;background:#fdf5f0;color:#a34a28;
+  padding:5px 10px;margin:0 0 20px;text-indent:0;text-align:center;border-radius:4px
+}
 .gov-org{
   font-family:"SimSun","宋体",serif;font-size:30px;font-weight:700;color:#d40000;
   text-align:center;letter-spacing:6px;line-height:1.4
@@ -7321,6 +7328,8 @@ function dcTools() {
   if (ws) state = `${esc(ws.doc.kind_label)} · ${esc(ws.doc.no)} · ${esc(ws.meta.date_text)}`;
   else if (d) state = `${d.blocks.length} 节 · ${esc(d.meta.period_label)} · ${esc(d.meta.generated_at)}`;
   else if (DC.gov) state = `督办通报 · ${esc(DC.gov.no)}`;
+  // 红头栏位纸上摆的是样例：工具栏必须跟着说实话，否则「满纸公文 + 尚未生成」自相矛盾
+  else if (onGov) state = "示例稿 · 尚未生成";
 
   $("#dcTools").innerHTML = `
     <span class="dt-state">${state}</span>
@@ -7473,11 +7482,8 @@ function dcRenderPaper() {
     // 文种决定画哪一份：请示/通知有服务端装配结果，督办通报只有本地套红那一份
     if (DC.ws.kind !== "bulletin" && DC.wsDoc) return dcRenderWsPaper();
     if (DC.ws.kind === "bulletin" && DC.gov) return dcRenderBulletinPaper();
-    p.className = "doc-paper blank";
-    p.textContent = DC.ws.kind === "bulletin"
-      ? "填好左侧四项要素，点「套用红头 · 生成公文」。"
-      : "填好事由和事项，点「装配文稿」。正文里要引台账或指标，到左侧「事实锚点」里勾。";
-    return;
+    // 一份都还没有：摆当前文种的样例，别让右侧空成一句话
+    return dcRenderGovSample();
   }
   if (!d) {
     p.className = "doc-paper blank";
@@ -8095,6 +8101,83 @@ function dcRenderWsPaper() {
   $("#dcWrap").scrollTop = 0;
 }
 
+/* ---------- 未生成时的纸面样例 ----------
+   右侧纸面空着只剩一句「填好要素再点生成」，用户既看不出套红后长什么样，
+   也没法判断这功能值不值得填。这里按当前文种摆一份完整样例：版式是真的，
+   文字是示例，顶上一条虚线写着「样例」。
+
+   样例只画进 #dcPaper，不写进 DC.gov / DC.wsDoc —— 复制、下载、审校读的都是
+   状态而不是 DOM，所以不会把样例当成自己的公文导出去。 */
+const DC_GOV_SAMPLE = {
+  bulletin: {
+    org: "溧阳市人民政府办公室",
+    no: "溧政办通〔2026〕01 号",
+    title: "关于推进老旧小区改造工作的督办通报",
+    to: "各镇（区）人民政府，市各委办局、市各直属单位：",
+    paras: [
+      "为推动重点民生实事落地见效，现将「老旧小区改造」督办事项及要求通报如下：",
+      "<b>一、督办事项。</b>年内完成 12 个老旧小区的水电气管网、屋面防水和加装电梯改造，11 月底前完成竣工验收。",
+      "<b>二、责任与时限。</b>责任落实部门（单位）：市住建局；责任人：×××；办结时限：2026 年 11 月 30 日。",
+      "<b>三、工作要求。</b>请市住建局高度重视，对照时限倒排工期、挂图作战，每周五前将进展情况报市政府办公室；对推进不力、进度滞后的，将予以通报批评。",
+    ],
+    tail: "",
+    cc: "",
+    tip: "样例 · 填好左侧四项要素，点「套用红头 · 生成公文」，纸面就换成你的公文",
+  },
+  qingshi: {
+    org: "溧阳市住房和城乡建设局",
+    no: "溧住建〔2026〕15 号",
+    title: "关于申请追加城市防洪排涝专项资金的请示",
+    to: "溧阳市人民政府：",
+    paras: [
+      "今年汛期我市累计降雨量较常年偏多，老城区排水管网负荷已接近上限。为在明年汛前完成 3 处易涝点改造和 2 座排涝泵站更新，现就追加专项资金事项请示如下：",
+      "<b>一、资金用途。</b>用于易涝点管网改造、泵站设备更新及施工期临时排水，专款专用，单独建账。",
+      "<b>二、实施安排。</b>拟于 12 月完成招标，明年 4 月底前完工，汛前投入运行。",
+    ],
+    tail: "妥否，请批示。",
+    cc: "抄送：市财政局。",
+    tip: "样例 · 填好事由和事项、勾上要引的台账或指标，点「装配文稿」",
+  },
+  tongzhi: {
+    org: "溧阳市人民政府办公室",
+    no: "溧政办发〔2026〕42 号",
+    title: "关于做好今冬明春供热保障工作的通知",
+    to: "各镇（区）人民政府，市各有关部门：",
+    paras: [
+      "为保障群众温暖过冬，现就今冬明春供热保障工作有关事项通知如下：",
+      "<b>一、抓紧设备检修。</b>各供热单位在 11 月 15 日前完成锅炉、管网、换热站检修调试，隐患整改闭环。",
+      "<b>二、保障热源供应。</b>落实燃煤、天然气储备，签订保供协议，确保极端天气下连续稳定供热。",
+      "<b>三、畅通诉求渠道。</b>公布报修电话，接到报修后 2 小时内到场，一般故障 24 小时内修复。",
+    ],
+    tail: "请认真抓好落实。",
+    cc: "抄送：市委办公室，市人大常委会办公室，市政协办公室。",
+    tip: "样例 · 填好事由和事项、勾上要引的台账或指标，点「装配文稿」",
+  },
+};
+
+function dcGovSampleDate() {
+  const t = new Date();
+  return `${t.getFullYear()}年${t.getMonth() + 1}月${t.getDate()}日`;
+}
+
+function dcRenderGovSample() {
+  const s = DC_GOV_SAMPLE[DC.ws.kind] || DC_GOV_SAMPLE.bulletin;
+  const p = $("#dcPaper");
+  p.className = "doc-paper gov";
+  p.innerHTML = `
+    <div class="gov-demo">${esc(s.tip)}</div>
+    <div class="gov-org">${esc(s.org)}</div>
+    <div class="gov-no">${esc(s.no)}</div>
+    <div class="gov-line"></div>
+    <h1 class="gov-title">${esc(s.title)}</h1>
+    <p class="gov-p gov-to">${esc(s.to)}</p>
+    ${s.paras.map((x) => `<p class="gov-p">${x}</p>`).join("")}
+    ${s.tail ? `<p class="gov-p">${esc(s.tail)}</p>` : ""}
+    <div class="gov-sign">${esc(s.org)}<br>${dcGovSampleDate()}</div>
+    ${s.cc ? `<p class="gov-cc">${esc(s.cc)}</p>` : ""}`;
+  $("#dcWrap").scrollTop = 0;
+}
+
 function dcRenderBulletinPaper() {
   const g = DC.gov;
   if (!g) return;
@@ -8105,7 +8188,7 @@ function dcRenderBulletinPaper() {
     <div class="gov-no">${esc(g.no)}</div>
     <div class="gov-line"></div>
     <h1 class="gov-title">关于${esc(g.task)}的督办通报</h1>
-    <p class="gov-p">各镇（区）人民政府，市各委办局、市各直属单位：</p>
+    <p class="gov-p gov-to">各镇（区）人民政府，市各委办局、市各直属单位：</p>
     <p class="gov-p">为推动重点工作落地见效，现将「${esc(g.task)}」督办事项及要求通报如下：</p>
     <p class="gov-p"><b>一、督办事项。</b>${esc(g.task)}。</p>
     <p class="gov-p"><b>二、责任与时限。</b>责任落实部门（单位）：${esc(g.unit)}；责任人：${esc(g.owner || "待明确")}；办结时限：${esc(g.dueText)}。</p>
