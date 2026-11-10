@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,14 +33,33 @@ sys.path.insert(0, str(ROOT / "core" / "meeting"))
 TEST_DATA = ROOT / "data" / "_test"
 if not os.environ.get("OCGOV_TEST_KEEP"):
     shutil.rmtree(TEST_DATA, ignore_errors=True)
+    # delete 有可能被拦（有的环境把删除重定向到回收站，回收站失败就整次删除中止），
+    # 而 ignore_errors=True 会把这个失败咽掉。后果不是「数据脏一点」，是**第二次跑
+    # 直接红**：上一轮的「政策文件库」还在 rag.json 里，create_base 撞同名抛异常，
+    # 报错却指向一个和真正原因无关的地方。所以删不掉就改名让开 —— rename 不改内容，
+    # 不会被拦，下一次跑照样是干净起点。
+    if TEST_DATA.exists():
+        import time as _time
+
+        aside = TEST_DATA.with_name(f"_test_stale_{int(_time.time())}")
+        try:
+            os.replace(TEST_DATA, aside)
+            print(f"  注意：{TEST_DATA.name} 删不掉（删除被拦），已改名为 {aside.name}")
+        except OSError as exc:  # 连改名都不行才报错，并且说清后果
+            raise SystemExit(
+                f"测试数据目录 {TEST_DATA} 删不掉也挪不开：{exc}。"
+                "请手动清掉它再跑，否则同名分类库会冲突。"
+            )
 os.environ["OCGOV_DATA"] = str(TEST_DATA)
 
 import chat  # noqa: E402
+import docparse  # noqa: E402
 import extdata as ext_mod  # noqa: E402
 import extract as mt_extract  # noqa: E402
 import ledger as mt_ledger  # noqa: E402
 import modelcfg  # noqa: E402
 import oversight as ov  # noqa: E402
+import pdfdoc  # noqa: E402
 import rag as rag_mod  # noqa: E402
 import workbench as wb  # noqa: E402
 from mockdata import DISCLOSURE_DAY, METRICS, query_metric  # noqa: E402
@@ -1428,10 +1448,14 @@ def test_knowledge() -> None:
         and "String.fromCharCode(...new Uint8Array" not in html,
         "",
     )
-    # 文档预览是阅读视图：文件头 + 章节正文，不是四个固定字段的格子
+    # 文档预览是阅读视图：文件头 + 章节正文，不是四个固定字段的格子。
+    # 章节和 PDF 页面图都挂 data-doc-anchor —— 同一个锚点值两种视图通用，
+    # 命中跳转才不用为两种视图各写一套。
     check(
         "文档预览按章节渲染",
-        'id="kbDocBody"' in html and "function renderDocReader(" in html and 'data-docsec=' in html,
+        'id="kbDocBody"' in html
+        and "function renderDocReader(" in html
+        and 'data-doc-anchor=' in html,
         "",
     )
     check(
@@ -1854,7 +1878,20 @@ def test_attach_entry() -> None:
     print("\n[17.5] 附件")
     html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
     check("输入区有附件按钮与文件选择", 'id="attachBtn"' in html and 'id="attachInput"' in html, "")
-    check("附件只收白名单并有拒绝理由", "const TEXT_EXT" in html and '".pdf": "PDF 要解析库' in html, "")
+    check(
+        "附件只收白名单并有拒绝理由",
+        "const TEXT_EXT" in html
+        and '".doc": "旧版 Word（.doc）请另存为 .docx"' in html
+        and '".png": "图片要 OCR"' in html,
+        "",
+    )
+    # PDF 曾经是「要解析库，还没接」；现在接了，就必须从拒绝表挪进解析白名单，
+    # 否则后端能读、前端仍在拦，用户看到的是「支持 PDF」和「PDF 还没接」两句矛盾的话
+    check(
+        "PDF 在附件的服务端解析白名单里",
+        'const SRV_EXT = [".xlsx", ".docx", ".pdf"];' in html,
+        "",
+    )
     check("Office 文件走服务端解析", "const SRV_EXT" in html and "/api/attachments/parse" in html, "")
     check("不再有「附件没接进问数」的拦门", "附件还没接进问数" not in html, "")
     check("前端没有偷偷上传", "FormData" not in html, "")
@@ -2047,7 +2084,13 @@ def test_attach_entry() -> None:
     check("气泡渲染外部对照块", 'class="ext-cmp"' in html and "外部数据 × 指标库" in html, "")
     check("对照块写清「以指标库为准」", "仍以指标库为准" in html, "")
     check("导出带外部对照段", "**外部数据 × 指标库**" in html, "")
-    check("输入区有显式的导入入口", ">导入数据<" in html, "")
+    # 入口不再叫「导入数据」：材料不落盘、不入库，叫「导入」会让人以为已经存进
+    # 系统，下次找不到才来问。「仅本轮」必须写在按钮上，只在 title 里等于没写。
+    check(
+        "输入区有附材料入口，且标明只作用于本轮",
+        ">附材料<" in html and 'class="att-scope">仅本轮<' in html,
+        "两个上传入口长得像，不写清范围，用户会以为文件已经入库",
+    )
     check(
         "指标抽屉里也有导入入口，且会预填问法",
         "data-extimport" in html and "把这份外部数据和" in html,
@@ -2105,7 +2148,17 @@ def test_book_parse() -> None:
         ole2.get("code") == "ole2" and "另存为" in (ole2.get("error") or ""),
         "",
     )
-    check("PDF 明确拒绝", docparse.parse_book(b"%PDF-1.7\n").get("code") == "pdf", "")
+    # PDF 现在是能读的（走 pdfdoc），所以这里不再验「拒绝 PDF」，而验「坏 PDF 报的
+    # 是打不开、不是不支持」。这两句话对外是两件事：前者让人去重下文件，后者让人
+    # 去换格式 —— 说反了等于把人指到错的方向。
+    # 没装 pypdfium2 的环境里错误码同样是 pdf，但话术是「缺解析组件」，一并认。
+    broken_pdf = docparse.parse_book(b"%PDF-1.7\n")
+    _perr = broken_pdf.get("error") or ""
+    check(
+        "坏 PDF 报「打不开」而不是「不支持」",
+        broken_pdf.get("code") == "pdf" and ("打不开" in _perr or "pypdfium2" in _perr),
+        _perr,
+    )
     check("认不出的字节流不瞎猜", docparse.parse_book(b"hello world").get("code") == "unknown", "")
     check("空文件单独报错", docparse.parse_book(b"").get("code") == "empty", "")
 
@@ -2358,13 +2411,205 @@ def test_docx_parse() -> None:
     check("芯片能显示 docx 的段数", "paras" in html, "")
 
 
+def _mini_pdf(pages: list[list[str]], *, blank: bool = False) -> bytes:
+    """手搓一个最小 PDF（纯 ASCII，Helvetica），给 PDF 用例当输入。
+
+    不引 reportlab 只为了造一个三页文件不值；PDF 语法本身很短。不用中文是因为
+    中文要嵌 CID 字体，几百行起步，而这里验的是解析链路不是字体渲染。
+    `blank=True` 生成只有底色的页 —— 充当「扫描件」：能渲染，没有文字层。
+    """
+    objs = ["<< /Type /Catalog /Pages 2 0 R >>"]
+    n = len(pages)
+    page_ids = [4 + i * 2 for i in range(n)]
+    objs.append("<< /Type /Pages /Count %d /Kids [%s] >>" % (n, " ".join(f"{i} 0 R" for i in page_ids)))
+    objs.append("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    for i, lines in enumerate(pages):
+        content_id = page_ids[i] + 1
+        objs.append(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+            f"/Resources << /Font << /F1 3 0 R >> >> /Contents {content_id} 0 R >>"
+        )
+        if blank:
+            body = "0 0 0 rg 0 0 595 842 re f\n"
+        else:
+            body = "BT /F1 12 Tf 60 780 Td 16 TL\n"
+            for line in lines:
+                esc = line.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
+                body += f"({esc}) Tj T*\n"
+            body += "ET"
+        objs.append(f"<< /Length {len(body)} >>\nstream\n{body}\nendstream")
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for idx, obj in enumerate(objs, start=1):
+        offsets.append(len(out))
+        out += f"{idx} 0 obj\n{obj}\nendobj\n".encode("latin-1")
+    xref = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n".encode("latin-1")
+    out += b"0000000000 65535 f \n"
+    for off in offsets:
+        out += f"{off:010d} 00000 n \n".encode("latin-1")
+    out += (f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").encode("latin-1")
+    return bytes(out)
+
+
+def test_pdf() -> None:
+    """PDF：按页取文字层、页码映射、页面图、扫描件与坏文件的边界。"""
+    print("\n[20] PDF 解析与页面图")
+    if not pdfdoc.available():
+        print("  SKIP  未装 pypdfium2（PDF 走可选依赖）")
+        return
+
+    pdf = _mini_pdf(
+        [
+            ["Annual Work Report 2026", "Overview of the first quarter"],
+            ["Section Two", "Progress on key projects"],
+            ["Section Three", "The keyword DUALKEY appears here only"],
+        ]
+    )
+    got = pdfdoc.extract(pdf)
+    check("能解开 PDF 并识别页数", got.get("ok") is True and got.get("page_count") == 3, str(got)[:80])
+    check("按页取到文字层", len(got.get("pages") or []) == 3 and "DUALKEY" in (got["pages"][2]["text"] or ""), "")
+    check("有文字层不算扫描件", got.get("scanned") is False, str(got.get("chars")))
+
+    # 扫描件：OCR 之前它只能看不能搜。判错的代价是「一页短通知被当扫描件」，
+    # 所以阈值用的是「整份几乎没字或平均每页几乎没字」，不是单纯看总字数。
+    blank = pdfdoc.extract(_mini_pdf([[], []], blank=True))
+    check("没有文字层的判为扫描件", blank.get("ok") is True and blank.get("scanned") is True, str(blank.get("chars")))
+    short = pdfdoc.extract(
+        _mini_pdf([["Notice on annual inspection", "All units shall report by 30 June."]])
+    )
+    check("一页短通知不被误判成扫描件", short.get("scanned") is False, str(short.get("chars")))
+
+    bad = pdfdoc.extract(b"not a pdf at all")
+    check(
+        "坏 PDF 如实报错不抛异常",
+        bad.get("ok") is False and bool(bad.get("error")),
+        str(bad.get("error")),
+    )
+
+    # 材料通道（对话里「附材料」）也走这条解析：docparse 分派到 pdfdoc，返回
+    # 同一套 {ok, kind, text, chars, truncated, pages, note}。这里只验结构对得上，
+    # 前端拿到的是一个 text，后面的额度截断 / 进 planner 不必分叉。
+    book = docparse.parse_book(pdf, "报告.pdf")
+    check(
+        "材料通道也认 PDF",
+        book.get("ok") is True and book.get("kind") == "pdf",
+        str({k: book.get(k) for k in ("ok", "kind", "error")}),
+    )
+    check(
+        "材料通道给的是逐页拼起来的正文",
+        "DUALKEY" in str(book.get("text") or "") and int(book.get("pages") or 0) == 3,
+        str(book.get("chars")),
+    )
+    scan_book = docparse.parse_book(_mini_pdf([[], []], blank=True), "扫描件.pdf")
+    check(
+        "扫描件在材料通道被拒（没有字可给模型），且错误码单独可认",
+        scan_book.get("ok") is False and scan_book.get("code") == "scanned",
+        str(scan_book.get("code")),
+    )
+    check(
+        "材料通道的截断额度生效",
+        docparse.parse_book(pdf, "报告.pdf", limit=20).get("truncated") is True,
+        "",
+    )
+
+    base = rag_mod.create_base("冒烟 PDF 库", "跑完就删")
+    try:
+        doc = rag_mod.upload_document(base["id"], "报告.pdf", pdf, content_type="application/pdf")
+        pages = doc.get("pages") or {}
+        check("入库记住总页数", int(pages.get("count") or 0) == 3, str(pages)[:80])
+        # 页码表是「命中位置 → 第几页」的唯一依据；少一页就会把命中指到上一页
+        check("入库记住每页起点", len(pages.get("starts") or []) == 3, str(pages.get("starts")))
+        check("PDF 也能切块建索引", int(doc.get("chunk_count") or 0) >= 1, str(doc.get("chunk_count")))
+
+        view = rag_mod.doc_view(base["id"], doc["id"], "DUALKEY")
+        check("PDF 阅读视图带页数", (view.get("pages") or {}).get("count") == 3, str(view.get("pages")))
+        check(
+            "命中能落到具体页",
+            bool(view["hits"]) and all(1 <= int(h.get("page") or 0) <= 3 for h in view["hits"]),
+            str([h.get("page") for h in view["hits"]]),
+        )
+        check(
+            "关键词命中在第 3 页",
+            any(int(h.get("page") or 0) == 3 for h in view["hits"]),
+            str([(h.get("page"), h.get("count")) for h in view["hits"]]),
+        )
+
+        png = rag_mod.page_image(base["id"], doc["id"], 1)
+        check("页面图是 PNG", bool(png) and png[:8] == b"\x89PNG\r\n\x1a\n", str(len(png or b"")))
+        try:
+            rag_mod.page_image(base["id"], doc["id"], 99)
+            out_of_range = False
+        except IndexError:
+            out_of_range = True
+        check("页码越界抛 IndexError 而不是渲染空图", out_of_range, "")
+        check("不存在的文档不渲染", rag_mod.page_image(base["id"], "doc_nope", 1) is None, "")
+
+        # 并发取图：服务是 ThreadingHTTPServer，一屏六张图会同时打进来。缓存
+        # 没有锁时「边遍历边 evict」会撞出 dictionary changed size during
+        # iteration —— 表现为随机几张 503，而单张手动打开永远正常。
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            pngs = list(pool.map(lambda p: rag_mod.page_image(base["id"], doc["id"], p), [1, 2, 3] * 4))
+        check(
+            "并发取页面图都成功",
+            all(bool(x) and x[:8] == b"\x89PNG\r\n\x1a\n" for x in pngs),
+            str([len(x or b"") for x in pngs]),
+        )
+
+        # 析构不是在我们手里发生的：pypdfium2 的对象带 finalizer，被 GC 回收时会在
+        # 回收那个线程里调 PDFium，绕过 _LOCK。这里一边取图一边在别的线程里逼 GC，
+        # 如果 pdfdoc 把 close 留给 __del__，这个循环会崩进程（不是抛异常）。
+        import gc
+
+        def churn() -> None:
+            for _ in range(30):
+                gc.collect()
+
+        t = threading.Thread(target=churn)
+        t.start()
+        pngs2 = [rag_mod.page_image(base["id"], doc["id"], p) for p in (1, 2, 3, 1, 2, 3)]
+        t.join()
+        check(
+            "GC 在别的线程里回收时不炸（析构也走同一把锁）",
+            all(bool(x) and x[:8] == b"\x89PNG\r\n\x1a\n" for x in pngs2),
+            str([len(x or b"") for x in pngs2]),
+        )
+
+        # 扫描件入库：索引为空但页面图可用。拒收会连带砍掉「能翻页看」这件事。
+        sc = rag_mod.upload_document(base["id"], "扫描件.pdf", _mini_pdf([[], []], blank=True))
+        check("扫描件也能入库", int(sc.get("chunk_count") or 0) == 0 and (sc.get("pages") or {}).get("scanned") is True, str(sc)[:80])
+        sc_view = rag_mod.doc_view(base["id"], sc["id"])
+        check("扫描件阅读视图仍有页面", sc_view.get("ok") is True and (sc_view.get("pages") or {}).get("count") == 2, "")
+        check("扫描件的页面图能出", bool(rag_mod.page_image(base["id"], sc["id"], 2)), "")
+    finally:
+        rag_mod.delete_base(base["id"])
+
+    # 上传接口的请求体上限：base64 之后是原文件的 4/3，按普通 JSON 的 4MB 卡，
+    # 3MB 以上的文件会 413 —— 而界面上写着「单文件不超过 9MB」。
+    src_main = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+    check(
+        "上传接口按大包收",
+        'path.endswith("/upload")' in src_main and "limit = _MAX_UPLOAD_BODY if is_upload" in src_main,
+        "",
+    )
+    html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check(
+        "PDF 阅读视图走页面图",
+        "/page?doc=" in html and "data-docmode" in html and "kl-docpage" in html,
+        "",
+    )
+
+
 def test_rag() -> None:
     """通用文档 RAG：上传 → 切块 → 索引 → 检索，全链路可核。
 
     这里最值钱的两条：检索结果必须**逐字来自上传的原文**（不是模型转述），
     且向量化不可用时**静默降级到 bigram**，功能不崩。
     """
-    print("\n[20] 资料库（通用文档 RAG）")
+    print("\n[20b] 资料库（通用文档 RAG）")
     import rag
 
     # 向量化可用与否都能跑：装了 fastembed 走向量（method=vector、embedded=True），
@@ -4359,6 +4604,7 @@ def main() -> int:
     test_attach_entry()
     test_book_parse()
     test_docx_parse()
+    test_pdf()
     test_rag()
     test_harness()
     test_frontend_theme()

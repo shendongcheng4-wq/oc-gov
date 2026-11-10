@@ -1624,6 +1624,24 @@ html.embedded .drawer{top:0;height:100%}
   white-space:pre-wrap;word-break:break-word;max-width:78ch
 }
 .kl-docsnip>span{display:block;font-size:10px;color:var(--brand);margin-bottom:3px;letter-spacing:.3px}
+/* PDF 的页面图。图是服务端渲染的原页，白底 —— 深色主题下也不该反色，
+   那就是一张纸的照片，不是界面元素。外层只负责居中、标页码、给命中页描边。 */
+.kl-docpage{margin:0 auto 14px;max-width:820px;position:relative}
+.kl-docpage:last-child{margin-bottom:0}
+.kl-docpage figcaption{
+  display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--faint);
+  padding:0 2px 4px;letter-spacing:.2px
+}
+.kl-docpage figcaption i{font-style:normal;color:var(--brand);font-weight:600}
+.kl-docpage img{
+  display:block;width:100%;height:auto;background:#fff;border:1px solid var(--line);
+  border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,.06)
+}
+.kl-docpage.hit img{border-color:var(--brand);box-shadow:0 0 0 2px var(--brand-soft)}
+.kl-docpage img:not([src]){min-height:160px}  /* 懒加载占位，避免滚动条乱跳 */
+/* 「页面图 / 文字」切换：两个小胶囊，和命中导航同一套外观，不另造控件 */
+.kl-docmode{display:inline-flex;gap:4px;margin-right:2px}
+.kl-docnav.warn{background:var(--surface-3);border-color:var(--line-2)}
 .kl-jump{display:flex;gap:8px;flex-wrap:wrap}
 .kl-mark{background:var(--warn-bg);color:inherit;border-radius:3px;padding:0 1px}
 .kl-empty{color:var(--faint);font-size:12px;text-align:center;padding:44px 16px;line-height:1.9}
@@ -5094,7 +5112,7 @@ function renderKbUpload() {
       <h4>上传政策文件、报告</h4>
     </div>
     <div class="kl-sec">
-      <p class="kl-text kl-up-note">支持 md / txt / csv / tsv / json / html / docx / xlsx，单文件不超过 9MB。文件按段切块建索引，问答时召回的是原文片段、带文件名出处，模型不转述数字。</p>
+      <p class="kl-text kl-up-note">支持 PDF / Word / Excel / md / txt / csv 等，单文件不超过 9MB。文件按段切块建索引，问答时召回的是原文片段、带文件名出处。PDF 另外保留页面图，检索命中直接翻到那一页；没有文字层的扫描件能翻页看，但搜不到内容。</p>
     </div>
     <div class="kl-up-act">
       ${bases.length
@@ -9290,7 +9308,7 @@ function renderKbList() {
    点开一篇文档时单独取 /api/rag/bases/<kb>/doc（带 q 时附命中章节），右边按
    「文件头 → 命中导航 → 章节正文」排，不套系统记录那套四格字段 —— 四个固定格子
    装不下一份政策文件。 */
-const DOC = { seq: 0, view: null, q: "", sel: -1 };
+const DOC = { seq: 0, view: null, q: "", sel: -1, mode: "text" };
 
 function kbBytes(n) {
   const kb = (Number(n) || 0) / 1024;
@@ -9327,39 +9345,80 @@ async function renderDocPreview(it) {
   }
   DOC.view = d;
   DOC.q = q;
-  // 默认停在第一个「有正文的」命中章节：第一章常是文档大标题 + 成文日期那一小段，
-  // 跳过去几乎等于停在顶部。优先正文章节，实在没有再退回来。
+  // PDF 走页面图，其余走章节文字。扫描件没有文字层，也只能看图 —— 那时候
+  // mode 仍是 page，只是索引为空、搜不到内容，界面上要如实说清楚。
+  DOC.mode = d.pages && d.pages.count ? "page" : "text";
   const hitArr = d.hits || [];
-  const bodyOf = (h) => String((d.chapters[h.chapter] || {}).text || "").trim();
-  const pick = hitArr.find((h) => h.chapter > 0 && bodyOf(h)) || hitArr.find(bodyOf) || hitArr[0];
-  DOC.sel = pick ? pick.chapter : -1;
+  if (DOC.mode === "page") {
+    // 命中页优先；没命中就从第 1 页开始，别停在 -1 上什么也不滚
+    DOC.sel = hitArr.length ? Number(hitArr[0].page) || 1 : 1;
+  } else {
+    // 默认停在第一个「有正文的」命中章节：第一章常是文档大标题 + 成文日期那一小段，
+    // 跳过去几乎等于停在顶部。优先正文章节，实在没有再退回来。
+    const bodyOf = (h) => String((d.chapters[h.chapter] || {}).text || "").trim();
+    const pick = hitArr.find((h) => h.chapter > 0 && bodyOf(h)) || hitArr.find(bodyOf) || hitArr[0];
+    DOC.sel = pick ? pick.chapter : -1;
+  }
   renderDocReader();
 }
 
 function renderDocReader() {
   const v = DOC.view || {};
   const doc = v.doc || {};
+  const pg = v.pages || null;
   const q = DOC.q || "";
   const chapters = v.chapters || [];
   const hits = v.hits || [];
+  const usePage = !!(pg && pg.count && DOC.mode === "page");
+
   // 一章可能命中好几块，导航里一章只出现一次，角标给命中段数
   const perChapter = new Map();
   const snipByChapter = new Map();
+  const perPage = new Map();
   hits.forEach((h) => {
     perChapter.set(h.chapter, (perChapter.get(h.chapter) || 0) + 1);
     if (!snipByChapter.has(h.chapter) && h.snippet) snipByChapter.set(h.chapter, h.snippet);
+    const p = Number(h.page) || 0;
+    if (p) perPage.set(p, (perPage.get(p) || 0) + 1);
   });
 
   const meta = [
     doc.kb_name,
     kbBytes(doc.byte_size),
     doc.created_at ? `上传于 ${kbStamp(doc.created_at)}` : "",
+    pg && pg.count ? `${pg.count} 页` : "",
     doc.chars ? `${doc.chars} 字` : "",
-    chapters.length ? `${chapters.length} 个章节` : "",
+    !pg && chapters.length ? `${chapters.length} 个章节` : "",
   ].filter(Boolean).join(" · ");
 
-  const nav = q
-    ? hits.length
+  // 「页面图 / 文字」切换只在有文字层的 PDF 上出现：纯文本文件没有页面可看，
+  // 扫描件没有文字可看，给它们摆一个点了没用的开关不如不摆。
+  const modeBar = pg && pg.count && pg.indexed
+    ? `<div class="kl-docmode">
+        <button class="kl-hitbtn${usePage ? " on" : ""}" data-docmode="page">页面图</button>
+        <button class="kl-hitbtn${usePage ? "" : " on"}" data-docmode="text">文字</button>
+      </div>`
+    : "";
+
+  let nav = "";
+  if (usePage) {
+    if (pg.scanned) {
+      nav = `<div class="kl-docnav warn"><b>这份 PDF 没有文字层（扫描件）</b>
+        <span>页面图能翻能看，但里面的内容搜不到 —— 要能检索得先做文字识别。</span></div>`;
+    } else if (q && hits.length) {
+      const pages = [...perPage.keys()].sort((a, b) => a - b);
+      nav = `<div class="kl-docnav"><b>命中 ${hits.length} 段，分布在 ${pages.length} 页</b>
+        ${pages.map((p) => `<button class="kl-hitbtn${p === DOC.sel ? " on" : ""}" data-dochit="${p}">第 ${p} 页<i>${perPage.get(p)}</i></button>`).join("")}
+      </div>`;
+    } else if (q) {
+      nav = `<div class="kl-docnav"><b>这份文件里没有对得上的段落</b>
+        <span>文件名命中不等于正文提到；下面是整份文件，可以自己翻。</span></div>`;
+    }
+    if (pg.capped) {
+      nav += `<div class="hint" style="font-size:11px;line-height:1.7">文件很长，只索引了前 ${pg.indexed} 页：后面的页能翻能看，但搜不到里面的内容。</div>`;
+    }
+  } else if (q) {
+    nav = hits.length
       ? `<div class="kl-docnav"><b>命中 ${hits.length} 段，分布在 ${perChapter.size} 个章节</b>
           ${[...perChapter.keys()].map((ci) => {
             const c = chapters[ci] || {};
@@ -9371,8 +9430,8 @@ function renderDocReader() {
           }).join("")}
         </div>`
       : `<div class="kl-docnav"><b>这份文件里没有对得上的段落</b>
-          <span>文件名命中不等于正文提到；下面是整篇原文，可以自己翻。</span></div>`
-    : "";
+          <span>文件名命中不等于正文提到；下面是整篇原文，可以自己翻。</span></div>`;
+  }
 
   const secs = chapters.map((c, i) => {
     const isHit = perChapter.has(i);
@@ -9393,12 +9452,26 @@ function renderDocReader() {
     const snip = rawSnip && !dupSnip ? rawSnip : "";
     // 正文按原文保留换行，只标命中词；不做加粗或链接渲染 —— 那一步之后
     // 就不是原文了，而这里承诺的是原文。
-    return `<section class="kl-docsec${isHit ? " hit" : ""}" id="kbDocSec${i}" data-docsec="${i}">
+    return `<section class="kl-docsec${isHit ? " hit" : ""}" id="kbDocSec${i}" data-doc-anchor="${i}">
       ${c.title && !sameAsName ? `<h6 class="kl-docsec-h lv${Number(c.level) || 1}">${kbHl(c.title, q)}</h6>` : ""}
       ${snip ? `<blockquote class="kl-docsnip"><span>命中片段</span>${kbHl(docPlain(snip), q)}</blockquote>` : ""}
       <div class="kl-docsec-b">${kbHl(docPlain(c.text), q)}</div>
     </section>`;
   }).join("");
+
+  // 页面图：一页一个 <img>，src 指向服务端渲染的 PNG。用 lazy 而不是一次全取 ——
+  // 一份 300 页的文件全量渲染要几秒，而人一次只看得到一页半。
+  const pageHtml = pg && pg.count
+    ? Array.from({ length: pg.count }, (_, k) => {
+        const p = k + 1;
+        const n = perPage.get(p) || 0;
+        const src = `/api/rag/bases/${encodeURIComponent(doc.kb_id)}/page?doc=${encodeURIComponent(doc.id)}&p=${p}`;
+        return `<figure class="kl-docpage${n ? " hit" : ""}" id="kbPage${p}" data-doc-anchor="${p}">
+          <figcaption><span>第 ${p} 页</span>${n ? `<i>命中 ${n} 处</i>` : ""}</figcaption>
+          <img src="${src}" alt="${esc(doc.name || "文件")} 第 ${p} 页" loading="lazy" decoding="async">
+        </figure>`;
+      }).join("")
+    : "";
 
   $("#kbMain").innerHTML = `
     <div class="kl-docwrap">
@@ -9409,18 +9482,19 @@ function renderDocReader() {
         </div>
         <div class="kl-docmeta">${esc(meta)}</div>
         <div class="kl-jump">
+          ${modeBar}
           <button class="mini" data-kbdocdel="${esc(doc.id)}">删除这份文件</button>
           <button class="mini" data-kbjump="upload" data-kbid="${esc(doc.kb_id)}">管理分类库</button>
         </div>
       </div>
       ${nav}
-      ${v.truncated ? `<div class="hint" style="font-size:11px">文件很长，这里只放到 4 万字，后面的内容没有显示。</div>` : ""}
+      ${v.truncated && !usePage ? `<div class="hint" style="font-size:11px">文件很长，这里只放到 4 万字，后面的内容没有显示。</div>` : ""}
       <div class="kl-docbody" id="kbDocBody">
-        ${secs || `<div class="kl-empty">这份文件没有可读的正文。</div>`}
+        ${usePage ? pageHtml : secs || `<div class="kl-empty">这份文件没有可读的正文。</div>`}
       </div>
     </div>`;
 
-  // 检索命中：正文直接滚到第一处命中的章节，不用人自己在几万字里找。
+  // 检索命中：直接滚到第一处命中，不用人自己在几万字里找。
   // 等一帧再算位置：刚写进 innerHTML 时布局还没完成，量出来的偏移是旧值。
   if (DOC.sel >= 0) {
     requestAnimationFrame(() => setTimeout(() => scrollDocTo(DOC.sel, false), 60));
@@ -9433,10 +9507,12 @@ const docPlain = (t) => String(t || "").replace(/^#{1,6}[ \t]+/gm, "");
 
 function scrollDocTo(i, smooth = true) {
   const box = $("#kbDocBody");
-  const sec = $(`#kbDocSec${i}`);
-  if (!box || !sec) return;
+  // 章节和页面都挂 data-doc-anchor，同一个锚点值两种视图通用：章节模式是章节
+  // 下标，页面模式是页码（1 起）。
+  const el = box && box.querySelector(`[data-doc-anchor="${i}"]`);
+  if (!box || !el) return;
   // offsetTop 比 getBoundingClientRect 稳：后者在弹窗还没定位完时算出来是旧的
-  const top = sec.offsetTop - box.offsetTop - 6;
+  const top = el.offsetTop - box.offsetTop - 6;
   box.scrollTo({ top: Math.max(0, top), behavior: smooth ? "smooth" : "auto" });
   document.querySelectorAll("[data-dochit]").forEach((b) => {
     b.classList.toggle("on", Number(b.dataset.dochit) === i);
@@ -9574,6 +9650,19 @@ document.addEventListener("click", (e) => {
   }
   // 知识库右上角的「＋ 上传文档」
   if (e.target.closest("#kbUpload")) return openKbUpload();
+  // 「页面图 / 文字」切换。切过去要重新定位：两种视图的锚点值不是一回事
+  // （章节下标 vs 页码），沿用旧值会滚到一个不存在的元素上，表现为「点了没反应」。
+  const docMode = e.target.closest("[data-docmode]");
+  if (docMode) {
+    DOC.mode = docMode.dataset.docmode === "page" ? "page" : "text";
+    const hs = (DOC.view && DOC.view.hits) || [];
+    if (DOC.mode === "page") {
+      DOC.sel = hs.length ? Number(hs[0].page) || 1 : 1;
+    } else {
+      DOC.sel = hs.length ? hs[0].chapter : -1;
+    }
+    return renderDocReader();
+  }
   // 文档阅读视图里的章节跳转（命中导航）
   const docHit = e.target.closest("[data-dochit]");
   if (docHit) return scrollDocTo(Number(docHit.dataset.dochit));
@@ -9996,8 +10085,9 @@ $("#expertsClose").onclick = () => $("#expertsModal").classList.remove("on");
 $("#expertsModal").onclick = (e) => { if (e.target.id === "expertsModal") $("#expertsModal").classList.remove("on"); };
 
 /* ---------- 附件入口 ----------
-   纯文本 → 浏览器 `FileReader` 读成字符串；`.xlsx` / `.docx` → POST 给后端解析成文本。
-   两条路终点相同（都是一个 text），后面的额度截断、进 planner、材料对照不用分叉。
+   纯文本 → 浏览器 `FileReader` 读成字符串；`.xlsx` / `.docx` / `.pdf` → POST 给
+   后端解析成文本。两条路终点相同（都是一个 text），后面的额度截断、进 planner、
+   材料对照不用分叉。
 
    不走 multipart：后端自己写的 HTTP 层只解 JSON，几万字的文本直接进 body 完全
    扛得住，不必为此引一个上传服务。
@@ -10005,14 +10095,14 @@ $("#expertsModal").onclick = (e) => { if (e.target.id === "expertsModal") $("#ex
    **边界**：附件是「参考材料」，不是数据源。planner 靠它理解「按这份材料的
    口径」「这里面说的那个」指什么；答案里的数字仍然只来自指标接口。材料里的
    数字不进取数链路 —— 否则「每个数都能追到出处」这条底线就断了。
-   PDF 要解析库、图片要 OCR，都还没做，选择时明确拒绝并说明原因。 */
+   图片要 OCR，还没有，选择时明确拒绝并说明原因。 */
 const ATT = { files: [], MAX: 5, MAX_CHARS: 12000, MAX_TOTAL: 30000 };
 const TEXT_EXT = [".txt", ".md", ".csv", ".tsv", ".json", ".log", ".yaml", ".yml", ".xml"];
-// 走服务端解析的格式：都是 zip + XML，要还原「显示值」或判断「哪些算正文」，
-// 不能当纯文本读
-const SRV_EXT = [".xlsx", ".docx"];
+// 走服务端解析的格式：xlsx / docx 是 zip + XML，要还原「显示值」或判断「哪些算
+// 正文」；pdf 要解析库。这三种都不能当纯文本读。
+const SRV_EXT = [".xlsx", ".docx", ".pdf"];
 const EXT_WHY = {
-  ".pdf": "PDF 要解析库，还没接", ".doc": "旧版 Word（.doc）请另存为 .docx",
+  ".doc": "旧版 Word（.doc）请另存为 .docx",
   ".xls": "旧版 Excel（.xls）请另存为 .xlsx",
   ".ppt": "PPT 要解析库", ".pptx": "PPT 要解析库",
   ".png": "图片要 OCR", ".jpg": "图片要 OCR", ".jpeg": "图片要 OCR",
@@ -10052,6 +10142,7 @@ function renderAttach() {
       meta = charText(f.chars) + (f.cut ? " · 已截断" : "");
       // 表格型附件报行数、文档型报段数：只说「6.2k 字」看不出读到第几行被截了
       if (f.kind === "docx" && f.paras) meta = `${f.paras} 段 · ` + meta;
+      else if (f.kind === "pdf" && f.pages) meta = `${f.pages} 页 · ` + meta;
       else if (f.rows) meta = `${f.rows} 行 · ` + meta;
       else if (looksTable(f.text)) meta = "表格 · " + meta;
     }
@@ -10138,6 +10229,7 @@ function readBook(file, rec, cap) {
       rec.kind = it.kind || "";
       rec.paras = it.paras || 0;
       rec.rows = it.rows || 0;
+      rec.pages = it.pages || 0;
       rec.sheets = (it.sheets || []).length;
       rec.note = it.note || "";
       rec.state = t.trim() ? "ok" : "empty";
@@ -10161,7 +10253,7 @@ function addAttach(list) {
     if (ATT.files.some((x) => x.name === f.name && x.size === f.size)) continue;
     const isBook = SRV_EXT.includes(ext);
     if (!isBook && !TEXT_EXT.includes(ext) && !(f.type || "").startsWith("text/")) {
-      refused = EXT_WHY[ext] || "只支持纯文本（txt / md / csv / json）、Word（.docx）和 Excel（.xlsx）";
+      refused = EXT_WHY[ext] || "只支持纯文本（txt / md / csv / json）、Word（.docx）、Excel（.xlsx）和 PDF";
       continue;
     }
     // 二进制文件先按体积挡：等传到后端再被拒，用户白等几十秒

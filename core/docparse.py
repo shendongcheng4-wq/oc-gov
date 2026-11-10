@@ -15,8 +15,13 @@
 
 不支持就明说
     .xls / .doc（OLE2 二进制，和 xlsx / docx 毫无关系）、加了密码的 Office 文件
-    （也是 OLE2 容器，只是扩展名还叫 xlsx / docx）、PDF（要解析库，而且排版格式
-    取出的数字经常错行）。这些都返回明确的错误码，不猜、不硬读。
+    （也是 OLE2 容器，只是扩展名还叫 xlsx / docx）、扫描件 PDF（没有文字层）。
+    这些都返回明确的错误码，不猜、不硬读。
+
+PDF 走 pdfdoc（可选依赖 pypdfium2）
+    这里只负责「分派到 pdfdoc 并把结果翻译成同一套返回结构」—— 材料通道要的
+    是文本，页面图、页码映射那些是知识库的事，不给这边加负担。没装依赖时
+    pdfdoc 自己会说清楚缺什么，这里原样透出去。
 """
 
 from __future__ import annotations
@@ -745,5 +750,52 @@ def parse_book(data: bytes, name: str = "", limit: int = 12000) -> dict:
             "用 Excel / WPS 另存为 .xlsx 并去掉密码再来",
         )
     if head[:4] == b"%PDF":
-        return _err("pdf", "PDF 还没接（要解析库，且排版格式取出的表格容易错行）")
+        return _parse_pdf(data, limit)
     return _err("unknown", "认不出这个格式（文件头不是 zip，也不是 Office / PDF）")
+
+
+def _parse_pdf(data: bytes, limit: int) -> dict:
+    """PDF → 逐页文字层拼成的正文。
+
+    只给文本，不给页面图：材料通道要的是「模型能读的字」，图在这里没有用武之地。
+    知识库那边自己也调 pdfdoc，走的是 `extract` 的完整结果（含页码偏移、扫描件
+    判定、页面渲染），两条路共用同一份解析，不各写一遍。
+    """
+    from pdfdoc import extract  # 局部导入：没装 pypdfium2 时不影响其它格式
+
+    got = extract(data)
+    if not got.get("ok"):
+        return _err("pdf", str(got.get("error") or "PDF 解析失败"))
+
+    pages = got.get("pages") or []
+    if got.get("scanned"):
+        # 扫描件不是「解析失败」——它有页面可看，只是没有字可给。话要说准：
+        # 说成失败，人会以为是文件坏了而去重新下载。
+        return _err(
+            "scanned",
+            "这份 PDF 是扫描件（整份只有图片，没有文字层），本机没有 OCR，读不成文字。"
+            "放进知识库可以一页一页翻着看，但搜不到里面的字",
+        )
+
+    text = "\n".join(str(p.get("text") or "").strip() for p in pages).strip("\n")
+    truncated = False
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "\n…（已截断）"
+        truncated = True
+
+    notes: list[str] = []
+    if truncated:
+        notes.append("内容超过额度，后面的页没有读入")
+    if got.get("capped"):
+        notes.append(f"全文 {got.get('page_count') or len(pages)} 页，只读了前 {len(pages)} 页")
+    if got.get("empty_pages"):
+        notes.append(f"{got['empty_pages']} 页没有文字（图或空白页）")
+    return {
+        "ok": True,
+        "kind": "pdf",
+        "text": text,
+        "chars": len(text),
+        "truncated": truncated,
+        "pages": int(got.get("page_count") or len(pages)),
+        "note": "；".join(notes),
+    }

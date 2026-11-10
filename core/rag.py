@@ -45,12 +45,14 @@
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import math
 import re
 import secrets
 import sqlite3
 import struct
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -364,22 +366,84 @@ def _bump(updated: dict[str, Any]) -> dict[str, Any]:
 
 
 def _parse_bytes(data: bytes, name: str) -> tuple[str, str]:
-    """解析文件为纯文本，返回 (text, error)。"""
+    """解析文件为纯文本，返回 (text, error)。
+
+    只给「不要页码」的调用方用；上传走 `_parse_document`，那份还要页码映射。
+    """
+    text, _meta, err = _parse_document(data, name)
+    return text, err
+
+
+def _is_pdf(name: str, data: bytes) -> bool:
+    """后缀和文件头任一说是 PDF 就算。
+
+    PDF 后缀被改错的（比如 .pdf 存成了 txt）很少见，但反过来 —— 从网盘下来
+    后缀丢了 —— 很常见，所以文件头也要认一眼。
+    """
+    return (name or "").lower().endswith(".pdf") or data[:4] == b"%PDF"
+
+
+def _parse_document(data: bytes, name: str) -> tuple[str, dict[str, Any], str]:
+    """解析成 (文本, 页码元信息, 错误)。
+
+    页码元信息只对 PDF 有：`{count, starts, indexed, scanned, capped}`。
+    `starts[i]` 是第 i 页正文在全文里的起始偏移，前端拿它把「命中位置」换成
+    「第几页」—— 阅读视图显示的本来就是那一页的图。
+    """
     if not data:
-        return "", "文件是空的"
-    # 纯文本后缀直接按文本读，其余交给 docparse（支持 xlsx/docx）
+        return "", {}, "文件是空的"
     low = (name or "").lower()
+    if _is_pdf(low, data):
+        return _parse_pdf(data)
     if low.endswith((".md", ".txt", ".markdown", ".rst", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".html", ".htm")):
         text = _read_text_bytes(data)
         if text.strip():
-            return text, ""
-        return "", "文件里没有文字"
+            return text, {}, ""
+        return "", {}, "文件里没有文字"
     import docparse
 
     out = docparse.parse_book(data, name, limit=_MAX_PREVIEW_CHARS)
     if out.get("ok"):
-        return out["text"], ""
-    return "", out.get("error") or "解析失败"
+        return out["text"], {}, ""
+    return "", {}, out.get("error") or "解析失败"
+
+
+def _parse_pdf(data: bytes) -> tuple[str, dict[str, Any], str]:
+    """PDF：按页取文字层，顺手记下每页的起点。
+
+    页码是 PDF 阅读视图的骨架 —— 没有它，"命中在第 5 页"就只能退回"命中在
+    第 3400 个字"，而用户看的是页面图。所以这里拼全文时手工算偏移，不靠
+    `"\\n".join` 之后再去数。
+    """
+    import pdfdoc
+
+    got = pdfdoc.extract(data)
+    if not got.get("ok"):
+        return "", {}, str(got.get("error") or "PDF 解析失败")
+
+    starts: list[int] = []
+    parts: list[str] = []
+    pos = 0
+    for page in got["pages"]:
+        body = str(page.get("text") or "").strip()
+        starts.append(pos)
+        parts.append(body)
+        pos += len(body) + 1  # +1 是 join 时那个换行
+
+    text = "\n".join(parts)
+    # 和文本文件同一个上限：超了只索引前面这部分，后面页码照样能翻（预览图
+    # 是从原文件渲染的，不依赖索引），但要如实说"只索引了前 N 页"。
+    if len(text) > _MAX_PREVIEW_CHARS:
+        text = text[:_MAX_PREVIEW_CHARS]
+    indexed = sum(1 for s in starts if s < len(text))
+    meta = {
+        "count": int(got.get("page_count") or len(starts)),
+        "starts": starts[:indexed],
+        "indexed": indexed,
+        "scanned": bool(got.get("scanned")),
+        "capped": indexed < int(got.get("page_count") or len(starts)),
+    }
+    return text, meta, ""
 
 
 def _read_text_bytes(data: bytes) -> str:
@@ -409,13 +473,21 @@ def upload_document(
     if len(content) > MAX_DOC_BYTES:
         raise ValueError(f"文件超过 {MAX_DOC_BYTES // (1024 * 1024)}MB")
 
-    name = str(filename or "未命名").strip()[:120] or "未命名"
-    text, err = _parse_bytes(content, name)
+    # 只留文件名：有的客户端会把整条本地路径当 name 传上来（浏览器不会，脚本
+    # 会），存进清单就变成「C:/Users/xxx/Desktop/…」这种一屏放不下的标题。
+    # 顺带挡掉 `../` 这种不像文件名的东西 —— 名字只用于显示和取后缀。
+    raw_name = str(filename or "").strip()
+    name = Path(raw_name.replace("\\", "/")).name.strip() or "未命名"
+    name = name[:120] or "未命名"
+    text, pages, err = _parse_document(content, name)
     if err:
         raise ValueError(f"{name}：{err}")
 
     chunks = chunk_text(text)
-    if not chunks:
+    # 扫描件没有文字层，索引为空 —— 但它有页面图，能翻能看，只是搜不到。
+    # 一律拒收会连带砍掉"能看"这件事，而红头文件扫描件恰恰是最常见的来文。
+    scanned = bool(pages.get("scanned"))
+    if not chunks and not scanned:
         raise ValueError(f"{name}：没有可索引的文字")
 
     # 向量化（可能降级为 None）
@@ -443,6 +515,10 @@ def upload_document(
         "embedded": vecs is not None,
         "created_at": int(time.time()),
     }
+    if pages:
+        # 页码表进控制面：阅读视图靠它把「命中位置」换算成「第几页」。
+        # 12000 字上限下最多几十页，几百个整数，不值得另开一个文件。
+        doc["pages"] = pages
     base["documents"].append(doc)
     _bump(base)
     return doc
@@ -635,6 +711,16 @@ def _chapter_index(chapters: list[dict[str, Any]], pos: int) -> int:
     return len(chapters) - 1
 
 
+def _page_of(starts: list[int], pos: int) -> int:
+    """字符偏移落在第几页（1 起）。starts 是每页正文起点，升序。
+
+    用二分而不是线性扫：一份 300 页的文件每章都要算一次，线性扫是 O(页数×章节数)。
+    """
+    if not starts:
+        return 0
+    return max(1, bisect.bisect_right(starts, max(0, int(pos))))
+
+
 def doc_hits(kb_id: str, doc_id: str, query: str, k: int = 6) -> list[dict[str, Any]]:
     """一篇文档内部的命中块（带 ordinal，供映射到章节）。
 
@@ -676,6 +762,13 @@ def doc_view(
         truncated = True
     chapters = split_chapters(text)
 
+    # PDF 的页码表：有了它，前端才能把章节/命中换成「第几页」并加载那一页的图
+    pages_meta = doc.get("pages") or {}
+    starts = list(pages_meta.get("starts") or [])
+    if starts:
+        for c in chapters:
+            c["page"] = _page_of(starts, int(c.get("start") or 0))
+
     hits: list[dict[str, Any]] = []
     q = str(query or "").strip()
     if q:
@@ -701,6 +794,7 @@ def doc_view(
                 {
                     "chapter": ch,
                     "chapter_title": chapters[ch]["title"] if chapters else "",
+                    "page": _page_of(starts, pos) if starts else 0,
                     "ordinal": h["ordinal"],
                     "score": round(float(h.get("score") or 0), 3),
                     "count": chunk_text_.count(q) if q else 0,
@@ -722,6 +816,16 @@ def doc_view(
             "created_at": int(doc.get("created_at") or 0),
             "chapters": len(chapters),
         },
+        # PDF 才有：总页数 / 已索引页数 / 是不是扫描件。前端据此决定显示页面图
+        # 还是章节文字，并如实说明"这份没有文字层，只能看图"。
+        "pages": {
+            "count": int(pages_meta.get("count") or 0),
+            "indexed": int(pages_meta.get("indexed") or 0),
+            "scanned": bool(pages_meta.get("scanned")),
+            "capped": bool(pages_meta.get("capped")),
+        }
+        if pages_meta
+        else None,
         "chapters": chapters,
         "truncated": truncated,
         "hits": hits,
@@ -742,7 +846,60 @@ def delete_document(kb_id: str, doc_id: str) -> bool:
     p = _doc_path(kb_id, doc_id, doc["name"])
     if p.exists():
         p.unlink(missing_ok=True)
+    with _PAGE_LOCK:
+        _PAGE_CACHE.clear()  # 文件没了，缓存里的图也不能再被取到
     return True
+
+
+# ── 页面图（PDF 的"预览图"） ──────────────────────────────────────────────
+#
+# 阅读视图展示的是"这份文件的这一页"，所以图必须在服务端渲染：把原始 PDF 交给
+# 浏览器自带的阅读器也行不通 —— 一要浏览器支持内联 PDF，二来那样就绕过了我们
+# 自己的命中定位，用户看到的和检索命中的对不上。
+#
+# 缓存 24 页：翻页是来回的，单页渲染 10~30ms 不算贵，但连续翻十页会卡；
+# 24 页 × 约 40KB 完全可以忽略。
+
+_PAGE_CACHE: dict[tuple[str, int, int], bytes] = {}
+_PAGE_CACHE_MAX = 24
+# 服务是 ThreadingHTTPServer，一屏里六张页面图会同时打进来。没有这把锁的话
+# "边遍历边 evict" 会撞出 `RuntimeError: dictionary changed size during
+# iteration` —— 表现为随机几张图 503，而单张手动打开又都是好的。
+_PAGE_LOCK = threading.Lock()
+
+
+def page_image(kb_id: str, doc_id: str, page_no: int, *, width: int = 900) -> bytes | None:
+    """渲染 PDF 的第 page_no 页为 PNG。文档不存在或无页码表时返回 None。
+
+    `pages.count` 是文件真实页数，不是索引页数 —— 没索引到的页也能翻，
+    只是里面搜不到东西。
+    """
+    base = get_base(kb_id)
+    if base is None:
+        return None
+    doc = next((d for d in base["documents"] if d["id"] == doc_id), None)
+    if doc is None or not (doc.get("pages") or {}).get("count"):
+        return None
+    path = _doc_path(kb_id, doc_id, doc["name"])
+    if not path.exists():
+        return None
+
+    key = (doc_id, int(page_no), int(width))
+    with _PAGE_LOCK:
+        hit = _PAGE_CACHE.get(key)
+    if hit is not None:
+        return hit
+
+    # 渲染放在锁外：一页十几毫秒，串行起来六张图就得排队，而同一个 key 重复
+    # 渲染一次的代价比排队小。
+    import pdfdoc
+
+    png = pdfdoc.render(path.read_bytes(), int(page_no), width=width)
+    with _PAGE_LOCK:
+        while len(_PAGE_CACHE) >= _PAGE_CACHE_MAX:
+            _PAGE_CACHE.pop(next(iter(_PAGE_CACHE)), None)
+        _PAGE_CACHE[key] = png
+    return png
 
 
 # ── 检索 ──────────────────────────────────────────────────────────────────

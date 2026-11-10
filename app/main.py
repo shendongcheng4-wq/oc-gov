@@ -496,6 +496,15 @@ def _kb_doc_entry(doc: dict[str, Any], body: str) -> dict[str, Any]:
     # 300 字节的文件写「1 KB」是假话，小文件保留一位小数
     kb_size = int(doc.get("byte_size") or 0) / 1024
     size = f"{kb_size:.1f} KB" if kb_size < 10 else f"{kb_size:.0f} KB"
+    pages = doc.get("pages") or {}
+    if pages.get("scanned"):
+        # 扫描件索引是空的，「0 字 · 关键词索引」会让人以为是解析坏了。
+        # 说清它是能看不能搜，才知道该拿它干什么。
+        note = f"{int(pages.get('count') or 0)} 页 · 扫描件，仅页面图"
+    else:
+        note = f"{doc.get('chars') or 0} 字" + (" · 已向量化" if doc.get("embedded") else " · 关键词索引")
+        if pages.get("count"):
+            note = f"{int(pages['count'])} 页 · " + note
     return {
         "kind": "doc",
         "kind_label": _KB_DOC_LABEL,
@@ -508,8 +517,7 @@ def _kb_doc_entry(doc: dict[str, Any], body: str) -> dict[str, Any]:
             "report": size,
             "period": stamp,
             "chunks": doc.get("chunk_count") or 0,
-            "note": f"{doc.get('chars') or 0} 字"
-            + (" · 已向量化" if doc.get("embedded") else " · 关键词索引"),
+            "note": note,
         },
         "ref": {"type": "rag", "kb_id": doc["kb_id"], "doc_id": doc["id"]},
     }
@@ -815,6 +823,7 @@ class Handler(BaseHTTPRequestHandler):
                     "rows": out.get("rows") or 0,
                     "paras": out.get("paras") or 0,
                     "tables": out.get("tables") or 0,
+                    "pages": out.get("pages") or 0,
                     "note": out.get("note") or "",
                 }
             )
@@ -1080,6 +1089,38 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"ok": False, "error": "doc_not_found"}, 404)
                 return self._json(view)
 
+            # 页面图：?doc=<id>&p=<页码>，回 PNG。
+            # 前端 <img src> 直接指过来，所以失败时只能回状态码 —— 图片位置没法
+            # 塞一段 JSON 进去。真要给人看的提示放在 doc_view 的 pages 里。
+            if len(parts) == 2 and parts[1] == "page":
+                qs = parse_qs(urlparse(self.path).query)
+                doc_id = str((qs.get("doc") or [""])[0]).strip()
+                try:
+                    pno = int(str((qs.get("p") or ["1"])[0]))
+                except ValueError:
+                    pno = 1
+                if not doc_id:
+                    return self._json({"ok": False, "error": "doc_required"}, 400)
+                if pno < 1:
+                    return self._json({"ok": False, "error": "page_out_of_range"}, 400)
+                try:
+                    png = rag_mod.page_image(parts[0], doc_id, pno)
+                except IndexError:
+                    return self._json({"ok": False, "error": "page_out_of_range"}, 404)
+                except RuntimeError as exc:  # 没装 PDF 组件
+                    return self._json({"ok": False, "error": str(exc)}, 503)
+                if png is None:
+                    return self._json({"ok": False, "error": "doc_not_found"}, 404)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(png)))
+                # 页面图是原文件的纯函数，同一份文件同一页不会变，可以缓。
+                # 但删了文档要能失效，所以只给几分钟而不是 immutable。
+                self.send_header("Cache-Control", "private, max-age=300")
+                self.end_headers()
+                self.wfile.write(png)
+                return
+
             if path.startswith("/api/metric/"):
                 code = path.rsplit("/", 1)[-1].upper()
                 detail = wb.metric_detail(code)
@@ -1193,7 +1234,13 @@ class Handler(BaseHTTPRequestHandler):
     # ---------------- POST ----------------
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        limit = _MAX_UPLOAD_BODY if path == "/api/attachments/parse" else _MAX_JSON_BODY
+        # 上传是 base64 包在 JSON 里的，9MB 的文件会变成 12MB 请求体 —— 按普通
+        # JSON 的 4MB 卡会把「单文件不超过 9MB」这句承诺自己吃掉：3MB 以上的
+        # 文件一律 413，而界面还写着 9MB。
+        is_upload = path == "/api/attachments/parse" or (
+            path.startswith("/api/rag/bases/") and path.endswith("/upload")
+        )
+        limit = _MAX_UPLOAD_BODY if is_upload else _MAX_JSON_BODY
         try:
             body = self._body(limit)
         except _TooBig as exc:
