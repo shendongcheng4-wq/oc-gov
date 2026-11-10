@@ -5910,9 +5910,11 @@ try {
 } catch (e) { /* 老浏览器没有 addEventListener，忽略 */ }
 
 /* ---------- 账户菜单 ----------
-   顶部是当前身份（就地切换），下面分组条目。
-   设计图里的「套餐 / 积分 / 邀约 / 成长计划」没有搬过来：这个系统里没有计费、
-   没有积分、没有邀请关系，照抄过来就是四个点了没反应的假入口。
+   顶部是当前身份，右边那个按钮直接开登录框（未登录时文案是「登录」，
+   已登录时是「切换」）。不再先展开身份列表：换谁都得输口令，登录框里
+   的下拉已经列全了身份和分管范围，多一层只是让「点当前身份」变成死路。
+   下面分组条目。设计图里的「套餐 / 积分 / 邀约 / 成长计划」没有搬过来：
+   这个系统里没有计费、没有积分、没有邀请关系，照抄过来就是四个点了没反应的假入口。
    条目只放真做了的功能，每条点了都有东西。 */
 const ACCT_ICON = {
   gear: '<path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.1 14.6a1.5 1.5 0 00.3 1.7l.1.1a1.8 1.8 0 11-2.6 2.6l-.1-.1a1.5 1.5 0 00-1.7-.3 1.5 1.5 0 00-.9 1.4v.2a1.8 1.8 0 11-3.6 0v-.1a1.5 1.5 0 00-1-1.4 1.5 1.5 0 00-1.7.3l-.1.1a1.8 1.8 0 11-2.6-2.6l.1-.1a1.5 1.5 0 00.3-1.7 1.5 1.5 0 00-1.4-.9H3a1.8 1.8 0 110-3.6h.1a1.5 1.5 0 001.4-1 1.5 1.5 0 00-.3-1.7l-.1-.1a1.8 1.8 0 112.6-2.6l.1.1a1.5 1.5 0 001.7.3H9a1.5 1.5 0 00.9-1.4V3a1.8 1.8 0 113.6 0v.1a1.5 1.5 0 00.9 1.4 1.5 1.5 0 001.7-.3l.1-.1a1.8 1.8 0 112.6 2.6l-.1.1a1.5 1.5 0 00-.3 1.7V9a1.5 1.5 0 001.4.9h.2a1.8 1.8 0 110 3.6h-.1a1.5 1.5 0 00-1.4.9z"/>',
@@ -5923,7 +5925,6 @@ const ACCT_ICON = {
   power: '<path d="M12 3.5v8.5"/><path d="M6.8 7a7.5 7.5 0 1010.4 0"/>',
   plug: '<path d="M12 3v4"/><path d="M9 5h6"/><path d="M7 7h10"/><path d="M8.5 7v3a3.5 3.5 0 003.5 3.5h0a3.5 3.5 0 003.5-3.5V7"/><path d="M12 13.5V20"/>',
   users: '<circle cx="9" cy="8" r="3.4"/><path d="M3.5 20a5.5 5.5 0 0111 0"/><path d="M16 5.4a3.4 3.4 0 010 5.2"/><path d="M17.5 14.5a5.5 5.5 0 013 5"/>',
-  user: '<circle cx="12" cy="8" r="3.4"/><path d="M5.5 20a6.5 6.5 0 0113 0"/>',
 };
 
 function acctRow(it) {
@@ -5988,19 +5989,6 @@ function acctIdCard(p) {
       <div class="acct-who"><b>${esc(p.name)}</b><span>${esc(p.scope || "")} · ${who}</span></div>
       <button class="acct-swap" id="acctSwap">${AUTHD ? "切换" : "登录"}</button>
     </div>`;
-}
-
-// 就地展开三人列表，不弹第二个浮层：叠着两层浮层在窄屏上很容易点错
-function showIdPicker() {
-  const cur = PID.get();
-  $("#acctTop").innerHTML = `<div class="acct-list">
-    ${(PP.people || []).map((p) => `
-      <div class="acct-row ${p.id === cur ? "on" : ""}" data-pid="${esc(p.id)}">
-        <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">${ACCT_ICON.user}</svg>
-        <span class="nm">${esc(p.name)}<span style="display:block;font-size:10px;color:var(--faint);margin-top:1px">${esc(p.scope)}</span></span>
-        ${p.id === cur ? `<span class="hint">当前</span>` : ""}
-      </div>`).join("")}
-  </div>`;
 }
 
 // 登录态缓存：refreshAuth 问后端 whoami 后写这里，界面据此显示「已登录/未登录」。
@@ -6106,17 +6094,6 @@ function applyLayout(layout) {
   // 藏起来的块也挪到最后：留在原地会让 DOM 顺序和看到的顺序不一致，
   // 以后重新打开某块时它就突然插到前面去
   [...desk.querySelectorAll(".desk-sec[data-block]")].filter((el) => el.hidden).forEach((el) => desk.appendChild(el));
-}
-
-async function switchPerson(pid) {
-  if (pid === PID.get()) {
-    $("#idMenu").hidden = true;
-    return;
-  }
-  $("#idMenu").hidden = true;
-  // 第三批：换身份不再自动免密登录，而是弹登录框让用户输入口令。
-  // 登录成功（submitLogin）后才会真正切到那个身份。
-  openLoginModal(pid);
 }
 
 async function loadWorkspace() {
@@ -9767,7 +9744,13 @@ document.addEventListener("click", (e) => {
     if (fn) fn();
     return;
   }
-  if (e.target.closest("#acctSwap")) return showIdPicker();
+  // 右上角「登录/切换」直接进登录框，不再先弹三人身份列表：
+  // 换任何身份都要口令，而登录框里的下拉本来就列全了身份和分管范围，
+  // 多一层列表的结果是「点当前身份」变成死路（以前 switchPerson 会把同 id 当取消）。
+  if (e.target.closest("#acctSwap")) {
+    $("#idMenu").hidden = true;
+    return openLoginModal(PID.get());
+  }
 
   if (e.target.closest("#lgSubmit")) return submitLogin();
 
@@ -9779,9 +9762,6 @@ document.addEventListener("click", (e) => {
 
   const aset = e.target.closest("[data-accent-set]");
   if (aset) { THEME.setAccent(aset.dataset.accentSet); renderThemeModal(); return; }
-
-  const pid = e.target.closest("[data-pid]");
-  if (pid) return switchPerson(pid.dataset.pid);
 
   // 专家下拉的点击由 #expertSelect 自己处理（见文件末尾的绑定），这里不再接 data-eid：
   // 菜单项和整行开合是两种语义，混在全局委托里容易和别的 data-* 规则抢。 
