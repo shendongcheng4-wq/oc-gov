@@ -530,9 +530,10 @@ def external_digest(ext: dict[str, Any] | None) -> str:
             if len(rows) > 1
             else f"{_row_label(rows[0])} "
         )
-        bits = [f"{span}{len(rows)} 期对照，{len(same)} 期一致"]
+        counts = f"{len(rows)} 期对照，{len(same)} 期一致"
         if diff:
-            bits.append(f"{len(diff)} 期不一致")
+            counts += f"、{len(diff)} 期不一致"
+        bits = [f"{span}{counts}"]
         for r in diff[:_DIGEST_ROWS]:
             tag = "口径待确认" if r.get("state") == "check" else "不一致"
             bits.append(
