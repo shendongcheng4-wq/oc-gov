@@ -89,20 +89,27 @@ def _candidate_cache_dirs() -> list[Path]:
 
 def _find_local_snapshot(cache_dir: Path) -> Path | None:
     """在某个缓存根目录里找 bge-small-zh-v1.5 的 snapshot（含 Qdrant 镜像别名）。"""
-    # 模型 repo 目录有两种命名：官方 id（BAAI/bge-small-zh-v1.5）和 Qdrant 镜像
-    # （Qdrant/bge-small-zh-v1.5）。fastembed 下载的是后者，octop 缓存里也是后者。
-    for repo_name in ("models--Qdrant--bge-small-zh-v1.5", "models--BAAI--bge-small-zh-v1.5"):
-        repo = cache_dir / repo_name
-        snapshots = repo / "snapshots"
-        if not snapshots.is_dir():
+    # repo 目录可能直接放在 cache_dir 下（octop 的 embedding_models 就是这种），
+    # 也可能在 cache_dir/hub 下 —— huggingface_hub 的标准布局是 HF_HOME/hub/repo，
+    # 而 _candidate_cache_dirs() 给的是 HF_HOME 那一层。只探根目录会漏掉后者，
+    # 表现就是「模型明明在 ~/.cache/huggingface 里，却一直退回 bigram」。
+    for root in (cache_dir, cache_dir / "hub"):
+        if not root.is_dir():
             continue
-        # snapshot 里只要有 .onnx 权重 + tokenizer 就算可用
-        for snap in snapshots.iterdir():
-            if not snap.is_dir():
+        # 模型 repo 目录有两种命名：官方 id（BAAI/bge-small-zh-v1.5）和 Qdrant 镜像
+        # （Qdrant/bge-small-zh-v1.5）。fastembed 下载的是后者，octop 缓存里也是后者。
+        for repo_name in ("models--Qdrant--bge-small-zh-v1.5", "models--BAAI--bge-small-zh-v1.5"):
+            repo = root / repo_name
+            snapshots = repo / "snapshots"
+            if not snapshots.is_dir():
                 continue
-            has_onnx = any(snap.rglob("*.onnx"))
-            if has_onnx:
-                return snap
+            # snapshot 里只要有 .onnx 权重 + tokenizer 就算可用
+            for snap in snapshots.iterdir():
+                if not snap.is_dir():
+                    continue
+                has_onnx = any(snap.rglob("*.onnx"))
+                if has_onnx:
+                    return snap
     return None
 
 
