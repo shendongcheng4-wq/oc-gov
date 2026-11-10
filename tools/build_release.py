@@ -236,6 +236,57 @@ START_HERE = """<!DOCTYPE html>
     拿去做正式汇报前请先看 <code>README.md</code> 的「这个页面没证明什么」一节。
   </div>
 
+  <h2>零、先确认环境：要装什么、不装什么</h2>
+
+  <p>这个程序<b>不需要数据库、不需要 Node.js、不需要 Docker，也不需要 pip 装任何核心依赖</b> —— 核心只用 Python 标准库。
+  下面四张表就是全部要求，能对上就能跑。</p>
+
+  <p><b>必须有</b></p>
+  <table>
+    <tr><th style="width:20%">项目</th><th style="width:44%">要求</th><th>说明</th></tr>
+    <tr><td>操作系统</td><td>Windows 8.1 / 10 / 11（64 位）</td><td>Win7 装不了 Python 3.11</td></tr>
+    <tr><td>Python</td><td><b>3.11 或更高</b>，安装时勾选 Add python.exe to PATH</td><td>3.12 / 3.13 / 3.14 均已实测通过</td></tr>
+    <tr><td>浏览器</td><td><b>Chrome 或 Edge 111 以上</b></td><td>版本太旧会白屏，见第六节最后一行</td></tr>
+    <tr><td>磁盘</td><td>解压后约 2 MB，建议留 100 MB</td><td>数据随使用增长，都是小 JSON</td></tr>
+    <tr><td>内存</td><td>常驻约 42 MB</td><td>不跑本地推理，不需要显卡</td></tr>
+    <tr><td>端口</td><td>8090 空闲（可改）</td><td>被占用时脚本报错并提示换端口</td></tr>
+    <tr><td>权限</td><td>普通用户即可</td><td>不注册服务、不写注册表、不占系统目录</td></tr>
+  </table>
+
+  <p><b>可以不装（装了自动升级，不装静默降级 —— 不会报错）</b></p>
+  <table>
+    <tr><th style="width:24%">包</th><th style="width:34%">装了能得到什么</th><th>不装会怎样</th></tr>
+    <tr><td><code>pypdfium2</code></td><td>能上传 PDF，能逐页翻看原文</td><td><b>PDF 一律被拒收</b>并说明缺组件；其它格式不受影响</td></tr>
+    <tr><td><code>fastembed</code></td><td>语义检索：用词不同、意思相关也能搜到</td><td>退回关键词匹配，功能照常，只是搜得笨一点</td></tr>
+    <tr><td><code>PyYAML</code></td><td>严格解析 plugins/ 下的 plugin.yaml</td><td>用内置极简解析，常见写法都认</td></tr>
+    <tr><td><code>octop-harness</code></td><td>插件引擎（问数时自动调工具）</td><td>退回内置轻量宿主。<b>该包未上 PyPI，实际装不上</b></td></tr>
+  </table>
+
+  <p>一次性装齐（有 pip 的前提下）：</p>
+  <pre><code>pip install -r requirements-optional.txt</code></pre>
+
+  <div class="warn">
+    <strong>fastembed 有个容易白忙一场的地方。</strong>
+    它要用的中文向量模型（<code>BAAI/bge-small-zh-v1.5</code>，约 90 MB）<b>不会自动联网下载</b> ——
+    这是刻意设计，为了内网环境不静默外联。只装上包、没把权重放进本地缓存目录，
+    效果和不装完全一样（仍然走关键词匹配）。要真用，两件事都得做。
+  </div>
+
+  <p><b>完全不需要</b></p>
+  <table>
+    <tr><th style="width:34%">不需要</th><th>为什么</th></tr>
+    <tr><td>数据库（MySQL / PostgreSQL / SQLite）</td><td>全部状态就是 <code>data/</code> 下的 JSON 文件</td></tr>
+    <tr><td>Node.js / 前端构建工具</td><td>页面是单个 HTML，不打包、不走 CDN、字体用系统字体</td></tr>
+    <tr><td>Docker</td><td>直接跑一个 Python 进程</td></tr>
+    <tr><td>pip install（核心）</td><td>核心零第三方包，<code>requirements-optional.txt</code> 里全是可选项</td></tr>
+    <tr><td>联网</td><td>不配模型、不配提醒通道时完全不访问外网</td></tr>
+    <tr><td>Office / WPS</td><td>生成的 .docx 是自己拼的 OOXML；只有<b>打开</b>文件看才需要</td></tr>
+    <tr><td>显卡</td><td>不在本地跑推理</td></tr>
+  </table>
+
+  <p class="muted">还有一条要知道：这个程序只监听本机 <code>127.0.0.1</code>，同一局域网里的其他电脑访问不到。
+  要多人共用，见第七节第 1 条。</p>
+
   <h2>一、把程序跑起来</h2>
 
   <p><b>前置条件只有一个：Windows + Python 3.11 或更高版本。</b>没装过 Python 的话，去
@@ -316,6 +367,9 @@ OCTOP_LLM_API_KEY=local</code></pre>
 run.cmd</code></pre>
   </div>
 
+  <p class="muted">另一个相关变量是 <code>OCGOV_EXPORT_DIR</code>：材料助手导出的文件默认落在数据目录下，
+  想单独放一处就设它。口令变量见第二节，提醒通道变量见第七节第 3 条。</p>
+
   <h2>五、忘了口令怎么办</h2>
 
   <p>删掉 <code>data\\credentials.json</code>，重启服务，会重新打印一条新口令。已有的登录会话一并失效。</p>
@@ -329,16 +383,23 @@ run.cmd</code></pre>
     <tr><td>页面能开，但问数答「没听懂」</td><td>模型没配上，正在走规则解析。按第三节配一个。</td></tr>
     <tr><td>连通性测试失败</td><td>三个常见原因：Base URL 漏了 <code>/v1</code>；模型名和服务端暴露的不一致；对方机器防火墙没放行端口。</td></tr>
     <tr><td>重启后数据没了</td><td>很可能放在 <code>C:\\Program Files</code> 等受保护目录，写入被系统拦掉了。换到 <code>D:\\</code> 下的普通目录。</td></tr>
+    <tr><td>页面一片空白 / 按钮点了没反应</td><td>浏览器太旧。<b>需要 Chrome 或 Edge 111 以上</b>。政务内网里的旧版 Chrome、IE 一律不行，换新版浏览器即可，程序本身没坏。</td></tr>
   </table>
 
   <h2>七、几条必须知道的限制</h2>
 
   <ul>
-    <li><b>只支持单进程。</b>用 <code>gunicorn</code> 或多 worker 起两份会互相覆盖数据。多人同时用请先换 SQLite/PostgreSQL（改 <code>core/store.py</code>）。</li>
+    <li><b>只支持单进程，而且只监听本机。</b>用 <code>gunicorn</code> 或多 worker 起两份会互相覆盖数据。
+    程序绑死在 <code>127.0.0.1</code>，同一局域网的其他电脑访问不到（要改 <code>app/main.py</code> 里的监听地址，
+    改完还得补读接口鉴权）。多人同时用请先换 SQLite/PostgreSQL（改 <code>core/store.py</code>）。</li>
     <li><b>权限只做了最小一层。</b>登录、三档角色、写接口总闸门都有；但身份不是从组织架构同步的，<code>core/directory.py</code> 里是手写映射。读收窄只覆盖督办和知识库，指标/会议/日程仍是全量可读。</li>
-    <li><b>提醒默认一条通道都没配。</b>站内信和浏览器桌面通知开箱可用；企微机器人、SMTP 邮件要填凭证才会真正送出去，页面「送达配置」里能看到当前状态。</li>
+    <li><b>提醒默认一条通道都没配。</b>站内信和浏览器桌面通知开箱可用；企微机器人、SMTP 邮件要填凭证才会真正送出去，页面「送达配置」里能看到当前状态。
+    也可以用环境变量预先配好：<code>OCGOV_NOTIFY_WEBHOOK</code>、<code>OCGOV_NOTIFY_WEBHOOK_FORMAT</code>、
+    <code>OCGOV_NOTIFY_SMTP_HOST / _PORT / _USER / _PASSWORD / _TO / _SSL</code>、<code>OCGOV_NOTIFY_TICK</code>（巡检间隔秒）。</li>
     <li><b>不响应式。</b>按最小宽度 1180 设计，窗口更窄会出现横向滚动。</li>
-    <li><b>材料只收文本可读的格式。</b>md/txt/csv/json/html/docx/xlsx 可以，PDF、图片、扫描件、旧版 .doc/.xls 读不了。</li>
+    <li><b>材料只收文本可读的格式。</b>md/txt/csv/json/html/docx/xlsx 开箱可用。
+    <b>PDF 需要在服务端装可选组件 <code>pypdfium2</code> 才能上传</b>（装了就支持逐页翻看原文）；
+    不装则 PDF 一律被拒并说明原因。图片、扫描件、旧版 .doc/.xls 始终读不了（没有 OCR，也读不了旧二进制格式）。</li>
   </ul>
 
   <footer>
