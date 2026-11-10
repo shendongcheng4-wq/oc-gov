@@ -339,11 +339,22 @@ def _plan_question(
     静默换引擎等于在用户不知情的情况下改变答案质量，这比慢两秒严重得多。
     """
     if not llm.available():
-        return None, "rules", {}
+        # 交给别人用的机器上，这是最常见的样子：一个模型都没配。以前这里
+        # degraded 返回空，界面上就只剩「检索到 1 条记录」，用户看不出自己
+        # 根本没接模型 —— 问「分析一下经济形势」得到一段指标口径，会以为是
+        # 系统答非所问。这条原因必须带出去，它会跟着答案落库、回放、上界面。
+        return None, "rules", {
+            "kind": "rules",
+            "reason": "当前没有配置模型，本次由规则解析：指标数值仍然准确，"
+            "但「分析」「建议」「归纳」这类问题答不了。接模型见使用说明第三节。",
+        }
 
     attempts = _plan_attempts(model_ref)
     if not attempts:
-        return None, "rules", {}
+        return None, "rules", {
+            "kind": "rules",
+            "reason": "模型配置里没有可用的服务商，本次由规则解析（指标数值仍然准确）。",
+        }
 
     started = time.monotonic()
     errors: list[str] = []
@@ -684,6 +695,18 @@ def _ask_impl(
                     "call": "POST /chat/completions",
                     "status": "error",
                     "summary": f"模型不可用，已退回规则解析（{planner}）",
+                }
+            )
+        elif degraded:
+            # 模型压根没配（不是试了失败）。这一步以前不写，于是「怎么答的」
+            # 面板里连一句「没走模型」都没有，界面看起来和正常一样。
+            trace.append(
+                {
+                    "step": len(trace) + 1,
+                    "tool": "llm.plan",
+                    "call": "skipped",
+                    "status": "error",
+                    "summary": str(degraded.get("reason") or "未配置模型，跳过模型解析"),
                 }
             )
         hits = match_metrics(question)

@@ -19,6 +19,9 @@ run.cmd 8091         :: 换端口
 run-llm.cmd          :: 只起本地模型服务（llama.cpp，127.0.0.1:8099，可选）
 ```
 
+- **`start-all.cmd` 在没有模型的机器上会直接跳过模型**，不会等。它先跑 `run-llm.cmd --check` 探一下运行时和权重在不在（退出码 2 = 不在），不在就打印一行说明并照常起工作台 —— 工作台本身不需要模型
+- `run-llm.cmd` 里的路径是构建机器的默认值，换机器用 `OCGOV_LLM_RUNTIME_DIR`（含 `llama-server.exe` 的目录）和 `OCGOV_LLM_MODEL`（`.gguf` 路径）覆盖，不必改文件
+
 - **首次启动在控制台打印一条登录口令**（只打印一次，落盘存 pbkdf2 哈希）。想固定就设 `OCGOV_PASSWORD` 环境变量，它是权威值
 - **不登录也能浏览，但写操作一律被拒**并留审计痕迹。登录后按身份判定，越权会被挡下并说明理由
 - 核心标准库即可跑（Python 3.11+），**不联网也能运行**。可选依赖都是「装了自动升级、不装静默降级」：`fastembed`（语义向量检索，不装退回 bigram 关键词）、`octop-memory`（跨会话记忆）、`octop-harness`（插件引擎，不装则由 `core/toolhost.py` 补加载器）、`pypdfium2`（PDF 解析与页面渲染，不装则 PDF 上传被拒并说明原因）

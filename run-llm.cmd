@@ -7,15 +7,33 @@ rem Start order: run this FIRST (port 8099), THEN run.cmd (port 8090).
 chcp 65001 >nul
 setlocal EnableDelayedExpansion
 
-set "RUNTIME_DIR=D:\溧阳旅游向导\runtime\llama-b11173"
+rem ---- paths: overridable from the environment -------------------------
+rem These defaults point at the machine this project was built on. On any
+rem other machine they will not exist -- set the two env vars below (or edit
+rem the defaults) before running. run-llm.cmd --check reports which is missing
+rem without loading anything.
+if not defined OCGOV_LLM_RUNTIME_DIR set "OCGOV_LLM_RUNTIME_DIR=D:\溧阳旅游向导\runtime\llama-b11173"
+if not defined OCGOV_LLM_MODEL set "OCGOV_LLM_MODEL=E:\comfyui\ComfyUI_Mie_2026_V9.0_Large\ComfyUI\models\LLM\Q38-27B-ud\Qwen3.8-27B-UD-IQ3_XXS.gguf"
+set "RUNTIME_DIR=%OCGOV_LLM_RUNTIME_DIR%"
+set "MODEL=%OCGOV_LLM_MODEL%"
 set "LLAMA=%RUNTIME_DIR%\llama-server.exe"
-set "MODEL=E:\comfyui\ComfyUI_Mie_2026_V9.0_Large\ComfyUI\models\LLM\Q38-27B-ud\Qwen3.8-27B-UD-IQ3_XXS.gguf"
 set "PORT=8099"
 set "MODEL_NAME=local-qwen38-27b"
+
+rem ---- --check: validate only, print nothing, exit 2 when files are missing
+rem Used by start-all.ps1 as a fast probe, so it never waits 3 minutes for a
+rem model this machine does not have. Keep it before every pause below.
+if /i "%~1"=="--check" (
+  if not exist "%LLAMA%" exit /b 2
+  if not exist "%MODEL%" exit /b 2
+  exit /b 0
+)
 
 if not exist "%LLAMA%" (
   echo [llm] ERROR: llama-server.exe not found:
   echo [llm]   %LLAMA%
+  echo [llm] This default path only exists on the build machine.
+  echo [llm] Set OCGOV_LLM_RUNTIME_DIR, or just use run.cmd ^(no model needed^).
   pause
   exit /b 1
 )
@@ -23,6 +41,8 @@ if not exist "%LLAMA%" (
 if not exist "%MODEL%" (
   echo [llm] ERROR: model file not found:
   echo [llm]   %MODEL%
+  echo [llm] This default path only exists on the build machine.
+  echo [llm] Set OCGOV_LLM_MODEL, or just use run.cmd ^(no model needed^).
   pause
   exit /b 1
 )
