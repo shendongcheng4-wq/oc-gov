@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import chitchat as chitchat_mod  # noqa: E402
 import experts as experts_mod  # noqa: E402
+import extdata as extdata_mod
 import knowledge as knowledge_mod
 import llm
 import llmclient
@@ -541,6 +542,23 @@ def ask(
                 cmp_rows = _material_compare(extra["material_refs"], result)
                 if cmp_rows:
                     result["material_compare"] = cmp_rows
+
+            # 外部数据整合：附件里如果是「期次 + 数值」的表，就和指标库序列逐期对齐。
+            # 这一步和上面那条 B 档边界不冲突 —— 它产出的仍然是**并列对照**，
+            # 数字不回流进 headline/facts，只是把「对上了几期、差多少」算给用户看。
+            # 放在 headline 生成之后，结构上就保证了它改不了答案正文。
+            if attachments:
+                ext = extdata_mod.analyze(attachments, today)
+                if ext:
+                    result["external"] = ext
+                    # 附件里有能对上的指标、但这一问本身没命中指标（比如
+                    # 「把这份月报和系统对一下」），拒答会让人以为文件白传了。
+                    # 不改 headline（正文不能凭空变成答案），只补一句指路。
+                    if ext.get("metrics") and result.get("refused"):
+                        result.setdefault("notes", []).append(
+                            "上传的表里有 %d 项能和指标库对上，逐期对照见下方。"
+                            % len(ext["metrics"])
+                        )
 
             # 专家解读放在最后：答案已经是成品，专家只能补「怎么看」，改不了任何数值。
             # 任何一位专家失败都只影响他自己那一段，不牵连答案。

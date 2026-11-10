@@ -35,6 +35,7 @@ if not os.environ.get("OCGOV_TEST_KEEP"):
 os.environ["OCGOV_DATA"] = str(TEST_DATA)
 
 import chat  # noqa: E402
+import extdata as ext_mod  # noqa: E402
 import extract as mt_extract  # noqa: E402
 import ledger as mt_ledger  # noqa: E402
 import modelcfg  # noqa: E402
@@ -1903,8 +1904,80 @@ def test_attach_entry() -> None:
         "一旦在 _ask_impl 里拼进 headline，材料数字就进了答案正文",
     )
 
+    # ---- 外部数据整合：导入的表格与指标库逐期对照 ----
+    # 这一组防的是三类错：认错列、比错期、把「口径不同」说成「数据不对」。
+    check("表头能认出带编号的指标名", ext_mod.match_metric("12345按期办结率") == "TZ_12345_CLOSURE", "")
+    check("表头能认出省掉后缀的指标名", ext_mod.match_metric("规模以上工业增加值") == "GY_VA_GROWTH", "")
+    check(
+        "★产值不会被当成增加值（防错配）",
+        ext_mod.match_metric("规上工业总产值") is None,
+        "错配比不显示更糟：两个不同的东西摆在一起说「差 3%」",
+    )
+    check(
+        "期次三种写法都认",
+        [ext_mod.parse_period(x) for x in ("2026-08", "2026年8月", "2026/8")] == ["2026-08"] * 3,
+        "",
+    )
+    check(
+        "★年度/季度不认成月份",
+        ext_mod.parse_period("2026年") is None and ext_mod.parse_period("2026-Q3") is None,
+        "硬对上去会得出「12 月和全年差很多」这种假差异",
+    )
+
+    actual = {p["period"]: p["value"] for p in query_metric("GY_VA_GROWTH", None, 3)["series"]}
+    ps = sorted(actual)
+    bad = ps[-1]
+    body = "\n".join(f"{p},{actual[p] - (1.2 if p == bad else 0):.1f}" for p in ps)
+    tbl = "期次,规上工业增加值（%）\n" + body
+    got_ext = ext_mod.analyze([{"name": "月报.csv", "text": tbl}]) or {}
+    rows = (got_ext.get("metrics") or [{}])[0].get("rows") or []
+    check("外部表格被对齐成逐期对照", got_ext.get("ok") is True and len(rows) == 3, str(got_ext)[:80])
+    check("★差的那一期被标出来", [r["state"] for r in rows].count("diff") == 1, str([r["state"] for r in rows]))
+    check(
+        "差额算成外部减系统",
+        abs(([r for r in rows if r["state"] == "diff"] or [{}])[0].get("diff", 0) + 1.2) < 1e-6,
+        "",
+    )
+    check("对照带结论句", "外部比系统低" in ((got_ext.get("metrics") or [{}])[0].get("verdict") or ""), "")
+
+    unit_bad = ext_mod.analyze([{"name": "c.csv", "text": "月份,一般公共预算收入（万元）\n2026-08,281500"}]) or {}
+    check(
+        "★单位对不上就不比，并说明原因",
+        unit_bad.get("ok") is False and bool(unit_bad.get("skipped")),
+        "万元当亿元比，会得出「差 28 万倍」这种荒唐结论",
+    )
+    plain = ext_mod.analyze([{"name": "通知.txt", "text": "关于加强安全生产工作的通知\n各单位要高度重视。"}]) or {}
+    check(
+        "普通文档不报「没找到表头」",
+        plain.get("tabular") is False and not plain.get("notes"),
+        "用户本来没打算让它当数据表，报错只是噪音",
+    )
+    cum = ext_mod.analyze([{"name": "d.csv", "text": "期次,一般公共预算收入\n2026-08,12.1"}]) or {}
+    crow = ((cum.get("metrics") or [{}])[0].get("rows") or [{}])[0]
+    check(
+        "★累计口径差一个数量级时不下「不一致」结论",
+        crow.get("state") == "check",
+        "外部给当月值、系统是累计值，判「不一致」是假结论",
+    )
+    check(
+        "外部数据只在 ask() 里装配，_ask_impl 不碰它",
+        'result["external"] = ext' in src_ask
+        and "external" not in src_ask.split("def _ask_impl(")[1].split("def ask(")[0],
+        "一旦在 _ask_impl 里拼，外部数字就进了答案正文",
+    )
+
     html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("气泡渲染外部对照块", 'class="ext-cmp"' in html and "外部数据 × 指标库" in html, "")
+    check("对照块写清「以指标库为准」", "仍以指标库为准" in html, "")
+    check("导出带外部对照段", "**外部数据 × 指标库**" in html, "")
+    check("输入区有显式的导入入口", ">导入数据<" in html, "")
+    check(
+        "指标抽屉里也有导入入口，且会预填问法",
+        "data-extimport" in html and "把这份外部数据和" in html,
+        "看到口径页的人第一反应是「我这儿的数不一样」，入口要在这里也能找到",
+    )
     check("气泡渲染对照块", 'class="mat-cmp"' in html and "mc-row" in html, "")
+
     check("导出带材料对照段", '"**材料对照**"' in html, "")
     check(
         "★历史回放与导出共用同一份字段映射（historyView）",

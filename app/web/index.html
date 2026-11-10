@@ -752,6 +752,46 @@ html.ask-fold .ask-rail{display:flex}
   margin-top:5px;padding-top:5px;border-top:1px dashed var(--line);
   color:var(--muted);font-size:11px;line-height:1.55
 }
+/* 外部数据 × 指标库：整张表逐期对齐。
+   和上面的 .mat-cmp 不是一件事 —— 那个是「材料里提到的一个数」，两行并列就够；
+   这个是一列时间 × 一个指标，得给表格式排版，不然差异行看不出是哪一期。 */
+.ext-cmp{
+  margin-top:8px;border:1px solid var(--line);border-radius:8px;
+  overflow:hidden;background:var(--surface-2)
+}
+.ext-hd{
+  display:flex;align-items:baseline;gap:7px;padding:6px 10px;font-size:11.5px;
+  color:var(--muted);background:var(--surface-3);border-bottom:1px solid var(--line)
+}
+.ext-hd b{font-size:12px;color:var(--ink)}
+.ext-hd .ext-src{
+  margin-left:auto;max-width:52%;font-size:10.5px;color:var(--faint);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+}
+.ext-m{padding:7px 10px 8px}
+.ext-m + .ext-m{border-top:1px dashed var(--line)}
+.ext-m-h{display:flex;align-items:baseline;gap:8px;margin-bottom:3px}
+.ext-m-h b{font-size:12px;color:var(--ink)}
+.ext-m-h span{font-size:10.5px;color:var(--faint);margin-left:auto;white-space:nowrap}
+.ext-tb{width:100%;border-collapse:collapse;font-size:11.5px;font-variant-numeric:tabular-nums}
+.ext-tb th{
+  font-weight:500;color:var(--faint);font-size:10.5px;
+  text-align:right;padding:2px 0
+}
+.ext-tb th:first-child{text-align:left}
+.ext-tb td{text-align:right;padding:2px 0;color:var(--ink-2)}
+.ext-tb td:first-child{text-align:left;color:var(--muted)}
+.ext-tb .d-same{color:var(--ok)}
+.ext-tb .d-diff{color:var(--warn);font-weight:600}
+.ext-tb .d-check{color:var(--faint);cursor:help}
+.ext-vd{margin-top:4px;font-size:11px;color:var(--muted);line-height:1.55}
+.ext-ft{
+  padding:0 10px 8px;font-size:10.5px;color:var(--faint);line-height:1.55
+}
+.ext-none{
+  margin-top:8px;padding:7px 9px;border:1px dashed var(--line);border-radius:6px;
+  font-size:11px;color:var(--muted);background:var(--surface-2);line-height:1.6
+}
 .ai-usage{
   margin-top:9px;padding-top:7px;border-top:1px dashed var(--line);
   display:flex;flex-wrap:wrap;gap:4px 10px;font-size:10px;color:var(--faint)
@@ -791,17 +831,19 @@ html.ask-fold .ask-rail{display:flex}
    而且天然防止"上一轮还没完又发一条"。 */
 .inputbar #go.is-stop{background:var(--warn)}
 .inputbar #go.is-stop:hover{background:var(--warn-ink)}
-/* 附件入口：做成 34×34 的图标按钮，不抢发送的主操作位。
-   这一版只做到「选文件 → 列成芯片 → 可移除」，**文件没进问数链路**（后端只吃问题
-   文本、HTTP 层只解 JSON），所以按钮旁边不给「上传中/已解析」这类会骗人的状态。 */
+/* 附件入口：图标 + 文字「导入数据」。
+   只给一个回形针的话，没人知道它能传表格、更不知道传进来的表会和指标库比对 ——
+   这个功能的价值全在「外部数据和系统数据一起算」，藏成图标等于没做。
+   仍不占发送的主操作位（发送是实色主按钮，这个是描边次级按钮）。 */
 .inputbar .attach{
-  width:34px;height:34px;flex:0 0 auto;display:grid;place-items:center;
+  width:auto;height:34px;flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;
+  padding:0 9px;
   background:var(--surface-2);border:1px solid var(--line);border-radius:8px;
-  color:var(--muted);cursor:pointer;transition:.15s
+  color:var(--muted);cursor:pointer;transition:.15s;font:inherit;font-size:11.5px
 }
 .inputbar .attach:hover{color:var(--brand);border-color:var(--line-3);background:var(--hover)}
-.inputbar .attach svg{width:15px;height:15px;stroke:currentColor;fill:none;
-  stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.inputbar .attach svg{width:14px;height:14px;stroke:currentColor;fill:none;
+  stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
 .inputbar .attach.on{color:var(--brand);border-color:var(--brand);background:var(--brand-soft)}
 .attach-list{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:7px}
 .att-chip{display:inline-flex;align-items:center;gap:6px;max-width:240px;
@@ -2211,8 +2253,9 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
       <!-- 附件芯片：选中之后才出现，没选就整行不占位 -->
       <div class="attach-list" id="attachList" hidden></div>
       <div class="inputbar">
-        <button class="attach" id="attachBtn" title="添加参考材料（txt / md / csv / Word / Excel，最多 5 个、合计 3 万字）" aria-label="添加附件">
+        <button class="attach" id="attachBtn" title="导入外部数据：月报、统计表、政策文件（txt / md / csv / Word / Excel，最多 5 个、合计 3 万字）。表格会按「期次 + 指标」与系统指标逐期对照。" aria-label="导入外部数据">
           <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.5-8.5a3.5 3.5 0 0 1 4.9 4.9l-8.5 8.5a2 2 0 0 1-2.8-2.8l7.7-7.7"/></svg>
+          <span>导入数据</span>
         </button>
         <textarea id="q" rows="3" placeholder="请输入您的问题…" autocomplete="off"></textarea>
         <button id="go">发送</button>
@@ -3459,6 +3502,7 @@ function aiBubble(r, ref) {
       ${degBlock}
       ${factsBlock}
       ${matBlock}
+      ${extBlock(r.external)}
       ${chartBlock}
       ${meetBlock(r.meet_draft, ref)}
       ${kbBlock(r.knowledge)}
@@ -3469,6 +3513,63 @@ function aiBubble(r, ref) {
       ${srcs ? `<div class="ai-src">${srcs}</div>` : ""}
       ${traceBlock}
       ${usageBlock}
+    </div>`;
+}
+
+/* 外部数据 × 指标库的逐期对照。
+   边界写在界面上，不靠用户猜：这张表只并列，不改答案 —— 所以标题写「对照」，
+   底下一律带那句「答复里的数仍以指标库为准」。
+   一致的行显示 0 而不是留空：留空看起来像"没比"，用户会以为这一期漏了。 */
+function extBlock(x) {
+  if (!x) return "";
+  const ms = (x.metrics || []).filter((m) => m && (m.rows || []).length);
+  if (!ms.length) {
+    // 只有「看起来是表格」的文件才提示。把政策通知传上来、下面多一行
+    // 「没找到表头」纯属噪音，用户本来也没想让它当数据表。
+    if (!x.tabular || !(x.notes || []).length) return "";
+    return `<div class="ext-none">${esc(x.notes[0])}${x.notes[1] ? `<br>${esc(x.notes[1])}` : ""}</div>`;
+  }
+  const cell = (r) => {
+    if (r.state === "same") return `<td class="d-same">0</td>`;
+    if (r.state === "check") return `<td class="d-check" title="差一个数量级，通常是一边给当月值、一边给累计值">—</td>`;
+    return `<td class="d-diff">${esc((r.diff > 0 ? "+" : "") + r.diff)}</td>`;
+  };
+  const blocks = ms.map((m) => {
+    const rows = (m.rows || []).map((r) => `
+      <tr>
+        <td>${esc(r.label || r.period)}</td>
+        <td>${esc(r.external)}</td>
+        <td>${esc(r.internal)}</td>
+        ${cell(r)}
+      </tr>`).join("");
+    return `
+      <div class="ext-m">
+        <div class="ext-m-h">
+          <b>${esc(m.name)}</b><span>${esc(m.unit ? "单位 " + m.unit : "")}${m.compared > m.rows.length ? ` · 共 ${m.compared} 期，取最近 ${m.rows.length} 期` : ""}</span>
+        </div>
+        <table class="ext-tb">
+          <thead><tr><th>期次</th><th>外部</th><th>系统</th><th>差</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="ext-vd">${esc(m.verdict || "")}${m.caveat ? `<br>${esc(m.caveat)}` : ""}</div>
+      </div>`;
+  }).join("");
+  const extra = []
+    .concat((x.skipped || []).map((s) => `${s.column} 未参与（${s.why}）`))
+    .concat((x.unmatched || []).map((u) => `「${u}」认不出对应指标`))
+    .slice(0, 3)
+    .join("；");
+  return `
+    <div class="ext-cmp">
+      <div class="ext-hd">
+        <b>外部数据 × 指标库</b>逐期对照
+        <span class="ext-src" title="${esc((x.files || []).join("\n"))}">${esc((x.files || []).join("、"))}</span>
+      </div>
+      ${blocks}
+      <div class="ext-ft">
+        外部数据按表头对齐到同名指标，数字原样照抄、不换算；答复正文与结论仍以指标库为准。
+        ${extra ? `<br>${esc(extra)}` : ""}
+      </div>
     </div>`;
 }
 
@@ -4295,6 +4396,26 @@ function answerMd(r, question, stamp) {
     }
   }
 
+  // 外部数据逐期对照。导出件最需要它：会上讨论的是「哪几期对不上」，
+  // 落到纸面上再回头找系统重新查一遍，等于这份导出没起作用。
+  const exts = ((r.external || {}).metrics || []).filter((m) => (m.rows || []).length);
+  if (exts.length) {
+    const cell = (s) => String(s ?? "").replace(/\|/g, "\\|");
+    L.push(`**外部数据 × 指标库**（来源：${(r.external.files || []).join("、") || "上传文件"}）`, "");
+    exts.forEach((m) => {
+      L.push(`**${m.name}**${m.unit ? `（${m.unit}）` : ""}`, "");
+      L.push("| 期次 | 外部 | 系统 | 差 |", "| --- | --- | --- | --- |");
+      (m.rows || []).forEach((row) => {
+        const d = row.state === "same" ? "0" : row.state === "check" ? "口径待确认" : `${row.diff > 0 ? "+" : ""}${row.diff}`;
+        L.push(`| ${cell(row.label || row.period)} | ${cell(row.external)} | ${cell(row.internal)} | ${cell(d)} |`);
+      });
+      L.push("", m.verdict || "");
+      if (m.caveat) L.push(`> ${m.caveat}`);
+      L.push("");
+    });
+    L.push("> 外部数字原样照抄、未换算；答复正文与结论仍以指标库为准。", "");
+  }
+
   // 参考材料。只列名字和字数，不贴正文：一份一万多字的材料贴进去，
   // 导出件就没法读了，而用户手里本来就有原件。
   // 那句"数字以上方出处为准"不是客套 —— 材料里也有数字，混起来没法判断
@@ -4600,6 +4721,8 @@ function historyView(m, threadId) {
     // 材料对照也是同一轮结论的一部分：刷新后只剩单边数字，用户会以为当初
     // 系统根本没看到材料，或者更糟——以为那两行是同时给的
     material_compare: meta.material_compare || [],
+    // 外部数据对照同理：那张表是这一轮的主证据，刷新后不能说没就没
+    external: meta.external || {},
     planner_info: { available: !!meta.model, model: meta.model },
     // 用量与「已停止」都要回放。用量是账，停止是事实陈述，两者丢了都会让
     // 历史看起来像另一轮对话。
@@ -5616,6 +5739,14 @@ async function showMetric(code) {
     <div class="dr-sec">
       <h4>可用提问方式</h4>
       <p style="font-size:11.5px;color:var(--muted)">${(d.aliases || []).map((a) => `「${esc(a)}」`).join(" ")}</p>
+    </div>
+
+    <!-- 手里有月报的人，看到这张口径页的第一反应是「我这儿的数跟你不一样」。
+         把入口放在这儿，比让他自己猜到输入框旁边那个按钮快一步。 -->
+    <div class="dr-sec">
+      <h4>核对你的数据</h4>
+      <p style="font-size:11.5px;color:var(--muted);margin-bottom:6px">导入一份带「期次 + 数值」的表，会和这个指标逐期对照，两个数各自带出处。</p>
+      <button class="mini" data-extimport="1" data-extname="${esc(d.name)}">导入外部数据核对</button>
     </div>`;
   openDrawer(html, d.name, `指标 ${d.code}`);
 }
@@ -9355,9 +9486,14 @@ document.addEventListener("click", (e) => {
     renderKbPreview(it);
     return;
   }
+  // 指标抽屉里的「导入外部数据核对」：关抽屉 → 预填一句问法 → 直接弹文件选择。
   // 预填只在输入框为空时做，不覆盖用户已经写了一半的问题。
+  const extImp = e.target.closest("[data-extimport]");
+  if (extImp) {
+    closeDrawer();
     const q = $("#q");
     if (q && !q.value.trim()) {
+      q.value = `把这份外部数据和${extImp.dataset.extname || "这个指标"}对一下`;
       q.dispatchEvent(new Event("input", { bubbles: true }));
     }
     return $("#attachInput").click();
@@ -9842,6 +9978,13 @@ function attachPayload() {
     .filter((f) => f.state === "ok" && (f.text || "").trim())
     .map((f) => ({ name: f.name, text: f.text, chars: f.chars, truncated: !!f.cut }));
 }
+/* 初判它像不像一张数据表：只看前几行有没有「分隔符 + 数字」。
+   只用来在芯片上标一句「表格」，不决定要不要发、也不决定能不能对上指标 ——
+   对不上的事由后端说实话，前端不替它下结论。 */
+function looksTable(t) {
+  return String(t || "").split("\n").filter((l) => l.trim()).slice(0, 6)
+    .some((l) => (l.split("\t").length >= 2 || l.split(",").length >= 2) && /\d/.test(l));
+}
 function renderAttach() {
   const box = $("#attachList");
   box.hidden = !ATT.files.length;
@@ -9855,6 +9998,7 @@ function renderAttach() {
       // 表格型附件报行数、文档型报段数：只说「6.2k 字」看不出读到第几行被截了
       if (f.kind === "docx" && f.paras) meta = `${f.paras} 段 · ` + meta;
       else if (f.rows) meta = `${f.rows} 行 · ` + meta;
+      else if (looksTable(f.text)) meta = "表格 · " + meta;
     }
     else if (f.state === "empty") { meta = "没有文字"; cls = " bad"; }
     else if (f.state === "error") { meta = f.err || "读取失败"; cls = " bad"; }

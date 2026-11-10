@@ -2164,6 +2164,9 @@ class Handler(BaseHTTPRequestHandler):
                 # 材料值 × 库值的对照（B 档）。必须落库：用户拿材料来核对的
                 # 那次，往往就是他最想回头再看一眼的一次
                 "material_compare": result.get("material_compare") or [],
+                # 外部数据整合结果同理：这是「拿自己的表来核系统」的那一轮，
+                # 刷新后对照表消失，等于让他重新传一次文件
+                "external": result.get("external") or {},
                 "usage": result.get("usage") or {},
             },
         )
