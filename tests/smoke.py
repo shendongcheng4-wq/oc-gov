@@ -553,6 +553,76 @@ def test_chat() -> None:
     chat.delete(tc["id"])
 
 
+def test_external_digest() -> None:
+    """外部数据对照的回灌：让「哪期差最多」这类追问有落点。
+
+    B 档边界把外部数字挡在 headline/facts 外，历史里就只剩「一张表对过」的
+    残影。不补这段摘要，追问会掉进拒答，而用户只觉得文件白传了。
+    """
+    print("[5c] 外部数据对照回灌")
+
+    ext = {
+        "ok": True,
+        "files": ["月报2026-08.xlsx"],
+        "metrics": [
+            {
+                "code": "M_X",
+                "name": "12345 办结率",
+                "unit": "%",
+                "rows": [
+                    {"period": "2026-07", "label": "2026-07", "external": "98.3",
+                     "internal": "97.4", "diff": 0.9, "state": "diff"},
+                    {"period": "2026-08", "label": "2026-08", "external": "98.6",
+                     "internal": "98.6", "diff": 0.0, "state": "same"},
+                ],
+            }
+        ],
+    }
+    t = chat.create()
+    chat.append(t["id"], "user", "把这份月报和系统对一下")
+    chat.append(t["id"], "assistant", "对照结果见下方。", meta={"external": ext})
+    chat.append(t["id"], "user", "哪期差最多")
+
+    said = chat.context(t["id"])[1]["content"]
+    check(
+        "对照结论回灌进上一条回答",
+        "外部数据对照" in said and "月报2026-08.xlsx" in said,
+        said[:120],
+    )
+    check(
+        "回灌带差异期与两侧数值",
+        all(k in said for k in ("2026-07", "97.4", "98.3")),
+        said[:200],
+    )
+    # 回灌是「追加」而不是「替换」：原文回灌那条边界不能因为补摘要就破了，
+    # 否则界面上看到的和模型看到的是两句不同的话。
+    check("回灌不覆盖原回答", said.startswith("对照结果见下方。"), said[:40])
+
+    # 只认最后一条带对照的回答。前面那轮的对照已被后面的问题顶掉，再往回灌
+    # 就是拿过期的表污染 prompt，还会挤掉真正有用的历史。
+    chat.append(t["id"], "assistant", "2026-08 办结率 98.6%", meta={"metric_names": ["12345 办结率"]})
+    chat.append(t["id"], "user", "那上个月呢")
+    later = chat.context(t["id"])
+    check(
+        "新一轮没有对照就不再回灌旧表",
+        all("外部数据对照" not in m["content"] for m in later),
+        "",
+    )
+
+    # 没对上也要说清「没对上」，否则模型会把「没有对照」说成「没有这张表」
+    miss = chat.external_digest(
+        {"ok": False, "files": ["a.csv"], "metrics": [], "notes": ["表头里认不出的列：x"]}
+    )
+    check(
+        "没对上时也如实回灌",
+        "没有能和指标库" in miss and "表头里认不出" in miss,
+        miss,
+    )
+    check("空 meta 不产生摘要", chat.external_digest(None) == "" and chat.external_digest({}) == "", "")
+    check("摘要不超过预算量级", len(chat.external_digest(ext)) < 600, str(len(chat.external_digest(ext))))
+
+    chat.delete(t["id"])
+
 
 def test_memory() -> None:
     """跨会话记忆：只记「关注了什么」，不记数值。
@@ -4269,6 +4339,7 @@ def main() -> int:
     test_same_source()
     test_models()
     test_chat()
+    test_external_digest()
     test_memory()
     test_workspace()
     test_people()

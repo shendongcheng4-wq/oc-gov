@@ -473,6 +473,80 @@ def _summary(meta: dict[str, Any] | None) -> str:
     return f"上一轮我{intent_cn}，用的是这些已注册指标：{'、'.join(names)}。具体数值见界面，不在此重复。"
 
 
+# ── 外部数据对照的回灌 ──────────────────────────────────────────────────
+
+# 一段摘要最多列几个指标、每个指标最多列几行差异。再多就退化成把整张表塞回
+# prompt —— 而回灌的目的只是让模型听懂「那份表」「第三期」指的是什么。
+_DIGEST_METRICS = 4
+_DIGEST_ROWS = 2
+
+
+def _row_label(row: dict[str, Any]) -> str:
+    return str(row.get("label") or row.get("period") or "—")
+
+
+def external_digest(ext: dict[str, Any] | None) -> str:
+    """把一轮「外部数据 × 指标库」的对照结果压成可回灌的一段话。
+
+    **为什么需要它**：B 档边界规定 headline / facts 里的数只能来自指标库，
+    所以外部表的数值和「对上了几期」的结论只活在界面的对照块里，不进正文。
+    后果是下一轮问「哪期差最多」「表里那期写的是多少」时，历史里既没有表内
+    数字也没有对照结论，模型只能答「没有材料」—— 文件像是白传了。这段摘要
+    补的就是这个落点。
+
+    **为什么数字可以出现在这里**：它只喂 `llm.plan`（意图解析），正文由模板
+    装配（见 core/metrics/ask.py 的 headline），模型没有路径把这些数字写进
+    答案。摘要里的字段全部取自落库时已经定稿的 meta.external，这里不重算、
+    不读指标库，所以会话层不会反向依赖 metrics。
+    """
+    if not isinstance(ext, dict) or not ext:
+        return ""
+
+    files = [str(f) for f in (ext.get("files") or []) if f]
+    metrics = [m for m in (ext.get("metrics") or []) if isinstance(m, dict)]
+    lines = ["【上一轮的外部数据对照（系统计算，非模型陈述）】"]
+    if files:
+        lines.append("文件：" + "、".join(files[:3]))
+
+    if not metrics:
+        # 「没对上」也要回灌：否则用户追问时，模型不知道自己那轮其实什么都没对上，
+        # 会把「没有对照」说成「没有这张表」。
+        why = "；".join(str(n) for n in (ext.get("notes") or [])[:2] if n)
+        tail = f"（{why}）" if why else ""
+        lines.append("结果：上一轮附件里没有能和指标库逐期对上的数据。" + tail)
+        lines.append("（上一轮确实没对上，不要据此编造对照。）")
+        return "\n".join(lines)
+
+    for m in metrics[:_DIGEST_METRICS]:
+        rows = [r for r in (m.get("rows") or []) if isinstance(r, dict)]
+        if not rows:
+            continue
+        name = str(m.get("name") or m.get("code") or "指标")
+        unit = str(m.get("unit") or "")
+        same = [r for r in rows if r.get("state") == "same"]
+        diff = [r for r in rows if r.get("state") in ("diff", "check")]
+        span = (
+            f"{_row_label(rows[0])}–{_row_label(rows[-1])} "
+            if len(rows) > 1
+            else f"{_row_label(rows[0])} "
+        )
+        bits = [f"{span}{len(rows)} 期对照，{len(same)} 期一致"]
+        if diff:
+            bits.append(f"{len(diff)} 期不一致")
+        for r in diff[:_DIGEST_ROWS]:
+            tag = "口径待确认" if r.get("state") == "check" else "不一致"
+            bits.append(
+                f"{_row_label(r)} {tag}（库 {r.get('internal')}{unit} / 表 {r.get('external')}{unit}）"
+            )
+        lines.append(f"- {name}：" + "；".join(bits))
+
+    rest = len(metrics) - _DIGEST_METRICS
+    if rest > 0:
+        lines.append(f"- 另有 {rest} 个指标也做了对照，未在此列出。")
+    lines.append("以上是上一轮已经算好的结论；取新的数仍然查指标库，不要从这段话里编数字。")
+    return "\n".join(lines)
+
+
 def context(
     thread_id: str | None,
     token_budget: int | None = None,
@@ -526,6 +600,9 @@ def context(
         return []
 
     entries: list[tuple[str, str]] = []
+    # 只认**最后一条**带对照的回答：更早的对照早被后面的问题顶掉了，每轮都
+    # 往回灌只会让 prompt 里堆一串过期的表，还挤掉真正有用的历史。
+    last_ext: dict[str, Any] | None = None
     for msg in thread.get("messages") or []:
         role = msg.get("role")
         if role == "user":
@@ -535,6 +612,22 @@ def context(
             # 才退回模板摘要 —— 那种消息本来就没有可回灌的内容。
             text = (msg.get("content") or "").strip()
             entries.append(("assistant", text or _summary(msg.get("meta"))))
+            ext = (msg.get("meta") or {}).get("external")
+            last_ext = ext if isinstance(ext, dict) else None
+
+    # 对照结论补在上一轮回答的末尾。B 档边界把外部数字挡在正文外，历史里于是
+    # 只剩「一张表对过」的残影；不补这一段，「哪期差最多」这类追问会掉进拒答。
+    # 必须赶在下面切轮次之前加，让它的 token 也计入预算 —— 否则摘要会白占窗口。
+    # 挂到「最后一条 assistant」而不是 entries[-1]：调用方有可能已经先把本轮
+    # 问句落库了（重试、脚本、以后的别的入口），那时末尾是 user，判 entries[-1]
+    # 就会静默不回灌 —— 这种错在界面上完全看不出来。
+    if last_ext:
+        digest = external_digest(last_ext)
+        if digest:
+            for i in range(len(entries) - 1, -1, -1):
+                if entries[i][0] == "assistant":
+                    entries[i] = ("assistant", entries[i][1] + "\n\n" + digest)
+                    break
 
     # 成对：assistant 紧跟 user 才算一轮；落单的（比如上一轮被停止）自己算一轮
     turns: list[list[tuple[str, str]]] = []
