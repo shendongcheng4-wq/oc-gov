@@ -831,10 +831,13 @@ html.ask-fold .ask-rail{display:flex}
    而且天然防止"上一轮还没完又发一条"。 */
 .inputbar #go.is-stop{background:var(--warn)}
 .inputbar #go.is-stop:hover{background:var(--warn-ink)}
-/* 附件入口：图标 + 文字「导入数据」。
+/* 附件入口：图标 + 文字「附材料 仅本轮」。
    只给一个回形针的话，没人知道它能传表格、更不知道传进来的表会和指标库比对 ——
    这个功能的价值全在「外部数据和系统数据一起算」，藏成图标等于没做。
-   仍不占发送的主操作位（发送是实色主按钮，这个是描边次级按钮）。 */
+   仍不占发送的主操作位（发送是实色主按钮，这个是描边次级按钮）。
+   叫「附材料」而不是「导入数据」：材料不落盘、不入库，发完这一问就没了。
+   「仅本轮」必须写在按钮上，不能只写在 title 里 —— 看不见标题的人会以为
+   文件已经存进系统，下次找不到才来问。 */
 .inputbar .attach{
   width:auto;height:34px;flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;
   padding:0 9px;
@@ -845,6 +848,12 @@ html.ask-fold .ask-rail{display:flex}
 .inputbar .attach svg{width:14px;height:14px;stroke:currentColor;fill:none;
   stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
 .inputbar .attach.on{color:var(--brand);border-color:var(--brand);background:var(--brand-soft)}
+/* 分隔线而不是加粗或变色：这句话是「范围的限定」，不是「状态的提醒」，
+   跟着按钮一起变品牌色会把注意力从文件名引开。 */
+.inputbar .attach .att-scope{
+  font-size:10px;line-height:1;color:var(--faint);align-self:center;height:11px;
+  padding-left:6px;margin-left:1px;border-left:1px solid var(--line)
+}
 .attach-list{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:7px}
 .att-chip{display:inline-flex;align-items:center;gap:6px;max-width:240px;
   background:var(--surface-2);border:1px solid var(--line);border-radius:20px;
@@ -1542,6 +1551,14 @@ html.embedded .drawer{top:0;height:100%}
 /* 上传文档不是系统产出的记录（可能过期、随时可删），用虚线边把它和四类记录
    分开。不给第五种颜色：颜色已经用到四个语义色，再加一个就分不清了。 */
 .kl-kind.doc{background:var(--surface-2);border-style:dashed;border-color:var(--faint);color:var(--muted)}
+/* 来源分组头：两路混排在清单里，光看每条的类目色块要连读十几条才反应过来
+   「上半页是系统记录、下半页才是我传的文件」。只在翻目录时出现 —— 检索结果
+   按分数排序，插组头会把「第一条最相关」这件事打乱。 */
+.kl-group{display:flex;flex-direction:column;gap:2px;padding:9px 2px 5px}
+.kl-group:first-child{padding-top:2px}
+.kl-group b{display:flex;align-items:baseline;gap:5px;font-size:11px;font-weight:500;color:var(--ink-2)}
+.kl-group b i{font-style:normal;font-size:10px;font-weight:400;color:var(--faint)}
+.kl-group span{font-size:10px;line-height:1.5;color:var(--faint)}
 .kl-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .kl-h h4{margin:0;font-size:15px;line-height:1.45}
 /* 出处用 1px 网格拼，比一堆卡片干净：它是一张表，不是四块内容 */
@@ -2253,9 +2270,9 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
       <!-- 附件芯片：选中之后才出现，没选就整行不占位 -->
       <div class="attach-list" id="attachList" hidden></div>
       <div class="inputbar">
-        <button class="attach" id="attachBtn" title="导入外部数据：月报、统计表、政策文件（txt / md / csv / Word / Excel，最多 5 个、合计 3 万字）。表格会按「期次 + 指标」与系统指标逐期对照。" aria-label="导入外部数据">
+        <button class="attach" id="attachBtn" title="随这一问附材料：月报、统计表、政策文件（txt / md / csv / Word / Excel / PDF，最多 5 个、合计 3 万字）。只作用于本轮问答，不落盘、不入库；表格会按「期次 + 指标」与系统指标逐期对照。要以后还能查到，用知识库右上角的「上传入库」。" aria-label="随本轮提问附材料（仅本轮，不入库）">
           <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.5-8.5a3.5 3.5 0 0 1 4.9 4.9l-8.5 8.5a2 2 0 0 1-2.8-2.8l7.7-7.7"/></svg>
-          <span>导入数据</span>
+          <span>附材料</span><span class="att-scope">仅本轮</span>
         </button>
         <textarea id="q" rows="3" placeholder="请输入您的问题…" autocomplete="off"></textarea>
         <button id="go">发送</button>
@@ -2592,8 +2609,10 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
       <div class="kl-chips" id="kbChips"></div>
       <!-- 上传入口就在知识库里：上传、建库、删库都在这页完成，不再另开一个
            「上传文档」弹窗。两个入口是上一版留下的问题 —— 用户只认「库」这一个
-           概念，另一个入口只会让人以为库就这些。 -->
-      <button class="mini kl-upbtn" id="kbUpload" title="把政策文件、报告放进知识库，问答时可召回原文片段">＋ 上传文档</button>
+           概念，另一个入口只会让人以为库就这些。
+           按钮写「上传入库」而不是「上传文档」：动作词和清单里的类目同名，
+           归宿则明说是入库 —— 和输入框那个「附材料 仅本轮」正好是一对反例。 -->
+      <button class="mini kl-upbtn" id="kbUpload" title="把政策文件、报告存进知识库：原件落盘、切块建索引，以后每次问答都能召回原文片段">＋ 上传入库</button>
       <span class="kl-count" id="kbCount"></span>
     </div>
     <div class="ov-body kl-body">
@@ -5746,7 +5765,7 @@ async function showMetric(code) {
     <div class="dr-sec">
       <h4>核对你的数据</h4>
       <p style="font-size:11.5px;color:var(--muted);margin-bottom:6px">导入一份带「期次 + 数值」的表，会和这个指标逐期对照，两个数各自带出处。</p>
-      <button class="mini" data-extimport="1" data-extname="${esc(d.name)}">导入外部数据核对</button>
+      <button class="mini" data-extimport="1" data-extname="${esc(d.name)}">附外部数据核对</button>
     </div>`;
   openDrawer(html, d.name, `指标 ${d.code}`);
 }
@@ -9203,22 +9222,23 @@ function renderKbChips() {
   }).join("");
 }
 
-function renderKbList() {
-  $("#kbCount").textContent = KB.searching
-    ? `命中 ${KB.items.length} 条${KB.items.length >= 100 ? "（只显示前 100）" : ""}`
-    : `共 ${KB.items.length} 条`;
-  if (!KB.items.length) {
-    $("#kbList").innerHTML = `<div class="hint" style="margin:8px 2px">${KB.searching ? "没有对得上的条目" : "这一类下没有条目"}</div>`;
-    return;
-  }
-  $("#kbList").innerHTML = KB.items.map((it, i) => {
-    const s = it.source || {};
-    // 指标条目的 period 就是「指标字典」，和左边的类型标签重复，所以不拼进去
-    const sub = [s.department, it.kind === "metric" ? "" : s.period].filter(Boolean).join(" · ");
-    // 上传文档的 id 是 doc_xxx，对用户没有意义；块数也是内部概念。给文件大小 ——
-    // 那才是人在认一份文件时会看的东西（章节和字数在右边阅读视图的头部）。
-    const tail = it.kind === "doc" ? (s.report || "") : it.id;
-    return `
+/* 一条记录属于哪个来源：doc 是人上传的文件（rag），其余四类都是系统自己产出的
+   记录（knowledge）。清单混排时靠它分组，别处不要再各写一份判断。 */
+function kbSrc(it) { return it.kind === "doc" ? "doc" : "sys"; }
+
+const KB_SRC = {
+  sys: { label: "系统记录", note: "指标口径 / 督办台账 / 会议记录，带编号可回原处" },
+  doc: { label: "上传文档", note: "人传的文件，长期保存，问答可召回原文" },
+};
+
+function kbCardHtml(it, i) {
+  const s = it.source || {};
+  // 指标条目的 period 就是「指标字典」，和左边的类型标签重复，所以不拼进去
+  const sub = [s.department, it.kind === "metric" ? "" : s.period].filter(Boolean).join(" · ");
+  // 上传文档的 id 是 doc_xxx，对用户没有意义；块数也是内部概念。给文件大小 ——
+  // 那才是人在认一份文件时会看的东西（章节和字数在右边阅读视图的头部）。
+  const tail = it.kind === "doc" ? (s.report || "") : it.id;
+  return `
     <div class="ov-card ${KB.sel === kbKey(it) ? "on" : ""}" data-kbi="${i}">
       <div class="ov-card-top">
         <span class="kl-kind ${esc(it.kind)}">${esc(it.kind_label)}</span>
@@ -9227,7 +9247,42 @@ function renderKbList() {
       <b>${kbHl(it.title, KB.q)}</b>
       <span class="ov-sub">${esc(sub || "—")}</span>
     </div>`;
-  }).join("");
+}
+
+function renderKbList() {
+  $("#kbCount").textContent = KB.searching
+    ? `命中 ${KB.items.length} 条${KB.items.length >= 100 ? "（只显示前 100）" : ""}`
+    : `共 ${KB.items.length} 条`;
+  if (!KB.items.length) {
+    $("#kbList").innerHTML = `<div class="hint" style="margin:8px 2px">${KB.searching ? "没有对得上的条目" : "这一类下没有条目"}</div>`;
+    return;
+  }
+  // 分组只在「全部 + 翻目录」时做。检索结果按分数排序，插组头会把「第一条最相关」
+  // 打乱；按类型收窄时 chips 已经说明了是哪一类，再写一遍是噪音。
+  // 排序只影响显示顺序，data-kbi 仍存 KB.items 的原下标 —— 选中项不会错位。
+  const grouped = !KB.kind && !KB.searching;
+  const order = [...KB.items.keys()];
+  if (grouped) {
+    order.sort((a, b) => (kbSrc(KB.items[a]) === "doc") - (kbSrc(KB.items[b]) === "doc"));
+  }
+  const out = [];
+  let last = "";
+  for (const i of order) {
+    const it = KB.items[i];
+    if (grouped) {
+      const g = kbSrc(it);
+      if (g !== last) {
+        last = g;
+        const n = KB.items.filter((x) => kbSrc(x) === g).length;
+        const src = KB_SRC[g];
+        out.push(
+          `<div class="kl-group" data-src="${g}"><b>${src.label}<i>${n}</i></b><span>${src.note}</span></div>`
+        );
+      }
+    }
+    out.push(kbCardHtml(it, i));
+  }
+  $("#kbList").innerHTML = out.join("");
 }
 
 /* ---------- 文档阅读视图 ----------
@@ -9486,7 +9541,7 @@ document.addEventListener("click", (e) => {
     renderKbPreview(it);
     return;
   }
-  // 指标抽屉里的「导入外部数据核对」：关抽屉 → 预填一句问法 → 直接弹文件选择。
+  // 指标抽屉里的「附外部数据核对」：关抽屉 → 预填一句问法 → 直接弹文件选择。
   // 预填只在输入框为空时做，不覆盖用户已经写了一半的问题。
   const extImp = e.target.closest("[data-extimport]");
   if (extImp) {

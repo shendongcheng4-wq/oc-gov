@@ -1314,6 +1314,13 @@ def test_knowledge() -> None:
     check("清单页不覆盖对话卡片样式", ".kl-kind{" in html and ".kb-item{" in html and ".kb-tx{" in html, "")
     # 知识库和上传文档合成一页：chips 里必须有 doc 这一类，否则文件进了库也看不见
     check("清单页有「上传文档」一类", '{ id: "doc", label: "上传文档" }' in html, "")
+    # 混排的代价是「看不出这条是系统记录还是自己传的文件」。翻目录时按来源
+    # 分组，组头明确写出来；上传入口的名字也要落到「入库」这个归宿上。
+    check(
+        "清单按来源分组，上传入口写「上传入库」",
+        "function kbSrc(" in html and 'class="kl-group"' in html and "＋ 上传入库" in html,
+        "两路混排又不说来源，用户分不清标题里哪些是自己传的",
+    )
     # 上传文档并进知识库：写入口就在这一页（顶栏按钮 + 面板），不再有独立的
     # 「上传文档」弹窗。两个入口时用户会以为库只有清单里那几条，找不到自己传的文件。
     check(
