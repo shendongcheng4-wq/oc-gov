@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -100,6 +100,10 @@ def kpis(codes: list[str] | None = None) -> list[dict[str, Any]]:
                 # 页头写的是「2026年1—10月」，但 GDP 卡的数是 2025 年全年公报值。
                 # 卡片必须自己交代期次，否则唯一一条真实值会被当成当期数读。
                 "period_is_current": r["period"] == latest,
+                # 页头「2026年1—10月」是**累计口径**的报告期，但规上工业增速、
+                # 12345 办结率这些是 10 月单月值 —— 混在一排里会被当成累计数读。
+                # 让卡片自己说明口径，前端据此打「10月单月」标。
+                "period_scope": "cum" if metric["cumulative"] else "month",
                 "real_override": bool(r.get("real_override")),
                 "series": [p["value"] for p in r["series"]],
                 "source": {
@@ -146,6 +150,10 @@ def _board(
         "status_why": status_why,
         "trend": [p["value"] for p in r["series"]],
         "trend_labels": [p["label"] for p in r["series"]],
+        # 板块卡上的「数据截至」只说了月份，没说是不是单月口径；和 KPI 卡同一套标记
+        "period_label": r["period_label"],
+        "period_scope": "cum" if m["cumulative"] else "month",
+        "period_is_current": r["period"] == md.latest_available(),
         "source": {
             "department": r["source"]["department"],
             "report": r["source"]["report"],
@@ -339,17 +347,45 @@ def oversight_summary() -> dict[str, Any]:
 def overview() -> dict[str, Any]:
     latest = md.latest_available()
     kpi_list = kpis()
+    board_list = boards()
     year, month = int(latest[:4]), int(latest[5:7])
     span = f"{year}年1—{month}月" if month > 1 else f"{year}年1月"
+
+    # 页头这句期次只对「累计口径」的指标成立。把例外情况统计出来交给前端提示，
+    # 免得读的人以为整页数都是 1—10 月 —— 单月值、年度值、实时台账各是各的口径。
+    # KPI 卡和板块卡会重复出现同一个指标（规上工业增速两处都有），按 code 去重
+    by_code: dict[str, dict[str, Any]] = {}
+    for item in kpi_list + board_list:
+        code = item["code"]
+        if code not in by_code:
+            # 板块卡里叫 metric_name，KPI 卡里叫 name —— 统一成 name 再用
+            by_code[code] = {**item, "name": item.get("name") or item.get("metric_name", code)}
+    month_only = [v["name"] for v in by_code.values() if v["period_scope"] == "month"]
+    off_period = [v for v in by_code.values() if not v["period_is_current"]]
+    hint = [f"页头 {span} 是累计口径的报告期。"]
+    if month_only:
+        hint.append(
+            f"其中 {len(month_only)} 项是 {month} 月单月值（{'、'.join(month_only)}），"
+            f"卡片上另标「{month}月单月」。"
+        )
+    if off_period:
+        odd = "、".join(
+            f"{v['name']}（{v['period_label'].replace('（', '').replace('）', '')}）" for v in off_period
+        )
+        hint.append(f"{len(off_period)} 项不是这一期：{odd}。")
+    hint.append("底部督办台账是实时状态，不按报告期截取。")
+
     return {
         "city": CITY,
         "title": f"{CITY}AI市长工作台",
         "period": span,
         "period_label": "当期数据",
+        "period_hint": "".join(hint),
+        "ledger_as_of": date.today().isoformat(),
         "disclosed_on": md.source_of("GDP_TOTAL", latest)["published_at"],
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "kpis": kpi_list,
-        "boards": boards(),
+        "boards": board_list,
         "focus": focus(),
         "alerts": alerts(3),
         "oversight": oversight_summary(),

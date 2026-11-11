@@ -903,6 +903,10 @@ html.ask-fold .ask-rail{display:flex}
   font-size:11.5px;color:var(--ink-2);background:var(--surface);border:1px solid var(--line);
   border-radius:7px;padding:4px 10px;display:flex;align-items:center;gap:6px
 }
+.period .pl{
+  color:var(--faint);font-size:10.5px;letter-spacing:.02em;
+  padding-right:7px;border-right:1px solid var(--line)
+}
 .period i{width:6px;height:6px;border-radius:50%;background:var(--brand);display:block}
 .icon-btn{
   width:28px;height:28px;border-radius:7px;background:var(--surface);border:1px solid var(--line);
@@ -919,6 +923,9 @@ html.ask-fold .ask-rail{display:flex}
 .kpi .k{font-size:11.5px;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:5px}
 .kpi .k svg{width:11px;height:11px;stroke:var(--faint);fill:none;stroke-width:1.8}
 .kpi .v{font-size:25px;font-weight:700;letter-spacing:-.4px;line-height:1.1;color:var(--ink)}
+/* 数值行：口径标跟在数后面，不占标题行的宽度 —— 标题一换行整排卡片就不齐了 */
+.kpi .vrow{display:flex;align-items:baseline;gap:7px}
+.kpi .vrow .per{margin-left:0;font-family:inherit}
 .kpi .v small{font-size:12px;font-weight:600;color:var(--muted);margin-left:2px;letter-spacing:0}
 .kpi .v small.pct{margin-left:0;font-size:17px;font-weight:700;color:var(--ink-2)}
 .kpi .f{margin-top:6px;display:flex;align-items:center;gap:7px;font-size:11.5px}
@@ -933,6 +940,10 @@ html.ask-fold .ask-rail{display:flex}
   color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-line);
   padding:0 5px;border-radius:4px;white-space:nowrap
 }
+/* 口径不同 ≠ 数据有缺口：单月值用中性灰标，别和「不是这一期」的琥珀色抢注意力。
+   选择器要带上 .per，否则压不过前面的 .kpi .per（同权重靠后生效，这里权重不能更低）。 */
+.per.per-mute{color:var(--muted);background:var(--surface-4);border-color:var(--line)}
+.big .per{margin-left:7px;vertical-align:middle}
 
 .grid{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr);gap:10px;flex:1;min-height:0}
 .card{
@@ -2363,7 +2374,11 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
         <div class="desk-tabs" id="deskTabs"></div>
       </div>
       <div class="cp-right">
-        <span class="period"><i></i><span id="periodText">—</span></span>
+        <!-- 期次只覆盖「指标区」的累计口径数据：单月值、年度值、下面那块实时台账
+             各有各的口径，所以标签自己先说明归属，不让它冒充整页日期。 -->
+        <span class="period" id="periodChip">
+          <i></i><span class="pl">指标期次</span><span id="periodText">—</span>
+        </span>
         <div class="icon-btn" id="bellBtn" title="预警提醒">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
             <path d="M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 20h4"/>
@@ -2865,21 +2880,41 @@ function shortPeriod(s) {
   return String(s || "").replace(/[（）()]/g, "");
 }
 
+/* 「2026年10月」→「10月单月」：页头已经写了年份，这里只补它漏掉的口径 */
+function monthScopeTag(s) {
+  const m = String(s || "").match(/(\d{1,2})\s*月/);
+  return m ? `${m[1]}月单月` : "单月";
+}
+
+/* 期次标分两处放，因为说的不是一件事：
+   head  = 整张卡的期次跟页头不同（GDP 是 2025 全年）→ 放标题行，标「哪一期」；
+   value = 同期但口径是单月（规上工业 8.6%）→ 放数值旁，标「这个数是什么口径」。
+   都塞标题行会把「规模以上工业增加值增速」挤成两行，整排卡片高度就对不齐了。 */
+function periodTag(k) {
+  if (k.period_is_current === false) {
+    return `<span class="per" title="这张卡是 ${esc(k.period_label)} 的数据，不是页头那一期">${esc(shortPeriod(k.period_label))}</span>`;
+  }
+  return "";
+}
+
+function monthTag(k) {
+  if (k.period_is_current === false || k.period_scope !== "month") return "";
+  return `<span class="per per-mute" title="${esc(k.period_label)}单月值，不是年初至今累计">${esc(monthScopeTag(k.period_label))}</span>`;
+}
+
 function kpiCard(k, opts = {}) {
-  // 只给「不是当期」的卡打期次徽标：四张都标一遍「2026年10月」是噪音，
-  // 但 GDP 那张是 2025 年全年公报值，页头写的是 2026 年 1—10 月，必须标。
-  const per = k.period_is_current === false
-    ? `<span class="per" title="这张卡是 ${esc(k.period_label)} 的数据，不是页头那一期">${esc(shortPeriod(k.period_label))}</span>`
-    : "";
   return `
     <div class="kpi ${opts.cls || ""}" data-metric="${esc(k.code)}">
       ${opts.extra || ""}
       <div class="k">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
         ${esc(k.name)}
-        ${per}
+        ${periodTag(k)}
       </div>
-      <div class="v mono">${esc(k.display)}<small class="${k.unit === "%" ? "pct" : ""}">${esc(k.unit)}</small></div>
+      <div class="vrow">
+        <div class="v mono">${esc(k.display)}<small class="${k.unit === "%" ? "pct" : ""}">${esc(k.unit)}</small></div>
+        ${monthTag(k)}
+      </div>
       <div class="f">
         <span class="yoy ${esc(k.yoy_tone)}">${esc(k.yoy_text)}</span>
         ${k.note ? `<span class="note">${esc(k.note)}</span>` : ""}
@@ -2902,7 +2937,7 @@ function renderBoards(list, focus) {
         <h3>${esc(b.title)}</h3>
         <span class="badge ${badge}">${esc(b.status)}</span>
       </div>
-      <div class="big mono">${esc(b.value_display).replace(/(\s*\/\s*\S+\s*项)$/, "<small>$1</small>")}</div>
+      <div class="big mono">${esc(b.value_display).replace(/(\s*\/\s*\S+\s*项)$/, "<small>$1</small>")}${periodTag(b)}${monthTag(b)}</div>
       <div class="desc">${esc(b.sub)}</div>
       <div class="bar ${b.status_tone === "warn" ? "warn" : ""}"><i style="width:${b.progress}%"></i></div>
       <div class="trendline">${spark(b.trend, b.status_tone)}</div>
@@ -2941,10 +2976,12 @@ const AO_FILTERS = ["全部", "逾期", "今日到期", "临期", "签收超时"
 const AO_TONE = { 逾期: "danger", 今日到期: "warn", 临期: "warn", 签收超时: "info", 停滞: "info" };
 
 function renderAlerts() {
+  // 这块是实时台账，跟页头那个「指标期次」不是一套口径，所以自己报截止日
+  const asOf = (typeof OV !== "undefined" && OV && OV.ledger_as_of) || "";
   $("#alertbar").innerHTML = `
     <div class="coord-hd">
       <h3><span class="dot"></span>统筹推进</h3>
-      <span class="coord-hint">督办台账全部事项 · 点一条看办理详情</span>
+      <span class="coord-hint">督办台账${asOf ? ` · 截至 ${esc(asOf)}` : ""} · 点一条看办理详情</span>
       <div class="coord-chips" id="coordChips"></div>
     </div>
     <div class="coord-body">
@@ -9316,10 +9353,18 @@ async function ovUrgeBatch() {
 /* ---------- 启动 ---------- */
 /* 会议落库后要立刻反映到罗盘/预警条上，否则用户会怀疑"到底写进去没有"。
    只刷数据，不动会话和模型面板。 */
+/* 期次 chip：文字 + 「哪些数不服从它」的说明一起装上。
+   这句话由后端按当期的实际情况拼（单月几项、哪项不是这一期），不是写死的文案。 */
+function applyPeriod(ov) {
+  $("#periodText").textContent = ov.period;
+  const chip = $("#periodChip");
+  if (chip) chip.title = ov.period_hint || "累计口径报告期";
+}
+
 async function refreshDash() {
   const res = await fetch("/api/overview");
   OV = await res.json();
-  $("#periodText").textContent = OV.period;
+  applyPeriod(OV);
   renderKpis(OV.kpis);
   renderBoards(OV.boards, OV.focus);
   renderAlerts();
@@ -9333,7 +9378,7 @@ async function boot() {
 
   $("#cityTitle").textContent = OV.title;
   document.title = OV.title;
-  $("#periodText").textContent = OV.period;
+  applyPeriod(OV);
   renderKpis(OV.kpis);
   renderBoards(OV.boards, OV.focus);
   renderAlerts();

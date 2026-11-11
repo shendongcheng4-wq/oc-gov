@@ -112,6 +112,28 @@ def test_data_layer() -> None:
     check("GDP 卡期次写明全年", "全年" in gdp["period_label"], gdp["period_label"])
     check("其余 KPI 是当期数", all(k["period_is_current"] for k in kpis if k["code"] != "GDP_TOTAL"), "")
 
+    # 页头「2026年1—10月」是累计口径，页面上却混着单月值 —— 每张卡要自己说口径，
+    # 否则读的人会把「10 月单月增速 8.6%」当成「1—10 月累计增速 8.6%」。
+    for k in kpis:
+        check(f"KPI {k['code']} 标了口径", k.get("period_scope") in ("cum", "month"), str(k.get("period_scope")))
+    gy = next(k for k in kpis if k["code"] == "GY_VA_GROWTH")
+    check("规上工业是当月口径", gy["period_scope"] == "month", gy["period_scope"])
+    check("预算收入是累计口径", next(k for k in kpis if k["code"] == "BUDGET_REV")["period_scope"] == "cum", "")
+    check("板块也标口径", all(b.get("period_scope") in ("cum", "month") for b in boards), "")
+    check(
+        "12345 办结率是当月口径",
+        next(b for b in boards if b["code"] == "TZ_12345_CLOSURE")["period_scope"] == "month",
+        "",
+    )
+
+    # 页头 chip 的 tooltip 要把例外讲清：不然一句日期就把整页数据都框进去了
+    hint = overview.get("period_hint") or ""
+    check("页头说明点明累计口径", "累计口径" in hint, hint[:40])
+    check("页头说明列出单月项", "单月" in hint, "")
+    check("页头说明点出不同期的指标", "地区生产总值" in hint, "")
+    check("页头说明点出台账不按报告期", "台账" in hint, "")
+    check("总览给出台账截止日", bool(overview.get("ledger_as_of")), str(overview.get("ledger_as_of")))
+
     # 真实年度值不能配演示月度走势：两者不同期，画在一起就是「1746 跌到 1428」
     d_gdp = wb.metric_detail("GDP_TOTAL")
     check("真实年度值不给演示序列", d_gdp["series"] == [], f"{len(d_gdp['series'])} 期")
@@ -3043,6 +3065,12 @@ def test_frontend_theme() -> None:
 
     # 期次徽标：卡着自己交代期次，别让 2025 年全年值顶着 2026 年的页头
     check("KPI 卡会渲染期次徽标", "period_is_current" in html and 'class="per"' in html, "")
+    # 页头只写一个日期会让人以为整页数都是那一期：chip 要自报归属，单月值单独标
+    check("期次 chip 自报归属", 'id="periodChip"' in html and 'class="pl">指标期次' in html, "")
+    check("chip 挂了期次说明", "period_hint" in html, "")
+    check("单月口径另有中性标", "monthScopeTag" in html and "per per-mute" in html, "")
+    check("单月标不挤标题行（数值旁）", ".kpi .vrow" in body and 'class="vrow"' in html, "")
+    check("台账自己报截止日", "ledger_as_of" in html and "截至" in html, "")
     # 真实年度值不画演示曲线，改用说明块
     check("抽屉无序列时有说明块", ".dr-note{" in body and "series_note" in html, "")
 
