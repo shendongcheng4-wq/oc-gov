@@ -89,6 +89,7 @@ import llm  # noqa: E402
 import llmclient  # noqa: E402
 import memory as memory_mod  # noqa: E402
 import modelcfg  # noqa: E402
+import polish as polish_mod  # noqa: E402
 import oversight as ov  # noqa: E402
 import people  # noqa: E402
 import saved as saved_mod  # noqa: E402
@@ -381,6 +382,7 @@ WRITE_POLICY: tuple[tuple[str, str, str | None], ...] = (
     ("POST", r"/api/ask", None),
     ("POST", r"/api/ask/stream", None),
     ("POST", r"/api/ask/cancel", None),          # handler 内按 turn 归属自查
+    ("POST", r"/api/ask/polish", None),          # 只改写输入框里的文本，不落盘不取数
     ("POST", r"/api/schedule/brief", None),
     ("POST", r"/api/briefdoc", None),
     ("POST", r"/api/briefdoc/docx", None),      # 只生成字节流，不落盘
@@ -1269,6 +1271,10 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/ask/stream":
                 return self._ask_stream(body)
+
+            # 提问整理：只把输入框里那句话改写得更像指标问法，不发出去。
+            if path == "/api/ask/polish":
+                return self._ask_polish(body)
 
             # 停止一轮。只登记标记，真正的停发生在 ask 的下一个步骤边界；
             # 返回 ok 只代表"收到了"，不代表"已经停了"——界面不该等这个结果。
@@ -2197,6 +2203,17 @@ class Handler(BaseHTTPRequestHandler):
                 # 拒答时给的可问清单也要落：刷新之后那 11 个胶囊凭空消失，
                 # 用户会以为系统"这次答不上就说没了"。每条约 40 字，可控。
                 "suggestions": (result.get("suggestions") or [])[:12],
+                # 近似命中的候选（「民生十事」→ 民生实事）。刷新后这几个胶囊
+                # 要是没了，用户就只剩「没有对应指标」一句——他已经写错一次了，
+                # 再让他自己想怎么改，这个提示就等于没给。
+                "did_you_mean": (result.get("did_you_mean") or [])[:3],
+                # 按近似匹配答的那一轮：答案讲的是「民生实事」，提问栏里写的是
+                # 「民生十事」。不把「按什么理解的」一起落库，回看时就像答错了题。
+                "interpreted_as": result.get("interpreted_as"),
+                # 自动改写的那一轮：原文和改写后的问句都要留。「问题改过」这件事
+                # 只要不落库，回看时答案就变成了「答非所问」——用户记得自己问的
+                # 是什么，界面上却只剩答案。
+                "rewrite": result.get("rewrite"),
                 "knowledge": knowledge_mod.to_meta(result.get("knowledge")),
                 "rag": result.get("rag") or [],
                 "harness": result.get("harness") or {},
@@ -2219,6 +2236,41 @@ class Handler(BaseHTTPRequestHandler):
                 "external": result.get("external") or {},
                 "usage": result.get("usage") or {},
             },
+        )
+
+    def _ask_polish(self, body: dict) -> None:
+        """把一句口语提问整理成指标字典认得的问法。只改文本，不落库、不取数。
+
+        为什么不复用 /api/ask：那一问会落会话、调模型、取数、叫参谋，
+        副作用一串。而这里的语义是「先别发，看看这句话能不能被听懂」——
+        用户可能连着点三次才满意，每次都落一轮会话的话，历史会被草稿淹没。
+        """
+        text = str(body.get("text") or "").strip()
+        if not text:
+            return self._json({"ok": False, "error": "text_required"}, 400)
+
+        try:
+            result = polish_mod.polish(text, model_ref=body.get("model") or None)
+        except ValueError as exc:
+            # empty_question / too_long：都是入参问题，不该 500
+            return self._json({"ok": False, "error": str(exc)}, 400)
+        except Exception as exc:  # noqa: BLE001 改写失败也不该影响下一步提问
+            return self._json(
+                {"ok": False, "error": "polish_failed", "message": str(exc)[:200]}, 500
+            )
+
+        return self._json(
+            {
+                "ok": True,
+                "text": result["text"],
+                "changed": result["changed"],
+                "method": result["method"],
+                "applied": result["applied"],
+                "candidates": result["candidates"],
+                "matched": result["matched"],
+                "degraded": result["degraded"],
+                "model": result["model"],
+            }
         )
 
     def _ask(self, body: dict) -> None:

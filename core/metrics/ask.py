@@ -33,31 +33,44 @@ import meetplan as meetplan_mod
 import mockdata as md
 import modelcfg
 import people as people_mod
+import polish as polish_mod
+import queryfix
 import rag as rag_mod
 
 # --------------------------------------------------------------------------
 # 指标匹配
 # --------------------------------------------------------------------------
 
-_ALIAS_INDEX: list[tuple[str, str]] = sorted(
-    ((alias, code) for code, meta in md.METRICS.items() for alias in meta["aliases"]),
-    key=lambda pair: len(pair[0]),
-    reverse=True,
-)
-
 
 def match_metrics(question: str) -> list[dict[str, Any]]:
-    """按别名长度从长到短匹配，命中就记录下来（支持一句话里多个指标）。"""
-    hits: list[dict[str, Any]] = []
-    consumed: list[str] = []
-    for alias, code in _ALIAS_INDEX:
-        if alias in question and code not in {h["code"] for h in hits}:
-            # 更长的别名已覆盖的片段不再重复计分
-            if any(alias in c for c in consumed):
-                continue
-            hits.append({"code": code, "alias": alias, "name": md.METRICS[code]["name"]})
-            consumed.append(alias)
-    return hits
+    """按别名长度从长到短匹配，命中就记录下来（支持一句话里多个指标）。
+
+    实现在 `queryfix.exact_hits`：「什么算命中」只能有一处定义，否则
+    「优化提问」和「问数」会对同一句话给出不同结论 —— 前者说改好了，
+    后者仍然匹配不到，是最难查的那种不一致。
+    """
+    return [
+        {"code": code, "alias": alias, "name": md.METRICS[code]["name"]}
+        for code, alias in queryfix.exact_hits(question)
+    ]
+
+
+def _should_autofix(question: str) -> bool:
+    """这句话值不值得为它多花一次模型改写。
+
+    只在「指标一个都没命中」之后被问到，所以要判断的其实是另一件事：
+    这句话像不像在问数据。寒暄、让人干活、问某个事项办到哪了 —— 这三类
+    知识库能立刻接住，硬让模型改写只会白等几秒，还可能把不该走指标的问题
+    拽回指标，答出一个看着正常、实际答非所问的数。
+    """
+    text = str(question or "").strip()
+    if len(text) < 3 or len(text) > 120:
+        return False
+    if chitchat_mod.kind(text):
+        return False
+    if _wants_matter(text):
+        return False
+    return polish_mod.looks_like_data_question(text)
 
 
 # --------------------------------------------------------------------------
@@ -558,6 +571,40 @@ def ask(
             # 只在实时那一条路径上提示的话，刷新一下就好像什么都没发生过。
             if extra.get("degraded"):
                 result["degraded"] = extra["degraded"]
+            # 按近似匹配答的时候必须自己说出来。用户写的是「民生十事」，
+            # 答案讲的是「民生实事」—— 不说明的话，他会以为系统把指标名抄错了，
+            # 或者更糟：以为这两个是同一个口径。
+            if extra.get("fuzzy"):
+                near = extra["fuzzy"]
+                result["interpreted_as"] = {
+                    "code": near.get("code"),
+                    "name": near.get("name"),
+                    "matched": near.get("matched"),
+                    "score": near.get("score"),
+                }
+                result.setdefault("notes", []).insert(
+                    0,
+                    f"没有精确命中的指标，按最接近的「{near.get('name')}」理解"
+                    f"（原文写的是「{near.get('matched')}」，相似度 {near.get('score')}）。"
+                    "如果问的不是它，换个说法再问一次。",
+                )
+            # 自动改写同理，而且更要说：用户问的是「老百姓喝水的水质达标率」，
+            # 答案讲的是「饮用水水质」—— 中间那句改写如果不摆出来，他会以为
+            # 系统换了个题目回答。改写后的问句原文照登，方便他核对改了哪儿。
+            if extra.get("rewrite"):
+                rw = extra["rewrite"]
+                result["rewrite"] = {
+                    "from": question,
+                    "to": rw["text"],
+                    "names": rw["names"],
+                    "model": rw.get("model"),
+                    "via": rw.get("via"),
+                }
+                result.setdefault("notes", []).insert(
+                    0,
+                    f"没有精确命中的指标，已把这句话理解为「{rw['text']}」，"
+                    f"按「{'、'.join(rw['names'])}」回答。如果理解错了，换个说法再问一次。",
+                )
             for i, item in enumerate(result.get("trace") or [], 1):
                 item["step"] = i
 
@@ -765,6 +812,85 @@ def _ask_impl(
             intent = {"intent": "value"}
             period_info = {"period": None, "months": 1, "why": ""}
 
+    # 错字/简称的兜底。精确匹配是「别名逐字出现」，差一个字就整句落空，
+    # 接着会被知识库、资料库一路拒到「没有对应的指标」—— 而用户问的可能
+    # 就是字典里那个指标（「民生十事」「公共预算输入」）。
+    #
+    # 只在**高度确信**时才直接采用（≥75% 的字对得上，且明显强于第二名），
+    # 并且答案里会如实注明「按最接近的 X 理解」。不确定的一律留到拒答里
+    # 当候选让用户点 —— 猜一个错的指标比说没听懂更糟，因为它看上去像答对了。
+    fuzzy: dict[str, Any] | None = None
+    if not hits:
+        candidates = queryfix.fuzzy_suggest(question)
+        if candidates and queryfix.is_strong(candidates[0], candidates[1:2]):
+            fuzzy = candidates[0]
+            hits = [
+                {
+                    "code": str(fuzzy["code"]),
+                    "alias": f"近似「{fuzzy['matched']}」",
+                    "name": str(fuzzy["name"]),
+                }
+            ]
+            # 意图和期次要按兜底后的指标重算：模型那条路给的是空计划，
+            # 沿用它会让「哪个镇街…」这种错字问句退化成单值问答。
+            intent = parse_intent(question, hits)
+            period_info = parse_period(question, today)
+            trace.append(
+                {
+                    "step": len(trace) + 1,
+                    "tool": "metric_fuzzy",
+                    "call": f"fuzzy_suggest(question={question!r})",
+                    "status": "ok",
+                    "summary": f"精确未命中，按近似匹配取「{fuzzy['name']}」"
+                    f"（问句片段「{fuzzy['matched']}」，相似度 {fuzzy['score']}）",
+                }
+            )
+            if out is not None:
+                out["fuzzy"] = fuzzy
+
+    # 自动理解：精确和近似都没救回来时，让模型按指标目录把那句话改写一遍再匹配。
+    #
+    # 这一步是「提问整理」按钮的替代 —— 同一件事，但不需要用户先点一下再发。
+    # 位置卡在这里，是因为它只该发生在「本来就要拒答」的那条路上：命中指标的
+    # 问句一次模型调用都不会多花，正常问答的延迟和 token 一分不变。
+    #
+    # 不看 `out["fuzzy"]`：近似匹配可能给了一批候选但都不够确信，那种问句
+    # 恰恰最该让模型看一眼（「民生项木」四个字里错一个，字面像，语义也像）。
+    rewrite: dict[str, Any] | None = None
+    if not hits and _should_autofix(question):
+        if on_step:
+            # 模型改写要两三秒。不报进度的话，界面会从「已接入会话」静默到出答案，
+            # 看起来像卡死 —— 而这一刻用户什么都没做错。
+            on_step("rewrite", {"phase": "start"})
+        try:
+            rewrite = polish_mod.autofix(question, model_ref)
+        except Exception:  # noqa: BLE001 自动理解是加分项，不能把这一问搞挂
+            rewrite = None
+        if rewrite:
+            hits = [
+                {"code": code, "alias": alias, "name": md.METRICS[code]["name"]}
+                for code, alias in zip(rewrite["codes"], rewrite["aliases"])
+            ]
+            # 意图和期次按改写后的问句重算：改写正是为了把「咋样」「多少来着」
+            # 变成可解析的问法，沿用它之前那套空计划等于白改。
+            intent = parse_intent(rewrite["text"], hits)
+            period_info = parse_period(rewrite["text"], today)
+            trace.append(
+                {
+                    "step": len(trace) + 1,
+                    "tool": "llm.rewrite",
+                    "call": f"autofix(question={question!r})",
+                    "status": "ok",
+                    "summary": f"精确与近似均未命中，改写为「{rewrite['text']}」后"
+                    f"命中 {'、'.join(rewrite['names'])}（{rewrite['via']}）",
+                }
+            )
+            if out is not None:
+                out["rewrite"] = rewrite
+        elif on_step:
+            # 没救回来也要收尾：否则前端那条「正在理解…」会一直挂到答案出来
+            on_step("rewrite", {"phase": "end", "ok": False})
+
     # 阶段回调：给 SSE 用。这里是「意图已解析、即将取数」的唯一汇合点，
     # 两条分支（模型/规则）都汇到这里，不会漏推。
     if on_step:
@@ -886,6 +1012,23 @@ def _ask_impl(
                 "summary": f"已注册 {len(md.METRICS)} 个指标，均未命中",
             }
         )
+        # 近似候选排在最前，并附一句「可以这样问」——用户写错一个字时，
+        # 他要的不是「11 个指标自己挑」，而是「你说的是不是这个」。
+        # 只给名字不给依据的话，用户判断不了该不该点，所以带上 matched。
+        near = queryfix.fuzzy_suggest(question, limit=3)
+        did_you_mean = [
+            {
+                "code": str(item["code"]),
+                "name": str(item["name"]),
+                "department": md.METRICS[str(item["code"])]["department"],
+                "matched": str(item["matched"]),
+                "score": item["score"],
+                # 把问句里那段错字换掉，就是一次可以直接发出去的追问
+                "ask": question.replace(str(item["matched"]), str(item["alias"]), 1),
+            }
+            for item in near
+        ]
+        near_codes = {item["code"] for item in did_you_mean}
         return {
             "refused": True,
             "question": question,
@@ -894,8 +1037,12 @@ def _ask_impl(
             # 说清「两处都查过了」，否则用户会以为系统只会答指标题
             "detail": f"{scope_txt}。两处都没有的问题我不会凭印象估算——"
                       "请先在指标中台注册，或在台账、会议记录里补上原始记录。",
-            "suggestions": [{"code": c, "name": m["name"], "department": m["department"]}
-                            for c, m in md.METRICS.items()],
+            "did_you_mean": did_you_mean,
+            "suggestions": did_you_mean + [
+                {"code": c, "name": m["name"], "department": m["department"]}
+                for c, m in md.METRICS.items()
+                if c not in near_codes
+            ],
             "trace": trace,
             "sources": [],
             "notes": [],
@@ -1154,17 +1301,36 @@ def _ask_impl(
     }
     if intent["intent"] == "trend":
         series = md.query_metric(primary, None, months, today)
-        payload["series"] = series["series"]
-        payload["series_title"] = f"{result['name']} · 近 {months} 个月"
-        trace.append(
-            {
-                "step": 5,
-                "tool": "query_metric",
-                "call": f"query_metric(code={primary!r}, months={months})",
-                "status": "ok",
-                "summary": f"返回 {len(series['series'])} 期序列",
-            }
-        )
+        if series.get("real_override"):
+            # 和指标抽屉同一条规矩：值来自统计公报、序列还是演示数据，两者不同期。
+            # 把 2025 年全年 1746.3 和一条末点 1428.7 的月度曲线摆在一起，
+            # 谁看都会读成"年内掉了 300 亿"。没有真实月度序列就直说没有。
+            plabel = str(result["period_label"]).replace("（", "").replace("）", "")
+            payload["notes"].append(
+                f"{result['name']}目前只接入 {plabel}的统计公报值，没有可比的月度序列，"
+                "走势图暂不提供 —— 演示用的月度数据与它不是同一期，画出来会被误读。"
+            )
+            trace.append(
+                {
+                    "step": 5,
+                    "tool": "query_metric",
+                    "call": f"query_metric(code={primary!r}, months={months})",
+                    "status": "skipped",
+                    "summary": "真实年度值，无同期月度序列，不给走势",
+                }
+            )
+        else:
+            payload["series"] = series["series"]
+            payload["series_title"] = f"{result['name']} · 近 {months} 个月"
+            trace.append(
+                {
+                    "step": 5,
+                    "tool": "query_metric",
+                    "call": f"query_metric(code={primary!r}, months={months})",
+                    "status": "ok",
+                    "summary": f"返回 {len(series['series'])} 期序列",
+                }
+            )
     return payload
 
 

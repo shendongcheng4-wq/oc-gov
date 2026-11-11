@@ -656,6 +656,11 @@ html.ask-fold .ask-rail{display:flex}
   border:1px solid var(--line-3);border-radius:6px;padding:3px 8px;cursor:pointer
 }
 .sug-list button:hover{background:var(--hover-2)}
+/* 「是不是想问」：点一下直接重问，所以字要比下面的口径胶囊更实；
+   括号里的「你写的是…」是依据，不能比结论还抢眼。 */
+.sug.dym .sug-list button{font-weight:600;color:var(--ink);background:var(--surface-2)}
+.sug.dym .sug-list button:hover{background:var(--hover);border-color:var(--brand)}
+.sug.dym .sug-list i{font-style:normal;font-weight:400;color:var(--faint);margin-left:3px}
 /* 首屏示例：新用户进来不该只对着空输入框。
    左对齐 + 限宽成一列块状：句子长短不一，居中对齐会让每行参差得像散落的字。 */
 .ask-examples{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-start;margin:13px auto 0;max-width:430px}
@@ -873,6 +878,7 @@ html.ask-fold .ask-rail{display:flex}
   font-size:10px;line-height:1;color:var(--faint);align-self:center;height:11px;
   padding-left:6px;margin-left:1px;border-left:1px solid var(--line)
 }
+/* 「整理提问」按钮撤掉后，这里不再需要 .polish 的 busy 态。 */
 .attach-list{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:7px}
 .att-chip{display:inline-flex;align-items:center;gap:6px;max-width:240px;
   background:var(--surface-2);border:1px solid var(--line);border-radius:20px;
@@ -919,6 +925,14 @@ html.ask-fold .ask-rail{display:flex}
 .kpi .yoy{font-weight:700}
 .kpi .yoy.up{color:var(--up)} .kpi .yoy.down{color:var(--down)} .kpi .yoy.flat{color:var(--muted)}
 .kpi .note{color:var(--faint);font-size:11px}
+/* 期次徽标：只在「这张卡不是当期数」时出现（如 GDP 是 2025 年公报值，
+   页头却是 2026 年 1—10 月）。不给卡片标期次，唯一那条真实值就会
+   被当成当期数读 —— 这是展示层最容易犯、也最难被发现的错。 */
+.kpi .per{
+  margin-left:auto;flex:0 0 auto;font-size:10px;font-weight:600;letter-spacing:0;
+  color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-line);
+  padding:0 5px;border-radius:4px;white-space:nowrap
+}
 
 .grid{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr);gap:10px;flex:1;min-height:0}
 .card{
@@ -1097,6 +1111,12 @@ html.ask-fold .ask-rail{display:flex}
 .kv dt{color:var(--muted)}
 .kv dd{margin:0;color:var(--ink);font-weight:600;word-break:break-all}
 .dr-chart{margin-top:6px;background:var(--surface-4);border:1px solid var(--line);border-radius:8px;padding:10px 8px 4px}
+/* 没有走势可比时，用一句话顶替图表的位置。
+   空着会让人以为「图没加载出来」，画一条不同期的假线更糟。 */
+.dr-note{
+  margin-top:6px;background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:8px;
+  padding:9px 11px;font-size:11.5px;line-height:1.7;color:var(--ink-2)
+}
 
 /* toast */
 .toast{
@@ -2318,6 +2338,10 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
           <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.5-8.5a3.5 3.5 0 0 1 4.9 4.9l-8.5 8.5a2 2 0 0 1-2.8-2.8l7.7-7.7"/></svg>
           <span>附材料</span><span class="att-scope">仅本轮</span>
         </button>
+        <!-- 这里以前有个「整理提问」按钮：把口语、错别字按指标字典改写一遍再发。
+             现在这件事由后端在「一个指标都没命中」时自动做（ask._should_autofix），
+             按钮撤掉不是因为功能不重要，而是因为把系统该做的判断派给用户 ——
+             没人愿意先点一下再问，点错了还看不出改了什么。 -->
         <textarea id="q" rows="3" placeholder="请输入您的问题…" autocomplete="off"></textarea>
         <button id="go">发送</button>
         <input type="file" id="attachInput" multiple hidden>
@@ -2836,13 +2860,24 @@ function hydrateCharts(root) {
 }
 
 /* ---------- 渲染 ---------- */
+/* 「2025年（全年）」→「2025年全年」：卡片头只放得下一行小字 */
+function shortPeriod(s) {
+  return String(s || "").replace(/[（）()]/g, "");
+}
+
 function kpiCard(k, opts = {}) {
+  // 只给「不是当期」的卡打期次徽标：四张都标一遍「2026年10月」是噪音，
+  // 但 GDP 那张是 2025 年全年公报值，页头写的是 2026 年 1—10 月，必须标。
+  const per = k.period_is_current === false
+    ? `<span class="per" title="这张卡是 ${esc(k.period_label)} 的数据，不是页头那一期">${esc(shortPeriod(k.period_label))}</span>`
+    : "";
   return `
     <div class="kpi ${opts.cls || ""}" data-metric="${esc(k.code)}">
       ${opts.extra || ""}
       <div class="k">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
         ${esc(k.name)}
+        ${per}
       </div>
       <div class="v mono">${esc(k.display)}<small class="${k.unit === "%" ? "pct" : ""}">${esc(k.unit)}</small></div>
       <div class="f">
@@ -3542,6 +3577,17 @@ function aiBubble(r, ref) {
        </div>`
       : "";
 
+  // 「是不是想问」：字面没命中但足够像的那几个指标。这里用 data-ask 直接
+  // 重问一句，而不是像下面那样打开口径抽屉 —— 用户已经把指标名写错了一次，
+  // 此刻他要的是「点一下就能问对」，不是先读一遍口径再自己组织问句。
+  const dym = (r.did_you_mean || []).slice(0, 3);
+  const dymBlock = dym.length
+    ? `<div class="sug dym"><div class="sug-h">没找到精确命中的指标，是不是想问：</div>`
+      + `<div class="sug-list">${dym.map((s) => `<button data-ask="${esc(s.ask || s.name || "")}" `
+        + `title="按「${esc(s.name || "")}」重问一句">${esc(s.name || "")}`
+        + `<i>（你写的是「${esc(s.matched || "")}」）</i></button>`).join("")}</div></div>`
+    : "";
+
   // 拒答时后端把 11 个已注册指标全列出来。点了看口径抽屉 —— 那里有「可用提问方式」，
   // 比替用户猜一个问题更有用。
   const sugs = (r.suggestions || []).map((s) => {
@@ -3668,6 +3714,7 @@ function aiBubble(r, ref) {
       ${meetBlock(r.meet_draft, ref)}
       ${kbBlock(r.knowledge)}
       ${ragBlock(r.rag)}
+      ${dymBlock}
       ${sugBlock}
       ${notesBlock}
       ${evBlock}
@@ -4255,6 +4302,12 @@ async function ask(question, opts = {}) {
       if (finished) return;
       const tail = f.phase === "start" ? "正在看材料" : (f.ok ? "已给出意见" : "未给出意见");
       stage(`专家解读 · ${f.name} ${tail}（${f.index}/${f.total}）`);
+    } else if (f.type === "rewrite") {
+      // 指标一个都没命中时，后端会让模型把这句问句改写一遍再匹配（auto 理解）。
+      // 这一步是两三秒的模型调用，不报进度的话界面会从「已接入会话」静默到出答案。
+      if (finished) return;
+      if (f.phase === "start") stage("这句话没直接对上指标，正在换个说法理解…");
+      else if (f.ok === false) stage("改写后仍没对上指标，继续查知识库…");
     } else if (f.type === "done") {
       finished = true;
       const h = live();
@@ -4878,6 +4931,13 @@ function historyView(m, threadId) {
     intent: meta.intent || "",
     // 拒答清单同理：刷新就消失比一开始不给更让人困惑
     suggestions: meta.suggestions || [],
+    // 「是不是想问」那几个胶囊：用户已经写错一次字了，刷新后再让他自己
+    // 猜怎么改，等于这个提示白给
+    did_you_mean: meta.did_you_mean || [],
+    interpreted_as: meta.interpreted_as || null,
+    // 自动改写同理：答案讲的是「空气质量优良天数比例」，问的是「最近空气好不好」。
+    // 不把「改写成了什么」一起回放，回看时这一轮就像答了另一个问题
+    rewrite: meta.rewrite || null,
     // 专家解读也要回放：现在专家是「对话中」的常驻角色，回看时那段凭空消失会很怪
     expert_views: meta.expert_views || [],
     // 知识库条目同理：切回历史对话时「依据」不能消失，否则答案就成了没出处的断言
@@ -5882,6 +5942,15 @@ async function showMetric(code) {
     ? `${d.value}%`
     : esc(String(d.value).replace(/\B(?=(\d{3})+(?!\d))/g, ","));
   const unitHtml = isPct ? "" : `<span class="u">${esc(d.unit)}</span>`;
+  // 后端在「真实年度值」上返回空序列 + 一句原因（见 workbench.metric_detail）：
+  // 值来自公报、序列是演示数据，两者不同期，画在一起就是假曲线。
+  const seriesHtml = series.length
+    ? `<div class="dr-chart">${spark(series.map((p) => p.value), "brand")}
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--faint);padding:2px 6px 4px">
+        <span>${esc(series[0]?.label || "")}</span><span>${esc(series[series.length - 1]?.label || "")}</span>
+      </div>
+    </div>`
+    : `<div class="dr-note">${esc(d.series_note || "这个指标暂无走势序列。")}</div>`;
   const html = `
     <div class="dr-valor">
       <span class="v mono">${valor}</span>
@@ -5890,11 +5959,7 @@ async function showMetric(code) {
     <div class="dr-yoy ${esc(d.yoy_tone)}">${esc(d.yoy_text)}</div>
     ${d.target_note ? `<div style="font-size:12px;color:var(--muted);margin:-10px 0 0">${esc(d.target_note)}</div>` : ""}
 
-    <div class="dr-chart">${spark(series.map((p) => p.value), "brand")}
-      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--faint);padding:2px 6px 4px">
-        <span>${esc(series[0]?.label || "")}</span><span>${esc(series[series.length - 1]?.label || "")}</span>
-      </div>
-    </div>
+    ${seriesHtml}
 
     <div class="dr-sec">
       <h4>口径定义</h4>
@@ -10483,6 +10548,11 @@ $("#attachInput").onchange = (e) => {
   // 清空才认第二次选同一个文件（否则浏览器认为值没变，不发 change）
   e.target.value = "";
 };
+
+/* 「整理提问」按钮已撤掉：改写改到后端了，只在指标一个都没命中时自动触发
+   （ask._should_autofix）。前端只负责把过程说出来 —— 那两三秒不报进度，
+   界面会从「已接入会话」一直静默到出答案，看着像卡死。 */
+
 
 /* 会话内查找的四个入口：放大镜、Ctrl+F、Enter/Shift+Enter、Esc */
 $("#findBtn").onclick = () => ($("#findBar").hidden ? findOpen() : findClose());

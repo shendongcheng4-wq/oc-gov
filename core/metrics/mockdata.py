@@ -672,6 +672,11 @@ def query_metric(
     # 真实值覆盖：只覆盖「当期大数」（value / 增速 / source），
     # 走势 series 保持 mock（真实年度值没有月度走势，历史曲线仍用演示序列）。
     # 历史期次（period 明确指定且非最新）不覆盖 —— 那是演示序列的地盘。
+    #
+    # `real_override` 必须带出去：覆盖之后 value 是 2025 年公报值，series 仍停在
+    # 2026-10，两者不同期、不同口径。调用方（指标抽屉、答案气泡）拿到这个标记
+    # 才知道「这条曲线不能挨着这个数画」，否则 1746.3 底下画一条末点 1428.7 的线，
+    # 看上去就是掉了 300 亿。
     try:
         import realdata  # noqa: PLC0415
 
@@ -693,6 +698,8 @@ def query_metric(
         rs = realdata.real_source(code)
         if rs:
             result["source"] = rs
+        # 值来自公报、序列仍是演示：这条标记给展示层判定用，不参与任何计算。
+        result["real_override"] = True
     return result
 
 

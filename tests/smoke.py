@@ -102,6 +102,25 @@ def test_data_layer() -> None:
     check("总览带披露日期", bool(overview.get("disclosed_on")), "")
     check("总览指标数与字典一致", overview["metric_count"] == len(METRICS), f"{overview['metric_count']} vs {len(METRICS)}")
 
+    # 期次：页头是当期（2026年1—10月），但 GDP 卡取的是 2025 年公报全年值。
+    # 卡片不带期次，这个数就会被当成当期数读 —— 展示层最容易犯的错。
+    for k in kpis:
+        check(f"KPI {k['code']} 带期次", bool(k.get("period_label")), str(k.get("period_label")))
+        check(f"KPI {k['code']} 标出是否当期", isinstance(k.get("period_is_current"), bool), str(k.get("period_is_current")))
+    gdp = next(k for k in kpis if k["code"] == "GDP_TOTAL")
+    check("GDP 卡不是当期数", gdp["period_is_current"] is False, str(gdp.get("period_label")))
+    check("GDP 卡期次写明全年", "全年" in gdp["period_label"], gdp["period_label"])
+    check("其余 KPI 是当期数", all(k["period_is_current"] for k in kpis if k["code"] != "GDP_TOTAL"), "")
+
+    # 真实年度值不能配演示月度走势：两者不同期，画在一起就是「1746 跌到 1428」
+    d_gdp = wb.metric_detail("GDP_TOTAL")
+    check("真实年度值不给演示序列", d_gdp["series"] == [], f"{len(d_gdp['series'])} 期")
+    check("真实年度值标记 real_override", d_gdp.get("real_override") is True, str(d_gdp.get("real_override")))
+    check("无序列时给出原因", bool(d_gdp.get("series_note")), str(d_gdp.get("series_note")))
+    d_gy = wb.metric_detail("GY_VA_GROWTH")
+    check("演示指标仍有走势", len(d_gy["series"]) >= 2, f"{len(d_gy['series'])} 期")
+    check("演示指标不标覆盖", d_gy.get("real_override") is False, str(d_gy.get("real_override")))
+
 
 def test_workspace() -> None:
     """个人工作台：关注卡片与罗盘同源，动态每条可追溯到台账或接口；
@@ -1900,6 +1919,180 @@ def test_chitchat() -> None:
           str(r2.get("notes")))
 
 
+def test_queryfix() -> None:
+    """提问优化：错字能不能救回指标，改写会不会把数字弄丢。
+
+    两侧都要钉：
+    1. 救得回来 —— 「民生十事」「公共预算输入」这类差一个字就问不下去的，
+       以前会一路拒到「没有对应指标」；
+    2. 不能乱救 —— 差得远的必须给空，宁可说没听懂，也不能猜一个沾边的指标。
+
+    第三件事是改写的红线：模型把「1—9 月」改成「前三季度」、或者好心补一个
+    「2026 年」，都必须被拒 —— 这两种输出读起来都很顺，肉眼发现不了。
+    """
+    print("\n[18c] 提问优化（错字归一 + 改写校验）")
+    import ask as ask_mod
+    import polish as polish_mod
+    import queryfix as qf
+
+    # 「什么算命中」只有一处定义：问数和整理必须给出同样的结论
+    for q in ("9 月规上工业增加值增速多少", "12345 办结率", "地方生产总值",
+              "民生十事完成了几项", "老百姓喝水的水质达标率", "固投增速"):
+        left = [(h["code"], h["alias"]) for h in ask_mod.match_metrics(q)]
+        check(f"命中判定与问数一致：{q}", left == qf.exact_hits(q),
+              f"{left} vs {qf.exact_hits(q)}")
+
+    for q, code in (("民生十事完成了几项", "LIVELIHOOD_DONE"),
+                    ("公共预算输入增长多少", "BUDGET_REV"),
+                    ("民生项木进展", "LIVELIHOOD_DONE")):
+        cands = qf.fuzzy_suggest(q)
+        got = cands[0]["code"] if cands else ""
+        check(f"错字救回指标：{q}", got == code, str(cands[:1]))
+        check(f"置信度够高才直接采用：{q}",
+              qf.is_strong(cands[0] if cands else None), str(cands[:1]))
+
+    for q in ("老百姓喝水的水质达标率", "全镇项目推进情况", "这个数跟去年比怎么样"):
+        check(f"差得远的不许猜：{q}", qf.fuzzy_suggest(q) == [], str(qf.fuzzy_suggest(q)))
+
+    # 整段替换，不能只换半截（「民生项木」→「民生项」会剩下一个「木」）
+    text, changes = qf.canonicalize("民生项木进展")
+    check("错字整段替换", text == "民生项目进展", repr(text))
+    check("替换留痕", bool(changes) and changes[0]["from"] == "民生项木", str(changes))
+
+    # 数字守恒：三类都必须拒
+    ok, _ = polish_mod._accept("1—9月规上工业增速是多少", "1—9月规上工业增加值增速是多少")
+    check("改写保留数字则通过", ok, "")
+    for bad in ("前三季度规上工业增加值增速是多少",       # 把「1—9 月」换掉了
+                "2026年1—9月规上工业增加值增速是多少",   # 补了原文没有的年份
+                "1—9月规上工业增速是多少？还是多少？"):    # 自问自答
+        ok2, why = polish_mod._accept("1—9月规上工业增速是多少", bad)
+        check(f"改写拒绝：{bad[:12]}", ok2 is False and bool(why), why)
+
+    # 无模型：规则整理要能干活，且必须说明「没走模型」
+    old_available = polish_mod.modelcfg.available
+    polish_mod.modelcfg.available = lambda: False
+    try:
+        r = polish_mod.polish("民生十事完成了几项")
+        check("无模型时退回规则整理", r["method"] == "rules", str(r["method"]))
+        check("规则整理改对了错字", "民生实事" in r["text"], r["text"])
+        check("降级要说出来",
+              bool(r["degraded"]) and "模型" in str(r["degraded"].get("reason")),
+              str(r["degraded"]))
+    finally:
+        polish_mod.modelcfg.available = old_available
+
+    # 有模型但输出不合规：丢弃、退回规则、原因带出去（不许静默采用坏改写）
+    old_chat = polish_mod.llmclient.chat_text
+    polish_mod.modelcfg.available = lambda: True
+    polish_mod.llmclient.chat_text = lambda *a, **k: {
+        "text": "前三季度规上工业增加值是多少", "model": "fake",
+    }
+    try:
+        r2 = polish_mod.polish("1—9月规上工业增长值是多少")
+        check("坏改写被丢弃", r2["method"] == "rules", str(r2["method"]))
+        check("坏改写要说原因", str((r2["degraded"] or {}).get("kind")) == "rejected",
+              str(r2["degraded"]))
+    finally:
+        polish_mod.llmclient.chat_text = old_chat
+        polish_mod.modelcfg.available = old_available
+
+    # 端到端走一遍 ask（关掉模型，走规则解析 → 错字兜底 → 取数）。
+    # 用真实模型的话这条用例会拖着 27B 跑几秒，而且答案随模型状态变。
+    old_llm = ask_mod.llm.available
+    ask_mod.llm.available = lambda: False
+    try:
+        r3 = ask_mod.ask("民生十事完成了几项")
+        check("错字问句不再拒答", r3.get("refused") is False, str(r3.get("headline"))[:40])
+        check("按近似指标作答",
+              (r3.get("interpreted_as") or {}).get("code") == "LIVELIHOOD_DONE",
+              str(r3.get("interpreted_as")))
+        check("近似理解要说出来", any("最接近" in n for n in (r3.get("notes") or [])),
+              str(r3.get("notes"))[:80])
+
+        # 置信度不够时不猜，把候选摆出来。这里把判定压成 False 来模拟那种问句 ——
+        # 真去构造一句「同时像两个指标」的错字句太脆，判据本身另有单测。
+        # 用「民生项木」而不是「民生十事」：后者会被知识库的口径条目接走
+        # （二字组能擦到边），根本走不到拒答那一步 —— 兜底候选只在最后一道
+        # 关口出现，挑问句时得挑一个知识库也认不出的。
+        old_strong = qf.is_strong
+        qf.is_strong = lambda *a, **k: False
+        try:
+            r4 = ask_mod.ask("民生项木进展")
+            dym = r4.get("did_you_mean") or []
+            check("不够确信就摆候选", bool(dym), str(dym)[:80])
+            check("候选带一句能直接发的问法",
+                  bool(dym) and "民生项目" in str(dym[0].get("ask")), str(dym[:1]))
+            check("候选排在清单最前",
+                  bool(dym) and (r4.get("suggestions") or [{}])[0].get("code") == dym[0]["code"],
+                  "")
+        finally:
+            qf.is_strong = old_strong
+    finally:
+        ask_mod.llm.available = old_llm
+
+    # 自动理解：不再让用户先点「整理提问」再发。改写只该发生在「本来要拒答」
+    # 的那条路上 —— 命中指标的问句一次模型调用都不许多花。
+    check("数据类问句才自动改写：民生十事", ask_mod._should_autofix("民生十事完成了几项"), "")
+    check("数据类问句才自动改写：口语换词",
+          ask_mod._should_autofix("老百姓喝水的水质达标率"), "")
+    check("寒暄不自动改写", ask_mod._should_autofix("你好") is False, "")
+    check("问事项进展的不自动改写",
+          ask_mod._should_autofix("环保局那件事办到哪了") is False, "")
+    check("问口径的不自动改写",
+          ask_mod._should_autofix("这个指标的口径是怎么定的") is False, "")
+    check("超长句不自动改写", ask_mod._should_autofix("多少" + "啊" * 200) is False, "")
+
+    # 改写复匹配：模型把「喝水水质」说成字典里的指标才认，说不上就返回 None。
+    # 这里验的是接线和闸门，不是模型的语义判断 —— 后者由真实模型决定。
+    old_avail2 = polish_mod.modelcfg.available
+    old_chat2 = polish_mod.llmclient.chat_text
+    polish_mod.modelcfg.available = lambda: True
+    try:
+        polish_mod.llmclient.chat_text = lambda *a, **k: {
+            "text": "空气质量优良天数比例是多少", "model": "fake",
+        }
+        fixed = polish_mod.autofix("老百姓喝水的水质达标率")
+        check("改写后命中指标才返回答案", bool(fixed) and fixed["codes"] == ["AQI_GOOD_DAYS"],
+              str(fixed)[:120])
+
+        polish_mod.llmclient.chat_text = lambda *a, **k: {
+            "text": "这条街上哪家饭馆好吃", "model": "fake",
+        }
+        check("改写后仍不命中就返回 None",
+              polish_mod.autofix("老百姓喝水的水质达标率") is None, "")
+    finally:
+        polish_mod.llmclient.chat_text = old_chat2
+        polish_mod.modelcfg.available = old_avail2
+
+    # 端到端：模型改写救回一句规则救不了的话，答案要自己说清「按什么理解的」
+    old_llm2 = ask_mod.llm.available
+    ask_mod.llm.available = lambda: False
+    polish_mod.modelcfg.available = lambda: True
+    polish_mod.llmclient.chat_text = lambda *a, **k: {
+        "text": "空气质量优良天数比例是多少", "model": "fake",
+    }
+    try:
+        r5 = ask_mod.ask("老百姓喝水的水质达标率")
+        check("自动改写后不再拒答", r5.get("refused") is False, str(r5.get("headline"))[:40])
+        check("改写原文带出去可核对",
+              (r5.get("rewrite") or {}).get("to") == "空气质量优良天数比例是多少",
+              str(r5.get("rewrite"))[:80])
+        check("改写理解要说出来",
+              any("理解为" in n for n in (r5.get("notes") or [])), str(r5.get("notes"))[:90])
+        check("调用链路留了改写这一步",
+              any(t.get("tool") == "llm.rewrite" for t in (r5.get("trace") or [])), "")
+    finally:
+        ask_mod.llm.available = old_llm2
+        polish_mod.llmclient.chat_text = old_chat2
+        polish_mod.modelcfg.available = old_avail2
+
+    # 界面：按钮撤了，别让它再长回来 —— 系统该做的判断不该派给用户
+    html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("输入框不再有整理按钮", 'id="polishBtn"' not in html, "")
+    check("改写进度会报到界面", 'f.type === "rewrite"' in html, "")
+    check("拒答能渲染是不是想问", "did_you_mean" in html, "")
+
+
 def test_attach_entry() -> None:
     """附件：从「选文件」到「真进 prompt」的整条链路。
 
@@ -2848,6 +3041,11 @@ def test_frontend_theme() -> None:
     check("日程 tone 有防撞前缀", ".cal-card.tk-brand" in body and ".cal-card.brand{" not in body, "")
     check("日程按钮已接到弹窗", 'tool.dataset.tool === "cal"' in html, "")
 
+    # 期次徽标：卡着自己交代期次，别让 2025 年全年值顶着 2026 年的页头
+    check("KPI 卡会渲染期次徽标", "period_is_current" in html and 'class="per"' in html, "")
+    # 真实年度值不画演示曲线，改用说明块
+    check("抽屉无序列时有说明块", ".dr-note{" in body and "series_note" in html, "")
+
 
 def test_write_policy() -> None:
     """写接口登记表 = 闸门的唯一依据，所以它必须覆盖所有写路由。
@@ -2883,7 +3081,8 @@ def test_write_policy() -> None:
 
     # 演示态的四条命脉必须是 PUBLIC：这些被收紧成「要登录」，页面打开就不能用，
     # 而这类回归不会有任何报错，只会让人以为「坏了」。
-    demo = [("POST", "/api/ask"), ("POST", "/api/ask/stream"), ("POST", "/api/threads"),
+    demo = [("POST", "/api/ask"), ("POST", "/api/ask/stream"),
+            ("POST", "/api/ask/polish"), ("POST", "/api/threads"),
             ("POST", "/api/workspace/watch"), ("POST", "/api/saved")]
     bad = [f"{m} {p}" for m, p in demo if srv._match_policy(m, p) != (True, None)]
     check("演示态入口保持匿名可用", not bad, "、".join(bad))
@@ -4635,6 +4834,7 @@ def main() -> int:
     test_saved()
     test_meetplan()
     test_chitchat()
+    test_queryfix()
     test_attach_entry()
     test_book_parse()
     test_docx_parse()

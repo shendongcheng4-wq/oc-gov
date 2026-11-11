@@ -73,6 +73,7 @@ def _target_note(result: dict[str, Any]) -> str | None:
 
 def kpis(codes: list[str] | None = None) -> list[dict[str, Any]]:
     out = []
+    latest = md.latest_available()
     # 注意用 is None 判：传空列表是"这个人一个都不关注"，
     # 写成 `codes or KPI_CODES` 会把空列表当成没传，清空后又冒出四张罗盘卡。
     for code in (KPI_CODES if codes is None else codes):
@@ -96,6 +97,10 @@ def kpis(codes: list[str] | None = None) -> list[dict[str, Any]]:
                 "note": note,
                 "note_why": metric.get("target_note"),
                 "period_label": r["period_label"],
+                # 页头写的是「2026年1—10月」，但 GDP 卡的数是 2025 年全年公报值。
+                # 卡片必须自己交代期次，否则唯一一条真实值会被当成当期数读。
+                "period_is_current": r["period"] == latest,
+                "real_override": bool(r.get("real_override")),
                 "series": [p["value"] for p in r["series"]],
                 "source": {
                     "department": r["source"]["department"],
@@ -625,6 +630,20 @@ def metric_detail(code: str) -> dict[str, Any] | None:
     r = md.query_metric(code, None, 12)
     m = md.METRICS[code]
     yoy_text, yoy_tone, yoy_why = _fmt_yoy(r)
+    # 真实年度值不配演示走势：`query_metric` 覆盖后 value 是 2025 年公报值，
+    # series 仍停在演示序列的 2026-10。两条一起画，就成了「1746.3，正在跌到
+    # 1428.7」—— 一期真实的年度数和一条编出来的月度曲线，读者没法分辨哪半是真的。
+    # 这里干脆不给序列，用一句话说明为什么没有，比画一条假线诚实。
+    overridden = bool(r.get("real_override"))
+    series_note = ""
+    if overridden:
+        # 「2025年（全年）」→「2025年全年」：括号在句子里读着别扭
+        plabel = r["period_label"].replace("（", "").replace("）", "")
+        series_note = (
+            f"本指标目前只接入 {plabel}统计公报值，没有可比的月度序列。"
+            "演示用的月度曲线与它不是同一期、也不是同一口径，已隐藏 —— "
+            "把它和上面的年度数并排看，会被误当成年内下滑。"
+        )
     return {
         "code": code,
         "name": r["name"],
@@ -647,5 +666,7 @@ def metric_detail(code: str) -> dict[str, Any] | None:
             "disclosed_on": r["source"].get("published_at"),
             "api": m["api"],
         },
-        "series": r["series"],
+        "real_override": overridden,
+        "series": [] if overridden else r["series"],
+        "series_note": series_note,
     }
