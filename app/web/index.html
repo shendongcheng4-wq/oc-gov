@@ -3635,7 +3635,13 @@ function degradedNote(d) {
     return `<div class="deg"><b>这次没走模型</b>　${esc(d.reason || "已退回规则解析，结果可能不够准")}</div>`;
   }
   if (d.kind === "fallback") {
-    return `<div class="deg"><b>用了备用模型</b>　${esc(d.from || "首选模型")} 不可用，本次由 ${esc(d.model || "备用模型")} 解析</div>`;
+    // 带上首选模型失败的原因。只说「不可用」等于没说：用户不知道该去修什么，
+    // 事后翻记录也查不出是哪一步挂的（08:54 那次就只剩一句固定文案）。
+    // 后端把失败写成「ref: 原因」，而 ref 前面已经写了，这里掐掉免得重复。
+    let n = (d.errors && d.errors.length) ? String(d.errors[d.errors.length - 1]) : "";
+    if (d.from && n.indexOf(d.from + ": ") === 0) n = n.slice(d.from.length + 2);
+    const why = n ? `（${esc(n)}）` : "";
+    return `<div class="deg"><b>用了备用模型</b>　${esc(d.from || "首选模型")} 不可用${why}，本次由 ${esc(d.model || "备用模型")} 解析</div>`;
   }
   return `<div class="deg"><b>重试后成功</b>　模型第一次调用失败，已自动重试</div>`;
 }
@@ -4501,8 +4507,14 @@ function answerMd(r, question, stamp) {
 
   // 降级必须跟着导出走。带出去的答复要是没写"这不是模型给的"，比不带更危险
   if (r.degraded) {
+    // 导出的文本可能被拿去开会、转发。降级原因一起写进去，事后追查才有据。
+    let derr = (r.degraded.errors && r.degraded.errors.length)
+      ? String(r.degraded.errors[r.degraded.errors.length - 1]) : "";
+    if (r.degraded.from && derr.indexOf(r.degraded.from + ": ") === 0) {
+      derr = derr.slice(r.degraded.from.length + 2);
+    }
     const why = r.degraded.kind === "fallback"
-      ? `换用了备用模型${r.degraded.model ? `（${r.degraded.model}）` : ""}`
+      ? `换用了备用模型${r.degraded.model ? `（${r.degraded.model}）` : ""}${derr ? `，首选失败原因：${derr}` : ""}`
       : "退回规则解析";
     L.push(`> 注意：本轮${why}，答案质量可能受影响。`, "");
   }

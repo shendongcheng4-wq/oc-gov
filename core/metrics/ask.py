@@ -399,12 +399,17 @@ def _plan_question(
                     "kind": "retry",
                     "reason": f"模型第一次调用失败，重试后成功：{errors[-1][:160]}",
                     "model": ref,
+                    "errors": errors[:4],
                 }
+            # fallback 以前只写「首选模型不可用」，不写为什么不可用：那次现场
+            # 就是 08:54 的降级，事后翻会话记录只剩这一句固定文案，只能靠时间线
+            # 反推「模型还在加载」。降级必须留证据，否则等于没发生。
             return plan, "llm_fallback", {
                 "kind": "fallback",
                 "reason": "首选模型不可用，已改用备用模型解析",
                 "from": attempts[0],
                 "model": ref,
+                "errors": errors[:4],
             }
 
         if time.monotonic() - started > _PLAN_BUDGET:
