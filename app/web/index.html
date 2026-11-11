@@ -628,6 +628,25 @@ html.ask-fold .ask-rail{display:flex}
 .bchart{margin-top:9px;border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:7px 8px 3px}
 .bchart-h{font-size:10.5px;color:var(--muted);margin-bottom:2px}
 .bchart-x{display:flex;justify-content:space-between;font-size:10px;color:var(--faint);padding:1px 1px 2px}
+/* 单值题的曲线要现取一次，取的过程中先按线的实际高度占住位置 —— 否则图回来
+   那一刻答案整体往下跳一格，正读着的人得重新找行 */
+.bchart-sk{
+  height:42px;border-radius:5px;
+  background:linear-gradient(90deg,var(--surface-3) 25%,var(--surface) 50%,var(--surface-3) 75%);
+  background-size:200% 100%;animation:skflow 1.2s linear infinite
+}
+@keyframes skflow{from{background-position:0 0}to{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){.bchart-sk{animation:none}}
+/* 分解表：一行一家，条形只用来比长短，数值在右侧对齐 —— 差距靠长度看，
+   精确值靠数字看，两者都不省略 */
+.brk{margin-top:9px;border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:7px 9px 5px}
+.brk-h{font-size:10.5px;color:var(--muted);margin-bottom:4px}
+.brk-row{display:grid;grid-template-columns:66px 1fr 58px;gap:8px;align-items:center;padding:2.5px 0;font-size:11.5px}
+.brk-name{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brk-track{height:6px;border-radius:3px;background:var(--surface-3);overflow:hidden}
+.brk-fill{display:block;height:100%;border-radius:3px;background:var(--brand)}
+.brk-fill.low{background:var(--warn)}
+.brk-val{text-align:right;color:var(--ink);font-variant-numeric:tabular-nums}
 /* 拒答时的可问清单：点了看口径，别让用户对着「11 个指标」自己猜怎么问 */
 .sug{margin-top:9px}
 .sug-h{font-size:10.5px;color:var(--faint);margin-bottom:5px}
@@ -2756,6 +2775,66 @@ function spark(points, tone) {
   </svg>`;
 }
 
+/* ---------- 单值题补走势 ----------
+   后端只在趋势题里给序列（core/metrics/ask.py 只对 intent==="trend" 追加 series），
+   所以「招商数据」这类单值题的气泡里一直没有图，而曲线本来就在：抽屉走的是
+   /api/metric/{code}，固定取 12 期。这里不改答复协议、不多花一次模型调用 ——
+   气泡按 sources 里的指标 code 现取一次，按 code 缓存，同一指标问十次也只取一次。
+   取不到、或者点太少（年度指标只有两期，画出来就是一根斜线）就把占位删掉，
+   宁可不显示，也不摆一条没有信息量的假曲线。 */
+const MCHART = new Map();      // code -> {series, title} | null
+const MCHART_BUSY = new Map(); // code -> Promise（并发时只发一次请求）
+
+function metricChart(code) {
+  if (MCHART.has(code)) return Promise.resolve(MCHART.get(code));
+  if (MCHART_BUSY.has(code)) return MCHART_BUSY.get(code);
+  const p = fetch(`/api/metric/${encodeURIComponent(code)}`)
+    .then((res) => (res.ok ? res.json() : null))
+    .then((d) => {
+      const pts = (d && d.series) || [];
+      const v = pts.length >= 3
+        ? { series: pts, title: `${d.name || code} · 近 ${pts.length} 个月` }
+        : null;
+      MCHART.set(code, v);
+      MCHART_BUSY.delete(code);
+      return v;
+    })
+    .catch(() => {
+      MCHART_BUSY.delete(code);
+      MCHART.set(code, null);
+      return null;
+    });
+  MCHART_BUSY.set(code, p);
+  return p;
+}
+
+function hydrateCharts(root) {
+  const box = root || document;
+  box.querySelectorAll("[data-mchart]").forEach((el) => {
+    if (el.dataset.mchartDone) return;
+    el.dataset.mchartDone = "1";
+    metricChart(el.dataset.mchart).then((v) => {
+      if (!v) { el.remove(); return; }
+      el.innerHTML = `
+        <div class="bchart-h">${esc(v.title)}</div>
+        ${spark(v.series.map((p) => p.value), "brand")}
+        <div class="bchart-x">
+          <span>${esc(v.series[0].label || "")}</span>
+          <span>${esc(v.series[v.series.length - 1].label || "")}</span>
+        </div>`;
+      el.classList.remove("bchart-lazy");
+      // 导出跟着屏幕上看到的走：不补这一步，同一份答复界面上有曲线、
+      // 导出来的 Markdown 里却没有
+      const holder = el.closest(".bub-ai");
+      const r = holder && (holder.__r || holder.__m);
+      if (r && !(r.series || []).length) {
+        r.series = v.series;
+        r.series_title = v.title;
+      }
+    });
+  });
+}
+
 /* ---------- 渲染 ---------- */
 function kpiCard(k, opts = {}) {
   return `
@@ -3412,9 +3491,40 @@ function aiBubble(r, ref) {
        </div>`
     : "";
 
+  // 分解题：后端早就排好序给出了整张表，界面上却一个字都不画 —— 正文只说
+  // 「谁最高、谁最低」，中间几家差多少看不见，而差距往往正是要看的。
+  const brk = r.breakdown || null;
+  const brkRows = (brk && brk.rows) || [];
+  const brkUnit = (brk && brk.unit) || "";
+  const brkMax = Math.max(...brkRows.map((x) => Math.abs(Number(x.value) || 0)), 0);
+  const brkBlock = brkRows.length
+    ? `<div class="brk">
+         <div class="brk-h">${esc(brk.title || "分解")}</div>
+         ${brkRows.map((x, i) => {
+           const v = Number(x.value) || 0;
+           // 百分比按 0—100 铺，计数按最大值铺 —— 两种口径混用会画出「5.9% 比 94 个短」
+           const w = brkUnit === "%"
+             ? Math.max(0, Math.min(100, v))
+             : (brkMax ? (Math.abs(v) / brkMax) * 100 : 0);
+           const low = brkRows.length >= 3 && i === brkRows.length - 1;
+           return `<div class="brk-row">
+             <span class="brk-name" title="${esc(x.name || "")}">${esc(x.name || "")}</span>
+             <span class="brk-track"><i class="brk-fill${low ? " low" : ""}" style="width:${w.toFixed(1)}%"></i></span>
+             <span class="brk-val">${esc(v.toLocaleString("zh-CN"))}${esc(brkUnit)}</span>
+           </div>`;
+         }).join("")}
+       </div>`
+    : "";
+
   // 趋势题后端多给一条序列。以前只有抽屉里画，答案气泡里反倒没图 ——
   // 问「最近三个月什么走势」得到一行字，等于让人自己脑补。
   const series = r.series || [];
+  // 单值题没有序列，但只有一个指标在说事 —— 这种题最该配一条线：
+  // 「94 个、增长 14.63%」是冲到 94 的，还是从年初慢慢爬到 94 的，只有曲线说得清。
+  // 这里只出占位，数字由 hydrateCharts 取回来再填（见 metricChart）。
+  const lazyCode = !r.refused && !r.cancelled && r.intent === "value"
+    ? [...new Set((r.sources || []).map(srcCode).filter(Boolean))]
+    : [];
   const chartBlock = series.length >= 2
     ? `<div class="bchart">
          <div class="bchart-h">${esc(r.series_title || "走势")}</div>
@@ -3424,7 +3534,13 @@ function aiBubble(r, ref) {
            <span>${esc(series[series.length - 1].label || "")}</span>
          </div>
        </div>`
-    : "";
+    : lazyCode.length === 1
+      ? `<div class="bchart bchart-lazy" data-mchart="${esc(lazyCode[0])}">
+         <div class="bchart-h">该指标近一年走势</div>
+         <div class="bchart-sk"></div>
+         <div class="bchart-x"><span></span><span></span></div>
+       </div>`
+      : "";
 
   // 拒答时后端把 11 个已注册指标全列出来。点了看口径抽屉 —— 那里有「可用提问方式」，
   // 比替用户猜一个问题更有用。
@@ -3545,6 +3661,7 @@ function aiBubble(r, ref) {
       ${r.detail ? `<div style="margin-top:6px;color:var(--muted);font-size:12px">${esc(r.detail)}</div>` : ""}
       ${degBlock}
       ${factsBlock}
+      ${brkBlock}
       ${matBlock}
       ${extBlock(r.external)}
       ${chartBlock}
@@ -4155,6 +4272,7 @@ async function ask(question, opts = {}) {
       // 星级按钮要能定位到这条消息（收藏夹跳回来也靠它），落库 id 由后端返回
       h.dataset.mid = f.message_id || "";
       bindFold(h);
+      hydrateCharts(h);
       THREAD_TOKENS += Number(u.total_tokens) || 0;
       renderUsageFoot();
     } else if (f.type === "cancelled") {
@@ -4753,6 +4871,11 @@ function historyView(m, threadId) {
     // 读者只会以为这条答得敷衍
     series: meta.series || [],
     series_title: meta.series_title,
+    // 分解表也要回放：这是「哪个区县最慢」那一轮的主证据
+    breakdown: meta.breakdown || null,
+    // 意图要跟着回放：单值题的曲线是按意图补的（见 aiBubble 的 lazyCode），
+    // 这里不给，切回历史会话时同一轮答案会比刚才少一条线
+    intent: meta.intent || "",
     // 拒答清单同理：刷新就消失比一开始不给更让人困惑
     suggestions: meta.suggestions || [],
     // 专家解读也要回放：现在专家是「对话中」的常驻角色，回看时那段凭空消失会很怪
@@ -4814,6 +4937,8 @@ function renderThread(thread) {
     b.__m = aiMsgs[i] ? historyView(aiMsgs[i], thread.id) : null;
     bindFold(b);
   });
+  // 单值题的曲线是回填的：整屏重建之后要重新扫一遍，否则切回历史会话就没图
+  hydrateCharts(box);
   box.scrollTop = box.scrollHeight;
   // 重新渲染后，原来记下的命中节点已经不在文档里了，查找条还开着就重扫一遍
   if (FIND.on) findScan(false);
