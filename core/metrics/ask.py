@@ -121,7 +121,9 @@ def parse_period(question: str, today: date | None = None) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 _DIM_WORDS = {
-    "区县": ["区县", "各区", "分区", "县区", "板块"],
+    # 溧阳是县级市，下面没有「区/县」，实际拆的是镇和街道 —— 官面上叫「镇街」。
+    # 「区县」留作同义词：领导习惯这么说，早期会话和提示词里也是它。
+    "镇街": ["镇街", "区县", "各区", "分区", "县区", "板块", "镇区", "各镇"],
     "责任单位": ["部门", "单位", "局", "承办"],
 }
 
@@ -173,7 +175,21 @@ def _period_text(result: dict[str, Any]) -> str:
         return label
     if month == 12:
         return f"{year}年全年"
+    if month == 1:
+        # 1 月累计就是 1 月 —— 以前这里会拼出「2026年1—1月累计」
+        return f"{year}年1月累计"
     return f"{year}年1—{month}月累计"
+
+
+def _month_gap(older: str, newer: str) -> int:
+    """两个「YYYY-MM」差几个月。解析不了就返回 0 —— 宁可少说一句「落后几个月」，
+    也不能因为格式异常显示一个错数字。"""
+    try:
+        ay, am = int(older[:4]), int(older[5:7])
+        by, bm = int(newer[:4]), int(newer[5:7])
+    except (ValueError, TypeError):
+        return 0
+    return max(0, (by - ay) * 12 + (bm - am))
 
 
 def _delta_text(delta: float | None, unit: str, label: str) -> str:
@@ -956,12 +972,13 @@ def _ask_impl(
         }
 
     # ---- 分解类 ----
+    dim_note: str | None = None
     if intent["intent"] == "breakdown":
-        dim = intent.get("dim")
+        dim = md.normalize_dim(intent.get("dim"))
         if dim is None:
             dims = md._BREAKDOWNS.get(primary, {})
             dim = next(iter(dims), None)
-        result = md.breakdown_metric(primary, dim, period_info["period"], today)
+        result = md.breakdown_metric(primary, dim, period_info["period"], today, backfill=2)
         trace.append(
             {
                 "step": 4,
@@ -970,6 +987,11 @@ def _ask_impl(
                 "status": "ok" if result.get("ok") else result.get("error", "empty"),
                 "summary": (
                     f"返回 {len(result['rows'])} 行{dim}分解（{result['period_label']}）"
+                    + (
+                        f"，目标期 {md._period_label(result['requested_period'])} 无分解，回退最近一期"
+                        if result.get("backfilled")
+                        else ""
+                    )
                     if result.get("ok")
                     else result.get("message", "无分解数据")
                 ),
@@ -977,16 +999,29 @@ def _ask_impl(
         )
         if result.get("ok"):
             top, bottom = result["rows"][0], result["rows"][-1]
+            # 问「最慢 / 最低」就把垫底的那个摆在前面 —— 两个数都说了，
+            # 但先说谁，决定了读者要不要在脑子里再排一次序
+            want_low = any(w in question for w in ("最慢", "最低", "最少", "最差", "倒数", "垫底", "落后"))
+            first, second = (bottom, top) if want_low else (top, bottom)
+            w1, w2 = ("最低", "最高") if want_low else ("最高", "最低")
+            notes = list(result["caveats"])
+            if result.get("backfilled"):
+                notes.insert(
+                    0,
+                    f"{dim}分解最新只到{result['period_label']}，"
+                    f"全市汇总已到{md._period_label(result['requested_period'])}。"
+                    "两个期次不同，分镇街数别拿去对全市数。",
+                )
             return {
                 "refused": False,
                 "question": question,
                 "planner": planner,
                 "intent": "breakdown",
                 "headline": (
-                    f"{result['period_label']}，{result['name']}按{dim}看：{top['name']}最高 "
-                    f"{_fmt(top['value'], result['unit'])}，{bottom['name']}最低 "
-                    f"{_fmt(bottom['value'], result['unit'])}，相差 "
-                    f"{_fmt(abs(top['value'] - bottom['value']), result['unit']).replace(' ', '')}。"
+                    f"{_period_text(result)}，{result['name']}按{dim}看：{first['name']}{w1} "
+                    f"{_fmt(first['value'], result['unit'])}，{second['name']}{w2} "
+                    f"{_fmt(second['value'], result['unit'])}，相差 "
+                    f"{_fmt(abs(top['value'] - bottom['value']), result['unit'])}。"
                 ),
                 "facts": [],
                 "breakdown": {
@@ -995,10 +1030,37 @@ def _ask_impl(
                     "rows": result["rows"],
                 },
                 "sources": [_source_brief(result["source"])],
-                "notes": result["caveats"],
+                "notes": notes,
                 "trace": trace,
             }
-        # 没有分解接口就退回总量，并说明原因
+        # 分解拿不到就退回全市汇总 —— 但必须说出来。用户问的是「哪个镇街最慢」，
+        # 只回一个全市数而不声明，读者会以为这就是答案，比拒答更糟。
+        # 回退窗口只给最近两期（月度分县数据通常滞后一两个月）；再旧就不拿来
+        # 判断快慢了，但要说清「停在哪一期」，别让人以为系统里根本没有分县数。
+        latest_dim = result.get("latest_period")
+        asked = result.get("period") or ""
+        if result.get("error") == "no_data" and latest_dim and dim:
+            if asked and _month_gap(asked, latest_dim) > 0:
+                # 问的期次比分县数据覆盖范围还早：不是「太旧」，是「这期没有」
+                dim_note = (
+                    f"{dim}分解从{md._period_label(latest_dim)}才开始有，"
+                    f"没有{md._period_label(asked)}那一期，判断不了当时的快慢。"
+                    "下面给的是全市汇总值。"
+                )
+            else:
+                gap = _month_gap(latest_dim, asked)
+                dim_note = (
+                    f"{dim}分解最新只到{md._period_label(latest_dim)}"
+                    + (f"，比{md._period_label(asked)}落后 {gap} 个月" if gap else "")
+                    + f"，太旧，不能用来判断各{dim}快慢。下面给的是全市汇总值。"
+                )
+        elif dim:
+            dim_note = (
+                f"这个指标没有可用的{dim}分解数据，下面给的是全市汇总值，"
+                f"不能用来判断各{dim}的快慢。"
+            )
+        else:
+            dim_note = "这个指标只有全市汇总，没有维度分解。"
         intent = {"intent": "value", "why": "该指标无分解数据，退回全市汇总"}
 
     # ---- 时序 / 单值 ----
@@ -1087,7 +1149,7 @@ def _ask_impl(
         "period_label": result["period_label"],
         "sources": [_source_brief(result["source"])],
         "period_note": pending_note,
-        "notes": ([pending_note] if pending_note else []) + result["caveats"],
+        "notes": ([dim_note] if dim_note else []) + ([pending_note] if pending_note else []) + result["caveats"],
         "trace": trace,
     }
     if intent["intent"] == "trend":

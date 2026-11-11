@@ -106,11 +106,11 @@ METRICS: dict[str, dict[str, Any]] = {
         "cumulative": True,
         "definition": (
             "列入市重大项目清单的项目，年度累计完成投资额占年度计划投资额的比重。"
-            "全市数为分区县完成额加权汇总，不等于各区县完成率的简单平均。"
+            "全市数为分镇街完成额加权汇总，不等于各镇街完成率的简单平均。"
         ),
         "caveats": [
             "累计口径：年初从 0 起算，年内逐月递增，不做环比。",
-            "全市完成率为加权值，与各区县完成率直接平均的结果不一致属正常。",
+            "全市完成率为加权值，与各镇街完成率直接平均的结果不一致属正常。",
         ],
         "api": "GET /api/metrics/FAI_PROGRESS",
     },
@@ -357,26 +357,50 @@ _VALUES: dict[str, list[float]] = {
 }
 
 # 分解数据：code -> dim -> period -> [{"name","value"}]
+#
+# 镇街口径对齐溧阳市实际区划：9 镇 + 3 街道（市政府「行政区划」页）——
+# 天目湖镇、埭头镇、上黄镇、戴埠镇、别桥镇、竹箦镇、上兴镇、南渡镇、社渚镇；
+# 溧城街道、古县街道、昆仑街道。溧阳是县级市，没有「区/县」，所以维度叫「镇街」。
+# 演示值可以编，单位名不该编（887b558 立的规矩）：这里写的是真镇名，数值是假的。
+#
+# 三个指标的行必须能对回全市值，否则同一屏里「全市 5610 户」和分镇街相加对不上：
+#   - SS_ENTERPRISE 是户数，12 行相加恰好 = 5610；
+#   - FAI_PROGRESS / GY_VA_GROWTH 是比率，全市数是按投资额 / 增加值加权，
+#     不等于 12 行简单平均（见 METRICS 里的 caveats）。
 _BREAKDOWNS: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {
     "FAI_PROGRESS": {
-        "区县": {
+        "镇街": {
             "2026-09": [
-                {"name": "高新区", "value": 80.2},
-                {"name": "临港区", "value": 76.8},
-                {"name": "城东区", "value": 71.5},
-                {"name": "城西区", "value": 68.4},
-                {"name": "云山县", "value": 64.1},
+                {"name": "溧城街道", "value": 82.6},
+                {"name": "昆仑街道", "value": 80.4},
+                {"name": "古县街道", "value": 75.8},
+                {"name": "戴埠镇", "value": 73.6},
+                {"name": "天目湖镇", "value": 72.1},
+                {"name": "上兴镇", "value": 70.3},
+                {"name": "竹箦镇", "value": 68.5},
+                {"name": "社渚镇", "value": 66.8},
+                {"name": "南渡镇", "value": 65.2},
+                {"name": "别桥镇", "value": 63.5},
+                {"name": "埭头镇", "value": 61.8},
+                {"name": "上黄镇", "value": 59.4},
             ],
         },
     },
     "SS_ENTERPRISE": {
-        "区县": {
+        "镇街": {
             "2026-09": [
-                {"name": "高新区", "value": 1520},
-                {"name": "临港区", "value": 1240},
-                {"name": "城东区", "value": 1010},
-                {"name": "城西区", "value": 960},
-                {"name": "云山县", "value": 880},
+                {"name": "溧城街道", "value": 1120},
+                {"name": "昆仑街道", "value": 820},
+                {"name": "古县街道", "value": 540},
+                {"name": "戴埠镇", "value": 500},
+                {"name": "天目湖镇", "value": 480},
+                {"name": "上兴镇", "value": 450},
+                {"name": "竹箦镇", "value": 380},
+                {"name": "南渡镇", "value": 340},
+                {"name": "社渚镇", "value": 300},
+                {"name": "别桥镇", "value": 250},
+                {"name": "埭头镇", "value": 220},
+                {"name": "上黄镇", "value": 210},
             ],
         },
     },
@@ -392,17 +416,49 @@ _BREAKDOWNS: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {
         },
     },
     "GY_VA_GROWTH": {
-        "区县": {
+        "镇街": {
             "2026-09": [
-                {"name": "高新区", "value": 11.4},
-                {"name": "临港区", "value": 9.6},
-                {"name": "城东区", "value": 7.8},
-                {"name": "城西区", "value": 6.9},
-                {"name": "云山县", "value": 5.2},
+                {"name": "昆仑街道", "value": 11.6},
+                {"name": "上兴镇", "value": 10.8},
+                {"name": "戴埠镇", "value": 9.4},
+                {"name": "溧城街道", "value": 8.6},
+                {"name": "竹箦镇", "value": 8.2},
+                {"name": "古县街道", "value": 7.9},
+                {"name": "天目湖镇", "value": 7.4},
+                {"name": "社渚镇", "value": 7.0},
+                {"name": "南渡镇", "value": 6.5},
+                {"name": "别桥镇", "value": 6.0},
+                {"name": "埭头镇", "value": 5.6},
+                {"name": "上黄镇", "value": 5.1},
             ],
         },
     },
 }
+
+# 维度别名：模型（或旧调用方、旧会话）会说「区县」「板块」，口径统一叫「镇街」。
+# 不做这层归位，`breakdown_metric` 会返回 unknown_dim，上层只能退回全市汇总 ——
+# 而其实数据是有的，只是叫法不同。
+_DIM_ALIAS = {
+    "区县": "镇街",
+    "县区": "镇街",
+    "区镇": "镇街",
+    "镇区": "镇街",
+    "板块": "镇街",
+    "各板块": "镇街",
+    "各镇": "镇街",
+    "各镇街": "镇街",
+    "镇（街道）": "镇街",
+    "镇街": "镇街",
+    "部门": "责任单位",
+    "单位": "责任单位",
+}
+
+
+def normalize_dim(dim: str | None) -> str | None:
+    if dim is None:
+        return None
+    key = str(dim).strip()
+    return _DIM_ALIAS.get(key, key)
 
 
 # --------------------------------------------------------------------------
@@ -645,9 +701,11 @@ def breakdown_metric(
     dim: str | None = None,
     period: str | None = None,
     today: date | None = None,
+    backfill: int = 0,
 ) -> dict[str, Any]:
     if code not in METRICS:
         return {"ok": False, "error": "unknown_metric", "code": code}
+    dim = normalize_dim(dim)
     dims = _BREAKDOWNS.get(code, {})
     if not dims:
         return {
@@ -664,12 +722,28 @@ def breakdown_metric(
     resolved = resolve_period(period, today)
     target = resolved.get("period") if resolved.get("ok") else latest_available(today)
     bucket = dims.get(dim, {}).get(target)
+    used = target
+    # 目标期没有分解、而历史上有（现实中很常见：分县数据要迟一个月才汇总上来），
+    # 就沿时间轴往回找最近一期有的。找到也要把实际期次带回去 —— 静默换成别的
+    # 期次比没有更糟，上层必须能说清「分解只到 9 月」。
+    if bucket is None and backfill > 0 and target in PERIODS:
+        start = PERIODS.index(target) - 1
+        for i in range(start, max(-1, start - backfill), -1):
+            if PERIODS[i] in dims.get(dim, {}):
+                used = PERIODS[i]
+                bucket = dims[dim][used]
+                break
     if bucket is None:
+        # 没给「最近的分解停在哪一期」，上层就只能说「没有数据」—— 而事实往往是
+        # 「有，但停在三个月前」，或者「你问的那期没有、最新一期其实是有的」。
+        # 这两个说法对读者的意义完全不同，所以把最新有的那一期一起带回去。
+        have = [p for p in PERIODS if p in dims.get(dim, {})]
         return {
             "ok": False,
             "error": "no_data",
             "code": code,
             "period": target,
+            "latest_period": have[-1] if have else None,
             "message": f"{_period_label(target)}的{dim}分解数据未提供。",
         }
     return {
@@ -677,11 +751,14 @@ def breakdown_metric(
         "code": code,
         "name": METRICS[code]["name"],
         "unit": METRICS[code]["unit"],
-        "period": target,
-        "period_label": _period_label(target),
+        "period": used,
+        "period_label": _period_label(used),
+        # 要的是哪一期、实际给的是哪一期：两个都在，前端和 trace 才说得清差异
+        "requested_period": target,
+        "backfilled": used != target,
         "dimension": dim,
         "rows": sorted(bucket, key=lambda r: r["value"], reverse=True),
-        "source": source_of(code, target),
+        "source": source_of(code, used),
         "caveats": METRICS[code]["caveats"],
     }
 
