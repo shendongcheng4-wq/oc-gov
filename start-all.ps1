@@ -9,7 +9,8 @@
 $ErrorActionPreference = "Continue"
 $LLM_PORT  = 8099
 $APP_PORT  = 8090
-$LLM_URL   = "http://127.0.0.1:$LLM_PORT/v1/models"
+$LLM_BASE  = "http://127.0.0.1:$LLM_PORT/v1"
+$LLM_URL   = "$LLM_BASE/models"
 $APP_URL   = "http://127.0.0.1:$APP_PORT/"
 $Root      = Split-Path -Parent $MyInvocation.MyCommand.Path
 $LLM_CMD   = Join-Path $Root "run-llm.cmd"
@@ -20,6 +21,29 @@ function Test-Port([int]$Port) {
     return ($null -ne $found)
 }
 
+function Test-LLMReady {
+    # A 200 from GET /v1/models only proves "the port is open". llama-server binds the
+    # port before the weights finish loading, so /v1/models can answer while
+    # chat/completions still refuses -- and a workbench started in that window talks to
+    # a socket that is not ready. This is the same reason core/modelcfg.py:probe() sends
+    # a real completion instead of trusting GET /models. Probe inference for real.
+    try {
+        $models = Invoke-RestMethod -Uri $LLM_URL -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+        $mid = $null
+        if ($models.data -and @($models.data).Count -gt 0) { $mid = @($models.data)[0].id }
+        if (-not $mid) { return $false }
+
+        # Hand-built JSON on purpose: ConvertTo-Json on PowerShell 5.1 collapses the
+        # single-element messages array into an object, which llama-server rejects (400).
+        $body = '{"model":"' + [string]$mid + '","messages":[{"role":"user","content":"ping"}],"max_tokens":1,"stream":false}'
+        $resp = Invoke-RestMethod -Uri "$LLM_BASE/chat/completions" -Method Post -Body $body `
+            -ContentType 'application/json' -TimeoutSec 20 -ErrorAction Stop
+        return ($null -ne $resp.choices -and @($resp.choices).Count -gt 0)
+    } catch {
+        return $false
+    }
+}
+
 Write-Host "=================================================="
 Write-Host "  oc-gov one-click starter"
 Write-Host "  model ($LLM_PORT) -> workbench ($APP_PORT)"
@@ -27,7 +51,30 @@ Write-Host "=================================================="
 
 # ---- 1. local LLM service (optional) ----
 if (Test-Port $LLM_PORT) {
-    Write-Host "[start] model already running on $LLM_PORT (skip)."
+    Write-Host "[start] model already running on $LLM_PORT (skip launching)."
+    # "Port is open" is not the same as "can infer": llama-server binds the port first and
+    # loads weights afterwards. A workbench started inside that gap answers every question
+    # with "preferred model unavailable, fell back to ..." -- the user reads that as a
+    # broken model, when it is only an unfinished load. Warn-then-continue was not enough;
+    # wait here instead, so the burden is not pushed onto the first few questions.
+    if (Test-LLMReady) {
+        Write-Host "[start] model answers inference." -ForegroundColor Green
+    } else {
+        Write-Host "[start] port is open but inference is not ready yet; waiting (up to 3min) ..." -ForegroundColor Yellow
+        $deadline = (Get-Date).AddSeconds(180)
+        $ready = $false
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 5
+            if (Test-LLMReady) { $ready = $true; break }
+        }
+        if ($ready) {
+            Write-Host "[start] model ready." -ForegroundColor Green
+        } else {
+            Write-Host "[start] WARNING: still not answering inference after 3min." -ForegroundColor Yellow
+            Write-Host "[start]   that process may be wedged: close the model window and rerun this script."
+            Write-Host "[start]   workbench starts anyway; questions fall back to the cloud model."
+        }
+    }
 } else {
     # Probe first: run-llm.cmd --check exits 2 when llama-server.exe or the .gguf
     # is absent. Without this probe the script launched it anyway and then polled
@@ -60,12 +107,7 @@ if (Test-Port $LLM_PORT) {
                 break
             }
             Start-Sleep -Seconds 5
-            try {
-                $r = Invoke-WebRequest -Uri $LLM_URL -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
-                if ($r.StatusCode -eq 200) { $ready = $true; break }
-            } catch {
-                # still loading
-            }
+            if (Test-LLMReady) { $ready = $true; break }
         }
         if (-not $ready) {
             Write-Host "[start] WARNING: model did not report ready within 3min." -ForegroundColor Yellow
