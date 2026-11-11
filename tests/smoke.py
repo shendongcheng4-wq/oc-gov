@@ -62,7 +62,7 @@ import oversight as ov  # noqa: E402
 import pdfdoc  # noqa: E402
 import rag as rag_mod  # noqa: E402
 import workbench as wb  # noqa: E402
-from mockdata import DISCLOSURE_DAY, METRICS, query_metric  # noqa: E402
+from mockdata import DISCLOSURE_DAY, METRICS, latest_available, query_metric  # noqa: E402
 
 from datetime import date, timedelta  # noqa: E402
 
@@ -96,6 +96,50 @@ def test_data_layer() -> None:
     for b in boards:
         check(f"板块 {b['key']} 有判定依据", bool(b.get("status_why")), str(b.get("status")))
         check(f"板块 {b['key']} 状态合法", b.get("status") in ("正常", "关注", "预警"), str(b.get("status")))
+
+    # 进度条：五张卡长得一样，量的是三件事（达标度 / 完成率 / 当期水平），
+    # 所以每条都要自报口径 + 基准，不能只给一个长度。
+    for b in boards:
+        bar = b.get("bar") or {}
+        check(f"板块 {b['key']} 标了进度条口径", bar.get("kind") in ("达标度", "完成率", "当期水平"), str(bar.get("kind")))
+        check(f"板块 {b['key']} 标了基准", bool(bar.get("bench")), str(bar.get("bench")))
+        check(f"板块 {b['key']} 条长与 bar.fill 一致", abs(float(b["progress"]) - float(bar.get("fill", -1))) < 0.05, "")
+
+    by_key = {b["key"]: b for b in boards}
+    # 增速 8.6% 对目标 6.5% 是 132%，按比例画条只能截断在 100%，截断后和「刚好达标」
+    # 长得一模一样。改成数值轴后：条（80）必须越过刻度线（60.5）。
+    eco = by_key["economy"]["bar"]
+    check("超额不被截断（走数值轴）", eco["axis"] == "value" and eco["fill"] < 100, str(eco))
+    check("超额时条越过目标刻度", eco["ref"] is not None and eco["fill"] > eco["ref"], f'{eco["fill"]} vs {eco["ref"]}')
+    check("超额的达标度写在提示里", "132%" in eco["note"], eco["note"])
+    # 滞后的两张：条必须短于时序刻度，否则「落后」这件事在图上不存在
+    for key in ("invest", "project"):
+        bar = by_key[key]["bar"]
+        check(f"{key} 条短于时序刻度", bar["ref"] is not None and bar["fill"] < bar["ref"], f'{bar["fill"]} vs {bar["ref"]}')
+    check("民生实事条长于时序刻度", by_key["livelihood"]["bar"]["fill"] > by_key["livelihood"]["bar"]["ref"], "")
+    # 办结率是「水平值对考核线」，不是完成率
+    soc = by_key["society"]["bar"]
+    check("办结率按当期水平标", soc["kind"] == "当期水平" and soc["ref"] == 95.0, str(soc))
+    # 状态必须和条上刻度说同一件事：条没过刻度就不能挂「正常」
+    for b in boards:
+        ref = (b.get("bar") or {}).get("ref")
+        if ref is None:
+            continue
+        check(
+            f"板块 {b['key']} 状态与刻度一致",
+            (b["status"] == "正常") == (float(b["progress"]) >= float(ref) - 0.05),
+            f'{b["status"]} / bar {b["progress"]} vs 刻度 {ref}',
+        )
+    # 时序进度按实际期次算，不能写死 9/12（走过 10 月后本该是 83%，硬编码会停在 75%）
+    month = int(latest_available()[5:7])
+    elapsed = month / 12 * 100
+    check(
+        "时序进度按当期算出来",
+        abs(by_key["project"]["bar"]["ref"] - elapsed) < 0.2,
+        f'{by_key["project"]["bar"]["ref"]} vs {elapsed:.1f}',
+    )
+    check("判定依据里的月份跟着期次走", f"1—{month} 月" in by_key["project"]["status_why"], by_key["project"]["status_why"])
+    check("文案里没有写死的 1—9 月", all("1—9 月" not in b["status_why"] for b in boards), "")
 
     overview = wb.overview()
     check("总览带城市名", bool(overview.get("city")), "")
@@ -3071,6 +3115,10 @@ def test_frontend_theme() -> None:
     check("单月口径另有中性标", "monthScopeTag" in html and "per per-mute" in html, "")
     check("单月标不挤标题行（数值旁）", ".kpi .vrow" in body and 'class="vrow"' in html, "")
     check("台账自己报截止日", "ledger_as_of" in html and "截至" in html, "")
+    # 进度条：刻度线 + 右侧基准文字，条本身不做第二套解释
+    check("条上有基准刻度线", ".bar u{" in body and 'class="bar' in html and "b.bar?.ref" in html, "")
+    check("条的基准写在右侧", "barlbl" in body and "b.bar?.bench" in html, "")
+    check("条与基准同排不换行", ".barrow{" in body and 'class="barrow"' in html, "")
     # 真实年度值不画演示曲线，改用说明块
     check("抽屉无序列时有说明块", ".dr-note{" in body and "series_note" in html, "")
 

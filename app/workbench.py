@@ -123,6 +123,53 @@ def kpis(codes: list[str] | None = None) -> list[dict[str, Any]]:
 # 每张板块卡的核心数字都来自某个已注册指标，判定规则同样可解释。
 # --------------------------------------------------------------------------
 
+def _pct_bar(kind: str, fill: float, ref: float | None, bench: str, note: str = "") -> dict[str, Any]:
+    """0—100 轴：完成率/水平值本身当长度，基准刻度线画在 ref 处。
+
+    用于「分母就是 100」的口径 —— 投资完成率、办结率。基准是时序进度或考核线，
+    两者都比 100 小，所以刻度线看得见；条短于刻度=滞后，长于=超前。
+    """
+    return {
+        "kind": kind,
+        "axis": "pct",
+        "fill": round(fill, 1),
+        "ref": (round(ref, 1) if ref is not None else None),
+        "bench": bench,
+        "note": note,
+    }
+
+
+def _value_bar(kind: str, value: float, ref: float, bench: str, note: str = "", headroom: float = 1.25) -> dict[str, Any]:
+    """数值轴：条长 = 实际值占轴顶的比例，刻度线 = 基准值。
+
+    给「增速对目标」这类用 —— 8.6% 对 6.5%，两者的绝对值才是读者关心的，
+    直接算 132% 再画条会撑破 100%，只能截断，一截断就和「刚好达标」长得一样。
+    """
+    top = max(value, ref) * headroom
+    return {
+        "kind": kind,
+        "axis": "value",
+        "fill": round(value / top * 100, 1),
+        "ref": round(ref / top * 100, 1),
+        "bench": bench,
+        "note": note,
+        "top": round(top, 2),
+    }
+
+
+def _status_by_gap(gap: float, warn_at: float = -3.0) -> tuple[str, str]:
+    """卡片状态与条上刻度必须说同一件事。
+
+    gap = 实际 − 基准（百分点）。以前五张卡各用各的阈值：招商 70%、民生 80%、
+    重大 任何为负就预警 —— 结果招商条比时序刻度短 5.6 pct 还挂「正常」，
+    重大只差 1.6 pct 却挂「预警」。刻度线一画出来，这种不一致就藏不住了，
+    所以统一成：达到基准=正常，落后 3 pct 内=关注，超过=预警。
+    """
+    if gap >= 0:
+        return "正常", "ok"
+    return ("预警", "warn") if gap <= warn_at else ("关注", "warn")
+
+
 def _board(
     key: str,
     title: str,
@@ -134,6 +181,7 @@ def _board(
     status_tone: str,
     status_why: str,
     trend: list[float],
+    bar: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     m = md.METRICS[code]
     r = md.query_metric(code, None, 6)
@@ -144,7 +192,10 @@ def _board(
         "metric_name": m["name"],
         "value_display": value_display,
         "sub": sub,
+        # progress 是条的长度，bar 说这条是什么口径、刻度线在哪 —— 两个都要，
+        # 只给长度的话五张卡看起来一模一样，实际量的是三件不同的事。
         "progress": max(0.0, min(100.0, round(progress, 1))),
+        "bar": bar or {},
         "status": status,
         "status_tone": status_tone,
         "status_why": status_why,
@@ -167,74 +218,118 @@ def _board(
 def boards() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
 
+    # 时序进度按「最新已披露期次」算，不写死 9/12 —— 原来三处硬编码「1—9 月 / 75%」，
+    # 期次走到 10 月后这三个数就都错了（应该是 83%）。
+    latest = md.latest_available()
+    month = int(latest[5:7])
+    elapsed = month / 12 * 100
+    span_txt = f"1—{month} 月"
+
     # 1) 经济运行 —— 规上工业增加值增速 对比 年度目标
+    # 增速是「数值」，不是「完成率」：条画成 132% 只能截断，截断后和刚好达标一个样。
+    # 所以走数值轴，条 = 实际增速，刻度线 = 目标增速，超没超一眼能看出来。
     gy = md.query_metric("GY_VA_GROWTH", None, 6)
     target = gy["target"]
     over = round(gy["value"] - target, 2)
+    rate = gy["value"] / target * 100
+    bar = _value_bar(
+        "达标度", gy["value"], target, f"目标 {target:g}%",
+        note=f"实际 {gy['value']:g}%，年度目标 {target:g}%，达标度 {rate:.0f}%",
+    )
+    st, tone = _status_by_gap(over)
     out.append(
         _board(
             "economy", "经济运行", "GY_VA_GROWTH",
             f"{gy['value']:g}%",
-            f"规上工业增加值增速 · {'高于' if over >= 0 else '低于'}年度目标 {abs(over):g} pct",
-            progress=gy["value"] / target * 100,
-            status="正常" if over >= 0 else "预警",
-            status_tone="ok" if over >= 0 else "warn",
-            status_why=f"{gy['period_label']}当月增速 {gy['value']:g}%，年度目标 {target:g}%",
+            f"达标度 · 规上工业增加值增速",
+            progress=bar["fill"],
+            status=st,
+            status_tone=tone,
+            status_why=(
+                f"{gy['period_label']}当月增速 {gy['value']:g}%，年度目标 {target:g}%，"
+                f"{'高于' if over >= 0 else '低于'}目标 {abs(over):g} pct（达标度 {rate:.0f}%）"
+            ),
             trend=[],
+            bar=bar,
         )
     )
 
-    # 2) 招商引资 —— 新签约项目数 对比 年度目标
+    # 2) 招商引资 —— 新签约项目数 对比 时序进度（年中拿年度目标当基准没有意义）
     inv = md.query_metric("INVEST_SIGNED", None, 6)
     tgt = inv["target"]
     rate = inv["value"] / tgt * 100
+    gap = round(rate - elapsed, 1)
+    bar = _pct_bar(
+        "完成率", rate, elapsed, f"时序 {elapsed:.0f}%",
+        note=f"已完成年度目标 {rate:.0f}%，{span_txt}时序进度 {elapsed:.0f}%，"
+             f"{'快' if gap >= 0 else '慢'} {abs(gap):.1f} pct",
+    )
+    st, tone = _status_by_gap(gap)
     out.append(
         _board(
             "invest", "招商引资", "INVEST_SIGNED",
             f"{inv['value']:g} 个",
-            f"新签约亿元以上项目 · 完成年度目标 {rate:.0f}%",
-            progress=rate,
-            status="正常" if rate >= 70 else "关注",
-            status_tone="ok" if rate >= 70 else "warn",
-            status_why=f"年度目标 {tgt} 个，1—9 月已完成 {inv['value']} 个（{rate:.1f}%），时序进度 75%",
+            "完成率 · 新签约亿元以上项目",
+            progress=bar["fill"],
+            status=st,
+            status_tone=tone,
+            status_why=f"年度目标 {tgt} 个，已完成 {inv['value']} 个（{rate:.1f}%），{span_txt}时序进度 {elapsed:.0f}%",
             trend=[],
+            bar=bar,
         )
     )
 
     # 3) 重大项目 —— 投资完成率 对比 时序进度
     fai = md.query_metric("FAI_PROGRESS", None, 6)
-    elapsed = 9 / 12 * 100  # 1—9 月时序进度
     gap = round(fai["value"] - elapsed, 1)
+    bar = _pct_bar(
+        "完成率", fai["value"], elapsed, f"时序 {elapsed:.0f}%",
+        note=f"年度投资完成率 {fai['value']:g}%，{span_txt}时序进度 {elapsed:.0f}%，"
+             f"{'快' if gap >= 0 else '慢'} {abs(gap):g} pct",
+    )
+    st, tone = _status_by_gap(gap)
     out.append(
         _board(
             "project", "重大项目", "FAI_PROGRESS",
             f"{fai['value']:g}%",
-            f"年度投资完成率 · 时序进度 {elapsed:.0f}%",
-            progress=fai["value"],
-            status="预警" if gap < 0 else "正常",
-            status_tone="warn" if gap < 0 else "ok",
+            "完成率 · 重大项目年度投资",
+            progress=bar["fill"],
+            status=st,
+            status_tone=tone,
             status_why=(
-                f"累计完成率 {fai['value']:g}%，低于 1—9 月时序进度 {abs(gap):g} pct，"
-                "需关注滞后项目"
+                f"累计完成率 {fai['value']:g}%，{'低于' if gap < 0 else '高于'} {span_txt}时序进度 "
+                f"{elapsed:.0f}% 的 {abs(gap):g} pct"
+                + ("，需关注滞后项目" if gap < 0 else "")
             ),
             trend=[],
+            bar=bar,
         )
     )
 
-    # 4) 社会治理 —— 12345 按期办结率
+    # 4) 社会治理 —— 12345 按期办结率（当期水平，对考核基准线）
     tz = md.query_metric("TZ_12345_CLOSURE", None, 6)
     mom = tz.get("mom")
-    mom_txt = f"环比 {'+' if (mom or 0) >= 0 else ''}{mom} pct" if mom is not None else "累计口径"
+    base = 95.0
+    bar = _pct_bar(
+        "当期水平", tz["value"], base, f"考核线 {base:g}%",
+        note=f"按期办结率 {tz['value']:g}%，市级考核基准线 {base:g}%，"
+             f"{'高于' if tz['value'] >= base else '低于'} {abs(tz['value'] - base):g} pct",
+    )
+    st, tone = _status_by_gap(tz["value"] - base)
     out.append(
         _board(
             "society", "社会治理", "TZ_12345_CLOSURE",
             f"{tz['value']:g}%",
-            f"12345 诉求按期办结率 · {mom_txt}",
-            progress=tz["value"],
-            status="正常" if tz["value"] >= 95 else "关注",
-            status_tone="ok" if tz["value"] >= 95 else "warn",
-            status_why=f"按期办结率 {tz['value']:g}%，95% 为市级考核基准线",
+            "当期水平 · 12345 按期办结率",
+            progress=bar["fill"],
+            status=st,
+            status_tone=tone,
+            status_why=(
+                f"按期办结率 {tz['value']:g}%，{base:g}% 为市级考核基准线"
+                + (f"，环比 {'+' if (mom or 0) >= 0 else ''}{mom} pct" if mom is not None else "")
+            ),
             trend=[],
+            bar=bar,
         )
     )
 
@@ -242,16 +337,24 @@ def boards() -> list[dict[str, Any]]:
     lv = md.query_metric("LIVELIHOOD_DONE", None, 6)
     total = lv["target"]
     done_rate = lv["value"] / total * 100
+    gap = round(done_rate - elapsed, 1)
+    bar = _pct_bar(
+        "完成率", done_rate, elapsed, f"时序 {elapsed:.0f}%",
+        note=f"已验收 {lv['value']}/{total} 项（{done_rate:.0f}%），{span_txt}时序进度 {elapsed:.0f}%，"
+             f"{'快' if gap >= 0 else '慢'} {abs(gap):g} pct",
+    )
+    st, tone = _status_by_gap(gap)
     out.append(
         _board(
             "livelihood", "民生保障", "LIVELIHOOD_DONE",
             f"{lv['value']:g} / {total} 项",
-            f"民生实事已完成 · 完成率 {done_rate:.0f}%",
-            progress=done_rate,
-            status="正常" if done_rate >= 80 else "关注",
-            status_tone="ok" if done_rate >= 80 else "warn",
-            status_why=f"年度 {total} 项，已验收 {lv['value']} 项，时序进度 75%",
+            "完成率 · 民生实事",
+            progress=bar["fill"],
+            status=st,
+            status_tone=tone,
+            status_why=f"年度 {total} 项，已验收 {lv['value']} 项（{done_rate:.0f}%），{span_txt}时序进度 {elapsed:.0f}%",
             trend=[],
+            bar=bar,
         )
     )
 

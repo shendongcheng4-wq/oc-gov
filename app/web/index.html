@@ -968,8 +968,19 @@ html.ask-fold .ask-rail{display:flex}
 .card .big small{font-size:11.5px;color:var(--muted);font-weight:600;margin-left:2px;letter-spacing:0}
 .card .desc{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.45;min-height:16px}
 .trendline svg{height:100% !important;max-height:96px}
-.bar{height:5px;border-radius:3px;background:var(--line-2);margin-top:12px;flex:0 0 auto;overflow:hidden}
+/* 进度条：条长 = 实际位置，刻度线 = 基准（时序进度/目标/考核线）。
+   五张卡原来共用一种条却量三件事，且有一张被 clamp 在 100% —— 现在条是什么
+   口径写在左边的 desc 里，刻度线是什么写在条右边的 barlbl 里。 */
+.barrow{display:flex;align-items:center;gap:8px;margin-top:12px;flex:0 0 auto}
+.barrow .bar{flex:1 1 auto;min-width:0;margin-top:0}
+.barlbl{flex:0 0 auto;font-size:10px;color:var(--faint);white-space:nowrap;font-variant-numeric:tabular-nums}
+.bar{height:5px;border-radius:3px;background:var(--line-2);margin-top:12px;flex:0 0 auto;position:relative}
 .bar i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,#4a90ee,#1163e6)}
+/* 刻度线画成「冒出条外 2px 的小竖线」而不是挖一条白缝：挖缝会被读成渲染断裂 */
+.bar u{
+  position:absolute;top:-2px;bottom:-2px;width:2px;margin-left:-1px;border-radius:1px;
+  background:var(--ink-2)
+}
 .bar.warn i{background:linear-gradient(90deg,#f0b25a,#dd8b0f)}
 .trendline{flex:1;display:flex;align-items:stretch;margin-top:6px;min-height:0}
 .trendcap{font-size:10px;color:var(--faint);margin-top:2px;flex:0 0 auto}
@@ -2939,7 +2950,13 @@ function renderBoards(list, focus) {
       </div>
       <div class="big mono">${esc(b.value_display).replace(/(\s*\/\s*\S+\s*项)$/, "<small>$1</small>")}${periodTag(b)}${monthTag(b)}</div>
       <div class="desc">${esc(b.sub)}</div>
-      <div class="bar ${b.status_tone === "warn" ? "warn" : ""}"><i style="width:${b.progress}%"></i></div>
+      <div class="barrow">
+        <div class="bar ${b.status_tone === "warn" ? "warn" : ""}" title="${esc(b.bar?.note || "")}">
+          <i style="width:${b.progress}%"></i>
+          ${b.bar?.ref != null ? `<u style="left:${b.bar.ref}%"></u>` : ""}
+        </div>
+        ${b.bar?.bench ? `<span class="barlbl" title="${esc(b.bar.note || "")}">${esc(b.bar.bench)}</span>` : ""}
+      </div>
       <div class="trendline">${spark(b.trend, b.status_tone)}</div>
       <div class="trendcap">近 6 月走势 · 数据截至 ${esc(b.source.period)}</div>
     </div>`;
