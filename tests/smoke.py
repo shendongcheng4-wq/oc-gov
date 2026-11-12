@@ -2504,6 +2504,24 @@ def test_agent() -> None:
           str(meta.get("doc_draft"))[:60])
     check("公文草稿落库不含临时 issue", "issues" not in (meta.get("doc_draft") or {}), "")
 
+    # 兜底路径（octop_harness）拿不到材料正文，所以带材料时必须不走它 ——
+    # 否则它会给出一个和用户手里那份文件无关的答案，而界面看起来一切正常。
+    import main as srv_fb
+
+    check(
+        "带材料不交给 harness 兜底",
+        srv_fb._harness_fallback(
+            "这份材料里写了什么", {"refused": True},
+            [{"name": "方案.docx", "text": "11 月 15 日前完成检修"}],
+        ) is None,
+        "",
+    )
+    check(
+        "没材料时照旧判断",
+        srv_fb._harness_fallback("随便问问", {"refused": False}) is None,
+        "",
+    )
+
     # 没有模型时必须交回原链路，不能自己发明一个答案。
     # 用打桩而不是清空配置：清配置会写真实文件，测试不该改用户的模型设置。
     original = agent_mod.llmclient.available

@@ -139,13 +139,20 @@ def _plugin_command(question: str) -> tuple[str, str] | None:
     return None
 
 
-def _harness_fallback(question: str, result: dict) -> dict | None:
+def _harness_fallback(question: str, result: dict, atts: list | None = None) -> dict | None:
     """问数/知识库/资料库都没命中（refused）时，用 octop_harness 引擎兜底。
 
     只在装了 octop_harness 时才走这条路；没装或调用失败都返回 None，让上层
     保持原拒答结果不变。HarnessAgent 是异步的，这里用 asyncio.run 在请求线程
     里起一个独立事件循环跑（ThreadingHTTPServer 每请求一线程，互不干扰）。
+
+    **带了上传材料就不走这条。** HarnessAgent 那条路没有 compare_material、
+    也拿不到材料正文（`harness.ask` 只收一个问题字符串），它给出的答案会和用户
+    手里那份文件无关，甚至相反 —— 而用户看到的是一个正常回答，以为系统读过文件。
+    宁可保留「没查到」这句实话。要它也能对照，得先把材料接进 harness，那是另一件事。
     """
+    if atts:
+        return None
     if not result.get("refused"):
         return None
     if not harness_mod.available():
@@ -2463,7 +2470,7 @@ class Handler(BaseHTTPRequestHandler):
                     ),
                     attachments=atts,
                 )
-                result = _harness_fallback(question, result) or result
+                result = _harness_fallback(question, result, atts) or result
         else:
             # 先走对话层：模型自己决定查指标、扫台账、翻记录，还是反问一句澄清。
             # 它返回 None（没模型 / 没查通 / 带附件）时才落到原来的单向链路。
@@ -2482,7 +2489,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 # 问数/知识库/资料库都没命中时，用 octop_harness 引擎（含插件工具）兜底。
                 # 只在装了 harness 且结果 refused 时才走，否则保持原结果不变。
-                fb = _harness_fallback(question, result)
+                fb = _harness_fallback(question, result, atts)
                 if fb is not None:
                     result = fb
         result["planner_info"] = llm.llm_info()
@@ -2581,7 +2588,7 @@ class Handler(BaseHTTPRequestHandler):
                     should_stop=lambda: cancel_requested(turn_id),
                 )
                 # 问数/知识库/资料库都没命中时，用 octop_harness 引擎兜底（同 _ask）
-                fb = _harness_fallback(question, result)
+                fb = _harness_fallback(question, result, atts)
                 if fb is not None:
                     result = fb
             result["planner_info"] = llm.llm_info()
