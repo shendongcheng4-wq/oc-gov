@@ -272,6 +272,36 @@ def tools_schema() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "compare_material",
+                "description": (
+                    "把材料里写的某个指标值，和库里同一期并列对照（材料一行、库一行，各自带出处）。"
+                    "用户拿出文件里的数字来核对时用它。**必须照抄材料里的写法**，"
+                    "系统会回原文核对：抄错了或编一个都会当场被拒。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "string",
+                            "enum": codes,
+                            "description": "指标代码，必须和材料里那个数说的是同一个指标",
+                        },
+                        "material_value": {
+                            "type": "string",
+                            "description": "材料里怎么写就怎么抄，例如「7.2%」「1,024.8 亿元」",
+                        },
+                        "period": {
+                            "type": "string",
+                            "description": "期次，形如 2026-09。省略取最近一期；材料口径不同时一定要写清",
+                        },
+                    },
+                    "required": ["code", "material_value"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "search_knowledge",
                 "description": (
                     "在指标口径、督办事项、会议议定里检索原文与出处。"
@@ -386,6 +416,7 @@ def _run_tool(
     question: str,
     person_id: str | None,
     today: date,
+    materials: str = "",
 ) -> tuple[str, dict[str, Any]]:
     """执行一个工具，返回（喂给模型的文本，用于组装结果的结构）。
 
@@ -607,6 +638,71 @@ def _run_tool(
             },
         }
 
+    if name == "compare_material":
+        # 材料里的数 × 库里的数，并排放。这一条取代了原来「按关键词猜用户想不想
+        # 对照」的分流：现在由模型读完材料、把看到的数抄进参数，系统回原文核对，
+        # 再取库值并列 —— 猜错了不会错答，抄错了会当场被拒。
+        if not materials:
+            return (
+                "这一轮没有上传材料，没有可对照的东西。",
+                {"kind": "compare", "error": "no_materials"},
+            )
+        code = str(args.get("code") or "").upper()
+        if code not in md.METRICS:
+            return (
+                "指标代码不在已注册列表里。先调 list_metrics 看有哪些。",
+                {"kind": "compare", "error": "bad_code"},
+            )
+        written = str(args.get("material_value") or "").strip()
+        if not written:
+            return (
+                "要给出材料里的数值（照抄材料的写法）。",
+                {"kind": "compare", "error": "no_value"},
+            )
+        if not _material_has(written, materials):
+            return (
+                f"材料原文里没有「{written}」这个数。照抄材料里的写法再来一次，"
+                f"不要自己换算或估算。",
+                {"kind": "compare", "error": "not_found_in_material"},
+            )
+        period = _norm_period(str(args.get("period") or "").strip() or None)
+        res = ask_mod.ask(
+            question,
+            today=today,
+            person_id=person_id,
+            rules_only=True,
+            codes=[code],
+            period=period,
+            want="value",
+        )
+        facts = res.get("facts") or []
+        if res.get("refused") or not facts:
+            return (
+                f"库里取不到「{md.METRICS[code]['name']}」这一期的值，没法并列对照。",
+                {"kind": "compare", "error": "no_library_value"},
+            )
+        lib_value = str(facts[0].get("value") or "")
+        src = (res.get("sources") or [{}])[0]
+        same = bool(ask_mod._same_number(written, lib_value))
+        row = {
+            "name": md.METRICS[code]["name"],
+            "code": code,
+            "file": _material_file(written, materials),
+            "excerpt": written,
+            "material_value": written,
+            "library_value": lib_value,
+            "library_label": str(facts[0].get("label") or res.get("period_label") or ""),
+            "library_department": str(src.get("department") or ""),
+            "library_report": str(src.get("report") or ""),
+            "same": same,
+        }
+        verdict = "一致" if same else "不一致"
+        return (
+            f"材料写的是 {written}，库里的值是 {lib_value}（{verdict}）。"
+            f"两个数已并列放进对照区，各自带出处；答复正文不要替用户选哪个对。",
+            {"kind": "compare", "rows": [row], "res": res},
+        )
+
     if name == "search_knowledge":
         query = str(args.get("query") or "").strip()
         person = people_mod.meta(person_id)
@@ -779,6 +875,14 @@ def _audit_payload(
                     payload["notes"].append(str(d[key]))
             for name in d.get("attendees") or []:
                 payload["notes"].append(str(name))
+        elif part.get("kind") == "compare":
+            # 对照行里的两个数都是事实（一个来自材料原文、一个来自接口），
+            # 模型复述它们是对的，不该判成编造。
+            for row in part.get("rows") or []:
+                for key in ("material_value", "library_value", "library_label",
+                            "library_department", "library_report", "name"):
+                    if row.get(key):
+                        payload["notes"].append(str(row[key]))
         elif part.get("kind") == "document":
             # 公文里的文号、日期、主送机关、分条事项都是代码装配出来的事实。
             # 不放行的话，模型复述「溧政办发〔2026〕___号」会被判成编造。
@@ -892,6 +996,13 @@ def _assemble(
             result["doc_draft"] = dd
             if result.get("intent") in ("answer", None):
                 result["intent"] = "document"
+    # 材料 × 指标库的对照行。界面那块 matBlock 认的就是 `material_compare`，
+    # 和原链路同一个字段、同一套前端，所以这里只负责把行拼对。
+    cmp_part = next(
+        (p for p in parts if p.get("kind") == "compare" and p.get("rows")), None
+    )
+    if cmp_part:
+        result["material_compare"] = cmp_part["rows"]
     result["agent"] = {
         "rounds": sum(1 for t in trace if t.get("tool") == "agent.llm"),
         "tools": [t.get("tool") for t in trace if str(t.get("tool", "")).startswith("tool.")],
@@ -952,6 +1063,45 @@ def _materials_text(attachments: list[dict[str, Any]] | None) -> str:
         "3. 引用材料里的数字时必须说清「材料里写的是…」；问指标值本身仍然要调工具取库里的数，\n"
         "   两者不要混成一句话。\n\n" + "\n\n".join(blocks)
     )
+
+
+def _material_blocks(materials: str) -> list[tuple[str, str]]:
+    """把材料块拆成 [(文件名, 整块文本)] —— 格式见 `_materials_text`。"""
+    out: list[tuple[str, str]] = []
+    for chunk in str(materials or "").split("### 材料")[1:]:
+        head, _, _body = chunk.partition("\n")
+        name = head.split("：", 1)[-1].strip() if "：" in head else ""
+        out.append((name, chunk))
+    return out
+
+
+def _material_has(value: str, materials: str) -> bool:
+    """材料原文里是否真的有这个数。
+
+    核对的是「模型有没有照抄」，不是「这个数对不对」—— 数对不对是后面取库值
+    并列给用户看的。所以这里只认字面：先整串比（「7.2%」「1,024.8 亿元」），
+    再退一步只比数字，并卡住数字边界（否则「7.2」会命中「17.2」）。
+    """
+    v = str(value or "").strip().replace(" ", "").replace("\u3000", "")
+    if not v or not materials:
+        return False
+    text = str(materials).replace(" ", "").replace("\u3000", "")
+    if v in text:
+        return True
+    num = re.sub(r"[^0-9.]", "", v)
+    if not num:
+        return False
+    return re.search(rf"(?<![0-9.]){re.escape(num)}(?![0-9])", text) is not None
+
+
+def _material_file(value: str, materials: str) -> str:
+    """这个数出自哪份材料 —— 对照行上要写出处，否则并排放着两个数却不知道从哪来。"""
+    v = str(value or "").strip().replace(" ", "")
+    for name, chunk in _material_blocks(materials):
+        flat = chunk.replace(" ", "").replace("\u3000", "")
+        if v and (v in flat or re.search(rf"(?<![0-9.]){re.escape(re.sub(r'[^0-9.]', '', v))}(?![0-9])", flat)):
+            return name
+    return ""
 
 
 def run(
@@ -1235,7 +1385,8 @@ def run(
             step("tool", {"name": name, "phase": "start"})
             try:
                 text, part = _run_tool(
-                    name, call["args"], question=question, person_id=person_id, today=today
+                    name, call["args"], question=question, person_id=person_id,
+                    today=today, materials=materials,
                 )
             except Exception as exc:  # noqa: BLE001 单个工具挂了不该终止整轮
                 text, part = f"工具执行失败：{type(exc).__name__}: {str(exc)[:120]}", {

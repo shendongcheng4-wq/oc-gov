@@ -2036,21 +2036,21 @@ def test_agent() -> None:
 
     schema_names = [t["function"]["name"] for t in agent_mod.tools_schema()]
     check(
-        "工具面含查、澄清、写、建会草稿与公文草稿",
+        "工具面含查、澄清、写、草稿与材料对照",
         set(schema_names) == {"list_metrics", "query_metric", "scan_oversight",
                               "search_knowledge", "clarify", "advance_item",
-                              "draft_meeting", "draft_document"},
+                              "draft_meeting", "draft_document", "compare_material"},
         str(schema_names),
     )
     # 写工具只允许「提议」。这条不能靠工具名断言（改个名就失效），真正的边界由
-    # 下面「调它之后台账事件数一条没变」那条行为断言钉住。两个 draft_* 是草稿，
-    # 也不写任何数据 —— 它们同样在下面用行为断言验。
+    # 下面「调它之后台账事件数一条没变」那条行为断言钉住。三个 draft_*/compare_*
+    # 是草稿和只读对照，不写任何数据 —— 它们同样在下面用行为断言验。
     check(
         "写工具只有一个，且是提议式的",
         [n for n in schema_names
          if n not in {"list_metrics", "query_metric", "scan_oversight",
                       "search_knowledge", "clarify", "draft_meeting",
-                      "draft_document"}] == ["advance_item"],
+                      "draft_document", "compare_material"}] == ["advance_item"],
         str(schema_names),
     )
 
@@ -2273,11 +2273,56 @@ def test_agent() -> None:
         numgate.audit("材料里说要 20 台锅炉。", payload_m)["ok"] is False,
         "",
     )
-    # 对照类问题交回原链路：那张逐期对照表只有它画得出来
-    import main as srv_mod
+    # 材料 × 库的对照：模型抄材料里的数 → 系统回原文核对 → 再并列取库值。
+    # 这条取代了「按关键词猜用户想不想对照」的分流：猜错不会错答，抄错会当场被拒。
+    mats2 = agent_mod._materials_text([
+        {"name": "9月统计月报.docx", "text": "7 月规上工业增加值增速 7.2%。", "chars": 20},
+    ])
+    _ct, cmp_part = agent_mod._run_tool(
+        "compare_material",
+        {"code": "GY_VA_GROWTH", "material_value": "7.2%", "period": "2026-07"},
+        question="材料里的数和系统对得上吗", person_id="mayor",
+        today=date(2026, 11, 12), materials=mats2,
+    )
+    check("对照工具返回一行", bool(cmp_part.get("rows")), str(cmp_part)[:80])
+    row0 = (cmp_part.get("rows") or [{}])[0]
+    check(
+        "对照行带两边数",
+        bool(row0.get("material_value")) and bool(row0.get("library_value")),
+        str(row0)[:80],
+    )
+    check("对照行带库值出处", bool(row0.get("library_department")),
+          str(row0.get("library_department")))
+    check("对照行认材料文件名", "9月统计月报" in str(row0.get("file")), str(row0.get("file")))
+    # 对照行要真的进结果（界面那块 matBlock 认的是 material_compare）
+    asm = agent_mod._assemble(
+        question="对得上吗", text="", parts=[{"kind": "compare", "rows": [row0]}],
+        trace=[], model="stub", usage={},
+    )
+    check(
+        "对照行走完装配",
+        (asm.get("material_compare") or [{}])[0].get("library_value") == row0.get("library_value"),
+        str(asm.get("material_compare"))[:60],
+    )
 
-    check("对照类问句识别", srv_mod._wants_compare("这份材料和系统对得上吗"), "")
-    check("普通问句不当对照", not srv_mod._wants_compare("材料里写了什么要求"), "")
+    # 材料里没有这个数：当场拒，不生成一行假对照
+    _ct2, bad_cmp = agent_mod._run_tool(
+        "compare_material",
+        {"code": "GY_VA_GROWTH", "material_value": "9.9%", "period": "2026-07"},
+        question="材料里的数", person_id="mayor",
+        today=date(2026, 11, 12), materials=mats2,
+    )
+    check(
+        "材料里没有的数不生成对照",
+        bad_cmp.get("error") == "not_found_in_material" and not bad_cmp.get("rows"),
+        str(bad_cmp)[:80],
+    )
+    # 没有材料时明说，而不是硬编一张表
+    _ct3, no_mat = agent_mod._run_tool(
+        "compare_material", {"code": "GY_VA_GROWTH", "material_value": "7.2%"},
+        question="对得上吗", person_id="mayor", today=date(2026, 11, 12),
+    )
+    check("没有材料时明说", no_mat.get("error") == "no_materials", str(no_mat)[:60])
 
     # 一轮生成多条时，结果里必须全部带着。只给第一条的话，剩下的草稿已经写进库、
     # 界面上却没有确认入口 —— 那批数据永远没人能点，等于把库越攒越脏。

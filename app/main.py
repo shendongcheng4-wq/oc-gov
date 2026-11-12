@@ -180,19 +180,6 @@ def _harness_fallback(question: str, result: dict) -> dict | None:
     }
 
 
-# 材料 × 指标库的「逐期对照表」只有原链路实现（B 档边界：材料数字单独成区、与库并列）。
-# 问「对得上吗」「差多少」时交给它，别让对话层用一段话糊过去 —— 那种答案里看不出
-# 哪边是材料、哪边是库，而用户传文件来问，本来就是因为怀疑某一边。
-_COMPARE_WORDS = (
-    "对得上", "对不上", "对不对", "一致", "不一致", "核对", "比对",
-    "对照", "差异", "差多少", "相差", "准不准",
-)
-
-
-def _wants_compare(question: str) -> bool:
-    return any(w in str(question or "") for w in _COMPARE_WORDS)
-
-
 def _run_plugin_command(plugin_id: str, arg: str, question: str) -> dict | None:
     """执行「/插件名 参数」：只挂该插件的工具，把参数交给它回答。失败返回 None。"""
     if not harness_mod.available():
@@ -2417,17 +2404,14 @@ class Handler(BaseHTTPRequestHandler):
         返回 None 表示这条路没走通，调用方走回原来的问数链路：
 
         - 没配模型：对话层的前提就是模型，规则链路照旧；
-        - 带了材料、又问的是「对得上吗 / 差多少」：那张逐期对照表只有原链路会画；
         - 模型一次都没调通、也没查到任何东西：没有可交付的结果，不如交回去。
+
+        带材料也走这里：材料作为数据块进上下文，要核对就拿 `compare_material`
+        把材料里的数和库值并列 —— 以前那道「按关键词猜他要不要对照」的分流已经删了。
 
         这里刻意不吞「已停止」：那是用户主动的操作，得让上层落一条「已停止生成」。
         """
         if not agent_mod.available():
-            return None
-        # 带了材料也走对话层（材料作为数据块进上下文，见 agent._materials_text）；
-        # 唯一例外是「对得上吗 / 差多少」这类对照问题 —— 那张逐期对照表只有原链路
-        # 会画，把它交给对话层，用户会得到一段话，看不出哪边是材料、哪边是库。
-        if atts and _wants_compare(question):
             return None
         try:
             res = agent_mod.run(
