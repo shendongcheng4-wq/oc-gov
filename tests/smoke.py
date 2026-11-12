@@ -1258,6 +1258,12 @@ def test_experts() -> None:
     check("空态不占位（:empty 隐藏）", ".es-name:empty" in html and ".es-state:empty" in html, "")
     check("全组叫 AI秘书团", 'return "AI秘书团"' in html and 'item("__all", "团", "AI秘书团"' in html, "")
     check("再点一次可取消", "EXP.cur = !eid || EXP.cur === eid ? null : eid" in html, "")
+    # 取消不能只有「再点一次」这一条 hidden 路径（只写在 item 的 title 里）。
+    # 菜单第一行必须有一个显式的、回到「不用参谋」的出口，否则看起来就是单选题。
+    check("菜单有「不使用参谋」显式出口",
+          'class="es-item none' in html and "不使用参谋" in html and 'data-eid=""' in html, "")
+    check("斜杠里也能取消参谋",
+          'all.unshift({ id: "", avatar: "×", name: "不使用参谋"' in html, "")
 
     # 斜杠唤起（输入框里打 / 选参谋）。这几条都是「写错了页面照跑、但用起来是坏的」
     # 的地方，只能靠静态约定卡住：
