@@ -40,12 +40,14 @@
 ## 快速开始
 
 ```bat
+start-app.cmd        :: 只起工作台，完全不碰模型、不等待（双击即用）
 start-all.cmd        :: 一键启动：先起本地模型（可选）再起工作台，就绪后自动开浏览器
 run.cmd              :: 只起工作台 → http://127.0.0.1:8090
 run.cmd 8091         :: 换端口
 run-llm.cmd          :: 只起本地模型服务（llama.cpp，127.0.0.1:8099，可选）
 ```
 
+- **`start-app.cmd` 是「只要工作台」的按钮**：不启动、不探测、不等待本地模型，直接起 8090 并开浏览器；端口已在监听就只把浏览器打开，不会起第二份。问数在没模型时退回规则解析
 - **`start-all.cmd` 在没有模型的机器上会直接跳过模型**，不会等。它先跑 `run-llm.cmd --check` 探一下运行时和权重在不在（退出码 2 = 不在），不在就打印一行说明并照常起工作台 —— 工作台本身不需要模型
 - `run-llm.cmd` 里的路径是构建机器的默认值，换机器用 `OCGOV_LLM_RUNTIME_DIR`（含 `llama-server.exe` 的目录）和 `OCGOV_LLM_MODEL`（`.gguf` 路径）覆盖，不必改文件
 
@@ -104,6 +106,7 @@ python seed_docs.py --force    :: 清掉重建；内容与台账/会议咬合，
 
 ```
 oc-gov/
+├── start-app.cmd              只起工作台（不碰模型）：双击即用的「启动」按钮
 ├── start-all.cmd / .ps1       一键启动：模型（可选）就绪后再起工作台
 ├── run.cmd / run-llm.cmd      只起工作台 / 只起本地模型服务
 ├── seed_demo.py               写入演示会议数据（data/ 不入库，clone 后补内容）
