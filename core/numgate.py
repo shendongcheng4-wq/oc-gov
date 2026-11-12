@@ -37,8 +37,12 @@ from typing import Any
 # 全角逗号也要认：模型复制「1，024.8」很常见，拆成 1 和 024.8 就会误判。
 _NUM = re.compile(r"\d{1,3}(?:[，,]\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")
 # 算式：a - b = c，容忍全角等号、乘除号、两侧空格
+# 减号要认全：模型写「1,024.8 − 882.6 = 142.2」时用的是排版减号 U+2212，
+# 只认 ASCII `-` 会把这个正确的算式判成编造，然后那张句被逐句剔除 ——
+# 用户看到的就是「数没了、只剩口径说明」。破折号 `—` 故意不收：期次区间
+# 「1—7月」用的就是它，收进来会把区间误当算式。
 _EQ = re.compile(
-    r"(-?\d[\d,，]*(?:\.\d+)?\s*[%％]?)\s*([-+*/×÷])\s*"
+    r"(-?\d[\d,，]*(?:\.\d+)?\s*[%％]?)\s*([-+*/×÷+－−–])\s*"
     r"(-?\d[\d,，]*(?:\.\d+)?\s*[%％]?)\s*[=＝]\s*(-?\d[\d,，]*(?:\.\d+)?)"
 )
 # 一个字符串算不算「纯数值」：8.9 / +5.4% / 1,024.8 亿元 / 45 项 / 6.5%
@@ -52,7 +56,11 @@ def _to_float(text: str) -> float:
     return float(re.sub(r"[,，%％\s]", "", text))
 
 
+_OPS = {"－": "-", "−": "-", "–": "-", "＋": "+"}
+
+
 def _apply(a: float, op: str, b: float) -> float | None:
+    op = _OPS.get(op, op)
     if op == "+":
         return a + b
     if op == "-":
@@ -238,22 +246,12 @@ def _strip(text: str, literals: list[str]) -> str:
     return probe
 
 
-def audit(
-    text: str,
+def _prepare(
     payload: Any,
-    extra: set[float] | None = None,
-    extra_literals: list[str] | None = None,
-) -> dict[str, Any]:
-    """核一段模型文本里的数字。
-
-    返回 `{"ok": bool, "bad": [无出处的数字], "computed": [已验证的算式]}`。
-    `ok=False` 时调用方不能原样使用这段文字：要么整段丢弃，要么按句剔除违规句
-    （core/agent.py 的 `_salvage`）。不能只删掉那几个数字 —— 算式可能连环，
-    删数字只会把一句话改成病句，还看不出错在哪。
-
-    `extra_literals` 给「点名」用：记录标题里的 `第 14 次常务会`、`12345`
-    是专有名词，参谋提到它们是在指出处，不是报数。只放标题，不放正文。
-    """
+    extra: set[float] | None,
+    extra_literals: list[str] | None,
+) -> tuple[set[float], list[str]]:
+    """算出（放行的数，需整段抹掉的字面量）。audit 与 leads_with_value 共用。"""
     allowed, literals = facts_of(payload)
     if extra:
         allowed |= {float(x) for x in extra}
@@ -276,11 +274,14 @@ def audit(
             literals.append(re.sub(r"[－—–~～至\u2010\u2011\u2212-]", "-", piece))
         for piece in _PERIOD_BARE.findall(lit):
             literals.append(re.sub(r"[－—–~～至\u2010\u2011\u2212-]", "-", piece))
+    return allowed, literals
 
+
+def _equations(text: str, allowed: set[float]) -> tuple[list[str], list[str], set[float]]:
+    """先验算式，并把结果加入放行集合：一句话里可能先算再引用。"""
     bad: list[str] = []
     computed: list[str] = []
 
-    # 先验算式，并把结果加入放行集合：一句话里可能先算再引用
     for match in _EQ.finditer(text):
         a, op, b, c = match.group(1), match.group(2), match.group(3), match.group(4)
         try:
@@ -299,16 +300,91 @@ def audit(
             computed.append(match.group(0))
         else:
             bad.append(match.group(0))
+    return bad, computed, allowed
 
-    # 顺序有讲究：先抹截止日（12月31日前），再抹区间（1—6月），最后抹单个月份（6月）。
-    # 反过来的话「6月」先被抹掉，剩下「1- 」既不成区间也认不出来，1 就裸露了。
+
+def _residual(text: str, literals: list[str]) -> str:
+    """把期次、截止日、已认识的区间和专有名词抹掉，剩下的才是「裸露的数」。
+
+    顺序有讲究：先抹截止日（12月31日前），再抹区间（1—6月），最后抹单个月份（6月）。
+    反过来的话「6月」先被抹掉，剩下「1- 」既不成区间也认不出来，1 就裸露了。
+    """
     rest = _norm_period(_EQ.sub(" ", text))
     rest = _DEADLINE.sub(" ", rest)
     rest = _drop_known_ranges(rest, _period_digits(literals))
-    rest = _strip(rest, literals)
+    return _strip(rest, literals)
+
+
+def audit(
+    text: str,
+    payload: Any,
+    extra: set[float] | None = None,
+    extra_literals: list[str] | None = None,
+) -> dict[str, Any]:
+    """核一段模型文本里的数字。
+
+    返回 `{"ok": bool, "bad": [无出处的数字], "computed": [已验证的算式]}`。
+    `ok=False` 时调用方不能原样使用这段文字：要么整段丢弃，要么按句剔除违规句
+    （core/agent.py 的 `_salvage`）。不能只删掉那几个数字 —— 算式可能连环，
+    删数字只会把一句话改成病句，还看不出错在哪。
+
+    `extra_literals` 给「点名」用：记录标题里的 `第 14 次常务会`、`12345`
+    是专有名词，参谋提到它们是在指出处，不是报数。只放标题，不放正文。
+    """
+    allowed, literals = _prepare(payload, extra, extra_literals)
+    bad, computed, allowed = _equations(text, allowed)
+
+    rest = _residual(text, literals)
     for match in _NUM.finditer(rest):
         value = _to_float(match.group(0))
         if not any(_close(value, x) for x in allowed):
             bad.append(match.group(0))
 
     return {"ok": not bad, "bad": bad, "computed": computed}
+
+
+# 句子切分：句号、问号、叹号、分号、换行。和 core/agent.py 的 `_SENT_SPLIT`
+# 同一套切法 —— 那边用来逐句剔除，这边用来只看第一句。
+_SENT = re.compile(r"(?<=[。！？；\n])")
+
+
+def leads_with_value(text: str, payload: Any, extra: set[float] | None = None) -> bool | None:
+    """第一句里有没有「报数」—— 值来自接口，或是全文里验过的算式结果。
+
+    为什么需要这个：数值全对、出处也齐，但第一句是口径说明
+    （「GDP 按累计口径公布，没有 7 月单月值」），用户要的那个数被埋在第三句。
+    用户问的是数，第一眼看到的却是一段免责声明，等于先让他读注意事项再告诉他答案。
+
+    判断口径刻意从严：首句里的数必须能在放行集合里找到。**期次里的数字不算**
+    （「7 月」是标签不是答案），所以先按 audit 的办法把期次、截止日、指标名抹掉，
+    剩下的才当裸数看。算式写在别的句子里也算数 —— 只要那个结果在全文验过等式，
+    首句写「142.2 亿元」就成立。
+
+    返回 None 表示判不了（可用数值清单是空的，或模型根本没写数），调用方不要据此
+    重答；返回 False 才是「该报数却把数放到了后面」。
+    """
+    allowed, literals = _prepare(payload, extra, None)
+    if not allowed:
+        return None
+    _bad, _computed, allowed = _equations(text, allowed)
+
+    # 只抹「期次 / 日期 / 指标名」这类字面量，**不抹数值本身**。audit 里数值字符串
+    # 也是字面量（模型整段照抄就不算编造），但在这里抹掉它们，就等于把
+    # 「有没有报数」这个判断的依据一起抹了：连 1,024.8 都看不见，永远判 None。
+    soft = [lit for lit in literals if not _PURE.match(lit)]
+
+    sentences = [s for s in _SENT.split(text) if s.strip()]
+    if not sentences:
+        return None
+    first = sentences[0]
+    for match in _NUM.finditer(_residual(first, soft)):
+        value = _to_float(match.group(0))
+        if any(_close(value, x) for x in allowed):
+            return True
+    # 首句一个可溯源的数都没有：只有当全文里确实报过数时才算「埋在后面」。
+    for match in _NUM.finditer(_residual(text, soft)):
+        value = _to_float(match.group(0))
+        if any(_close(value, x) for x in allowed):
+            return False
+    return None
+

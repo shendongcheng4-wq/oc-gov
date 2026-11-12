@@ -876,6 +876,35 @@ def test_experts() -> None:
         is True,
         "",
     )
+    # 模型写算式常用排版减号 U+2212（「1,024.8 − 882.6 = 142.2」）。只认 ASCII 减号
+    # 会把正确算式判成编造，然后那句话被 `_salvage` 整句剔除 —— 用户看到的是
+    # 「口径说了半天、数没了」。破折号 `—` 不能收进来：期次区间就写「1—7月」。
+    check(
+        "排版减号的算式也认",
+        numgate.audit("1,024.8 − 882.6 = 142.2 亿元", payload)["ok"] is True,
+        str(numgate.audit("1,024.8 − 882.6 = 142.2 亿元", payload)["bad"]),
+    )
+    check(
+        "破折号不当算式",
+        numgate.audit("1—7月累计 1024.8 亿元", payload)["computed"] == [],
+        str(numgate.audit("1—7月累计 1024.8 亿元", payload)["computed"]),
+    )
+
+    # 首句报数：数对了、出处也齐，但第一句在讲口径，用户要的数埋在第三句。
+    # 这不是数值问题，是顺序问题 —— 由 numgate.leads_with_value 判，agent 让它重说。
+    buried = (
+        "GDP 按累计口径公布，没有 7 月单月值。2026 年 1—7 月累计 1,024.8 亿元。"
+        "要 7 月单月：1,024.8 − 882.6 = 142.2 亿元。"
+    )
+    led = "7 月单月约 142.2 亿元（1,024.8 − 882.6 = 142.2 亿元）。GDP 没有官方单月值。"
+    check("首句在讲口径判为埋在后面", numgate.leads_with_value(buried, payload) is False, "")
+    check("首句给数判为合格", numgate.leads_with_value(led, payload) is True, "")
+    check(
+        "期次里的月数不算报数",
+        numgate.leads_with_value("这个指标按累计口径公布，没有 7 月单月值。", payload) is None,
+        "",
+    )
+
 
     # compare 型回答的数值落在 compare_rows、facts 是空列表。只读 facts 的话，
     # 多指标一问里专家看不到任何方向，只会回「信息不足」—— 召唤了等于没召唤。
@@ -2075,6 +2104,25 @@ def test_agent() -> None:
           str(agent_mod._norm_period("2026年7月")))
     check("期次归一（已是标准格式）", agent_mod._norm_period("2026-07") == "2026-07", "")
 
+    # 回答顺序：用户要的数必须在第一句。以前铁律 4 写的是「先说明累计口径，再给累计数」，
+    # 模型照着执行，于是「GDP 按累计口径公布，没有 7 月单月值」成了开场白，数埋在第三句。
+    check(
+        "铁律要求先给数再讲口径",
+        "先给数，再讲口径" in agent_mod.SYSTEM,
+        "",
+    )
+    check(
+        "旧口径「先说明再给总数」已删掉",
+        "先说明这一点，再给累计数" not in agent_mod.SYSTEM,
+        "",
+    )
+    check(
+        "说话方式要求第一句就是答案",
+        "第一句就是答案" in agent_mod.SYSTEM,
+        "",
+    )
+
+
     # 工具取数：按代码查，不再过模型规划
     r = ask_mod.ask(
         "规模以上工业增加值增速", rules_only=True,
@@ -2135,6 +2183,32 @@ def test_agent() -> None:
         numgate.audit("12月31日前完成验收。", payload)["ok"] is True,
         str(numgate.audit("12月31日前完成验收。", payload)["bad"]),
     )
+    # 回答顺序的行为断言：首句在讲口径、数在后面时，agent 要让它重说一遍。
+    # 只判「问句在要数 + 取到过指标」的场合 —— 问「有什么建议」时首句不该是数，
+    # 那条不能被误伤，否则每句建议都要被退回重写。
+    buried = "这一项按累计口径公布，没有单月值。7 月当月是 8%，比 6 月回落 0.5 个百分点。"
+    led = "7 月当月增速 8%，比 6 月的 8.5% 回落 0.5 个百分点。"
+    check(
+        "首句讲口径判为埋在后面",
+        agent_mod._value_is_buried(buried, "7月增速是多少", [part], payload) is True,
+        "",
+    )
+    check(
+        "首句给数不再拦",
+        agent_mod._value_is_buried(led, "7月增速是多少", [part], payload) is False,
+        "",
+    )
+    check(
+        "要建议时不逼它先报数",
+        agent_mod._value_is_buried(buried, "这个指标有什么建议", [part], payload) is False,
+        "",
+    )
+    check(
+        "没取到指标时不判",
+        agent_mod._value_is_buried(buried, "7月增速是多少", [], payload) is False,
+        "",
+    )
+
     # 整段过不了时不能一把全扔：逐句剔除，把点名单位、点明时限那些话留下来。
     # 这是「问建议只会念数」的直接修复点，删了就会退回去。
     _text_bad = "2026年7月规上工业增加值增速8%，比6月的8.5%回落0.5个百分点。剩下50天，要抓紧。"

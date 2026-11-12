@@ -357,8 +357,13 @@ SYSTEM = """你是溧阳市政府工作台的问数助手，在常务会前给�
    必须把算式写进正文，例如「1024.8 - 882.6 = 142.2 亿元」。写不出算式的数一律不要写。
    也不要自己折算天数和月数（「还剩 50 天」「还有两个月」）—— 时间压力直接用日期说
    （「12 月 31 日前」），或者引用台账里的剩余天数。
-4. **累计口径要说明。** GDP、财政收入、固投、签约项目、民生实事这些是按年内累计公布的，
-   **没有单月值**。用户问「7月GDP」时，先说明这一点，再给累计数；要单月就相减并写出算式。
+4. **先给数，再讲口径。** 用户问的是数，第一句话就得是那个数（带单位和期次）。
+   GDP、财政收入、固投、签约项目、民生实事这些按年内累计公布、**没有单月值**，
+   这件事照样要说，但排在第二句以后。用户问「7月GDP」时：第一句给
+   「7 月单月约 142.2 亿元」，第二句再说「这是 1—7 月累计 1,024.8 减 1—6 月累计
+   882.6 得出（现价口径），GDP 只按累计公布、没有官方单月值」。
+   反例（别这么写）：「GDP 按累计口径公布，没有 7 月单月值。……1,024.8 − 882.6 =
+   142.2」—— 用户要的数拖到第三句才出现，第一眼看到的是一段免责声明。
 5. **建议要落在具体对象上。** 说「加强监测」没用。要说清找哪个单位、看什么、什么时候之前。
    能点名的就点名（督办事项、责任单位、时限）。用户要建议时：先 scan_oversight 看台账，
    再挑 2-3 个跟他关心的事最相关的指标看，**不要把 11 个指标全查一遍** —— 那是查表，不是参谋。
@@ -376,6 +381,9 @@ SYSTEM = """你是溧阳市政府工作台的问数助手，在常务会前给�
 ## 说话方式
 
 - 直接说结论，不复述问题，不写「根据您的问题」这类开场。
+- **第一句就是答案。** 问数就先给数（带单位），问建议就先给判断。不许用「按累计
+  口径公布」「没有单月值」「根据您的问题」这类话开头 —— 口径、算式、出处一律排在
+  第二句以后。用户读第一句就知道答案，后面才是他怎么核。
 - 中文，口语。结论先行；需要分点时用短句分行，不要写 markdown 标题或表格符号。
 - 一件事说透比说全重要，但不要为了短而砍掉出处和限定条件。
 - 用户追问时接着上文说（「那上个月呢」= 上一轮那个指标的上个月），不要重新问一遍是什么指标。
@@ -747,6 +755,15 @@ def _metric_text(res: dict[str, Any]) -> str:
     if res.get("refused"):
         return str(res.get("headline") or "取数失败") + " " + str(res.get("detail") or "")
     parts = [f"问句：{res.get('question')}", f"答案草稿：{res.get('headline')}"]
+    # 答案草稿是按引擎模板写的，期次在前（「2026年1—7月累计，全市…1,024.8 亿元」）。
+    # 模型会照着这个骨架开口，于是「按累计口径公布、没有单月值」变成了第一句。
+    # 这里把顺序要求跟着数据一起给它，比只写在 system 里更近、更管用。
+    parts.append(
+        "回答顺序：第一句先给用户问的那个数（带单位），口径、算式、出处放第二句以后。"
+        "上面是引擎模板的写法，期次在前；照抄它开口就会让用户先读到口径而不是答案。"
+        "问的是单月而这里只有累计值时，第一句给相邻两期相减的结果并带算式，别用"
+        "「按累计口径公布」开头。"
+    )
     nums = res.get("numbers") or []
     if nums:
         parts.append(
@@ -900,6 +917,30 @@ def _first_metric(parts: list[dict[str, Any]]) -> dict[str, Any] | None:
         if part.get("kind") == "metric" and (part.get("payload") or {}).get("refused") is False:
             return part["payload"]
     return None
+
+
+# 问句里「在要一个数」的信号。刻意收窄：「怎么看」「有什么建议」不进来 ——
+# 那时候第一句本来就不该是数，硬要它先报数只会逼出一句废话。
+_VALUE_ASK = re.compile(r"多少|几[个成亿元万千%％]|多大|多高|什么水平|什么数|几何|百分之")
+
+
+def _value_is_buried(
+    text: str,
+    question: str,
+    parts: list[dict[str, Any]],
+    payload: dict[str, Any],
+) -> bool:
+    """用户问的是数，模型却把数放到了第一句后面。
+
+    三件事同时成立才管：这一轮真的取到了指标值、问句在要一个数、首句里没有可溯源的
+    数而后文有。定性问题不碰；「模型压根没报数」也不碰 —— 那归数字闸和兜底管，
+    在这里再逼一轮只会得到一个更空的回答。
+    """
+    if _first_metric(parts) is None:
+        return False
+    if not _VALUE_ASK.search(question or ""):
+        return False
+    return numgate.leads_with_value(text, payload) is False
 
 
 def _fmt_row(row: dict[str, Any]) -> str:
@@ -1277,9 +1318,8 @@ def run(
             # 换掉措辞：模型常常是「想答但没去查」，告诉它哪几个数查不到、要么
             # 去查要么别说，下一轮它自己就补上工具调用了。直接弃用的结果是一句
             # 「这一轮没有可核准的数值结论」—— 用户会觉得系统坏了。
-            verdict = numgate.audit(
-                text, _audit_payload(parts, history, question, materials=materials)
-            )
+            audit_payload = _audit_payload(parts, history, question, materials=materials)
+            verdict = numgate.audit(text, audit_payload)
             if not verdict["ok"] and round_no < MAX_ROUNDS:
                 bad = "、".join(str(x) for x in verdict["bad"][:4])
                 messages.append({"role": "assistant", "content": text})
@@ -1299,6 +1339,31 @@ def run(
                         "call": "numgate.audit(headline)",
                         "status": "retry",
                         "summary": f"正文有查不到出处的数字（{bad}），已要求补查或去掉后重答",
+                    }
+                )
+                continue
+            # 数字都对，但用户要的那个数被埋在第一句后面（开头在讲口径）。数值闸管不了
+            # 这个：它只管"数能不能溯源"，不管"读的人第一眼看到什么"。所以另判一次，
+            # 让它只调顺序重说 —— 不改数字，代价是一轮对话。
+            if round_no < MAX_ROUNDS and _value_is_buried(text, question, parts, audit_payload):
+                messages.append({"role": "assistant", "content": text})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "（系统校验）顺序不对：用户要的是那个数，你把口径/背景放在了第一句。"
+                            "重说一遍 —— 第一句就给数（带单位），口径、算式、出处放第二句以后。"
+                            "数字一个都不要改，只调顺序。"
+                        ),
+                    }
+                )
+                trace.append(
+                    {
+                        "step": len(trace) + 1,
+                        "tool": "numgate",
+                        "call": "numgate.leads_with_value",
+                        "status": "retry",
+                        "summary": "首句在讲口径、数在后面，已要求结论先行重答",
                     }
                 )
                 continue
