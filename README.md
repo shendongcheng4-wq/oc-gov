@@ -7,7 +7,7 @@
 三条贯穿全项目的底线，后面所有设计都是从这里推出来的：
 
 1. **数字可以过模型，但每个数都要能追到来源** —— 正文由模型组织，数字只有两种来路：工具返回的原值，或在正文里写明算式、由代码验等式成立（`core/numgate.py`）。核不过就整段弃用，退回接口原文。
-2. **模型只能查、只能提议，不能自己写** —— 工具面 8 个，分两类：5 个只读（`query_metric` 查指标 / `list_metrics` 看目录 / `scan_oversight` 扫台账 / `search_knowledge` 翻知识库 / `clarify` 反问一句），3 个只出草稿（`advance_item` 推进督办 / `draft_meeting` 建会 / `draft_document` 起草公文）。后三个**一律只生成待确认卡、不落库**，真正的写入只有 `/api/proposal/confirm` 一条路，用点确认那个人的登录身份过状态机。内置工具（读写文件、执行命令、联网）全禁 —— `data/models.json` 存着 API key，读出来念一遍就是泄露，不需要写权限。
+2. **模型只能查、只能提议，不能自己写** —— 工具面 9 个，分两类：6 个只读（`query_metric` 查指标 / `list_metrics` 看目录 / `scan_oversight` 扫台账 / `search_knowledge` 翻知识库 / `compare_material` 材料与库并列对照 / `clarify` 反问一句），3 个只出草稿（`advance_item` 推进督办 / `draft_meeting` 建会 / `draft_document` 起草公文）。后三个**一律只生成待确认卡、不落库**，真正的写入只有 `/api/proposal/confirm` 一条路，用点确认那个人的登录身份过状态机。内置工具（读写文件、执行命令、联网）全禁 —— `data/models.json` 存着 API key，读出来念一遍就是泄露，不需要写权限。
 3. **写操作认身份** —— 所有写接口在一张登记表里过闸，表外的写路径一律 403。
 
 ## 对话是怎么走的（`core/agent.py`）
