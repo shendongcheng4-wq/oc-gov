@@ -64,8 +64,15 @@ def enabled_map() -> dict[str, bool]:
 #
 # octop 的底线是 {ls, read_file, glob, grep, write_todos, task} —— 那是通用
 # agent 的能力底座，抽掉它就没法改代码。oc-gov 的底座不是翻文件系统，而是
-# 三个只读业务查询：只要这三件还在，助手就能回答问题；抽掉它们，回答就只剩
+# 四个只读业务查询：只要这几件还在，助手就能回答问题；抽掉它们，回答就只剩
 # 「查不到」。
+#
+# **为什么刻意不含 compare_material**（这是约定，不是漏了）：这条路
+# `harness.ask(question)` 只收一个问句字符串，拿不到上传文件的正文，所以
+# 材料对照在这里无从谈起 —— 给了工具，模型也只能得到「这一轮没有上传材料」。
+# 配套的结构性决定是 `main._harness_fallback` 里「带材料就不走兜底」，两条一起
+# 才保证：带材料的问句要么由对话层用 compare_material 回答，要么老老实实说
+# 「没查到」，绝不会冒出一段与手上文件无关却看着正常的回答。smoke 两侧都有断言。
 #
 # 反过来，read_file / glob / grep / task 在这里**恰恰不能给**：
 #   · data/models.json 存着 API key —— 读出来念一遍就是泄露，不需要写权限；

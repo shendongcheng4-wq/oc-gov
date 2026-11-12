@@ -2521,6 +2521,14 @@ def test_agent() -> None:
         srv_fb._harness_fallback("随便问问", {"refused": False}) is None,
         "",
     )
+    # 这条是**约定钉**，不是防回归：兜底路径拿不到材料正文，所以它的工具面
+    # 刻意不给 compare_material。哪天有人「顺手补一个」，这条会红 —— 那时要问的是
+    # 「材料怎么进 harness」，而不是把断言删掉。
+    check(
+        "兜底路径的工具面不含 compare_material（约定）",
+        "compare_material" not in srv_fb.harness_mod.BASELINE_TOOLS,
+        str(sorted(srv_fb.harness_mod.BASELINE_TOOLS)),
+    )
 
     # 没有模型时必须交回原链路，不能自己发明一个答案。
     # 用打桩而不是清空配置：清配置会写真实文件，测试不该改用户的模型设置。
