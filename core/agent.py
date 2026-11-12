@@ -85,6 +85,61 @@ def _codes() -> list[str]:
     return sorted(md.METRICS)
 
 
+
+def _wemeet():
+    """拿腾讯会议模块。没装/没配就返回 None —— 工具面不该因为一个可选能力变脆。"""
+    try:
+        import wemeet  # noqa: PLC0415
+
+        return wemeet if wemeet.ready() else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _wemeet_tools() -> list[dict[str, Any]]:
+    """给模型看的两个只读工具。建会**故意不列**：写外部系统必须人点按钮。"""
+    if _wemeet() is None:
+        return []
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "wemeet_meetings",
+                "description": (
+                    "查我最近的腾讯会议（题目、时间、会议号、有没有转写或纪要）。只读。"
+                    "问「上周开了哪些会」「项目会开完没有」先调它。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "days": {"type": "integer", "description": "回看天数，默认 30，最多 365"},
+                        "keyword": {"type": "string", "description": "按题目关键词过滤，可省略"},
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "wemeet_transcript",
+                "description": (
+                    "取一场腾讯会议的录制转写或智能纪要（只读）。问「那次会定了什么」时用。"
+                    "先用 wemeet_meetings 找到是哪一场。取回来的原文只用于本次回答，"
+                    "要落成会议台账得去会议助手点「落成会议原文」。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "keyword": {"type": "string", "description": "会议题目关键词，或 9 位会议号"},
+                        "day": {"type": "string", "description": "会议日期，形如 2026-11-10，用于区分同名会议"},
+                    },
+                    "required": ["keyword"],
+                },
+            },
+        },
+    ]
+
+
 def tools_schema() -> list[dict[str, Any]]:
     codes = _codes()
     return [
@@ -340,6 +395,11 @@ def tools_schema() -> list[dict[str, Any]]:
                 },
             },
         },
+
+        # 腾讯会议（只读）。装上 Token 才出现 —— 没配就列出来，模型会去调一个
+        # 必然失败的接口，用户看到的是「查询失败」，不如不给这个工具。
+        # **建会不在这里**：那是往外部系统写，必须人点（会议详情里的按钮）。
+        *_wemeet_tools(),
     ]
 
 
@@ -727,6 +787,61 @@ def _run_tool(
                 f"（{item.get('department') or ''}）：{item.get('text') or ''}"
             )
         return "\n".join(lines)[:TOOL_RESULT_LIMIT], {"kind": "knowledge", "kb": kb}
+
+    if name == "wemeet_meetings":
+        wm = _wemeet()
+        if wm is None:
+            return "腾讯会议没有配置 Token，查不了。", {"kind": "wemeet", "error": "not_configured"}
+        days = int(args.get("days") or 30)
+        kw = str(args.get("keyword") or "").strip()
+        res = wm.preset_recent(max(1, min(days, 365)))
+        if not res.get("ok"):
+            return f"腾讯会议查询失败：{res.get('detail') or res.get('error')}", {"kind": "wemeet", "error":res.get('error')}
+        rows = res.get("meetings") or []
+        if kw:
+            rows = [r for r in rows if kw in str(r.get("subject") or "") or kw in str(r.get("meeting_code") or "")]
+        lines = [f"最近 {days} 天共 {len(rows)} 场会："]
+        for r in rows[:12]:
+            when = str(r.get("start") or "").replace("T", " ")[:16]
+            flag = "有转写" if r.get("has_transcript") else ("有智能纪要" if r.get("has_minutes") else "无纪要")
+            lines.append(f"- {r.get('subject')}｜{when}｜会议号 {r.get('meeting_code') or '—'}｜{flag}")
+        if not rows:
+            lines.append("（没有匹配的会议）")
+        return "\n".join(lines), {"kind": "wemeet", "rows": rows}
+
+    if name == "wemeet_transcript":
+        wm = _wemeet()
+        if wm is None:
+            return "腾讯会议没有配置 Token，取不了纪要。", {"kind": "wemeet", "error": "not_configured"}
+        kw = str(args.get("keyword") or "").strip()
+        day = str(args.get("day") or "").strip()
+        if not kw:
+            return "要取纪要得先说是哪一场会（题目关键词或会议号）。", {"kind": "wemeet", "error": "bad_param"}
+        res = wm.preset_recent(365)
+        if not res.get("ok"):
+            return f"腾讯会议查询失败：{res.get('detail') or res.get('error')}", {"kind": "wemeet", "error": res.get("error")}
+        rows = [r for r in (res.get("meetings") or [])
+                if kw in str(r.get("subject") or "") or kw == str(r.get("meeting_code") or "")]
+        if day:
+            rows = [r for r in rows if str(r.get("start") or "").startswith(day)] or rows
+        if not rows:
+            return f"没找到和「{kw}」对上、且有录制的会议。可以先调 wemeet_meetings 看有哪些。", {
+                "kind": "wemeet", "error": "not_found"}
+        pick = rows[0]
+        one = {
+            "title": pick.get("subject") or "",
+            "held_at": str(pick.get("start") or "").replace("T", " ")[:16],
+            "online": {"meeting_id": pick.get("meeting_id") or "", "meeting_code": pick.get("meeting_code") or ""},
+        }
+        tr = wm.preset_transcript(one)
+        if not tr.get("ok"):
+            return f"取纪要失败：{tr.get('detail') or tr.get('error')}", {"kind": "wemeet", "error": tr.get("error")}
+        text = str(tr.get("transcript") or "")
+        note = "（这是智能纪要摘要，不是逐字转写）" if tr.get("source") == "minutes" else ""
+        body = text[:TOOL_RESULT_LIMIT]
+        return (f"《{pick.get('subject')}》{note}：\n{body}",
+                {"kind": "wemeet", "chars": len(text), "source": tr.get("source"),
+                 "record_file_id": tr.get("record_file_id")})
 
     return f"没有名为 {name} 的工具。", {"kind": "unknown"}
 

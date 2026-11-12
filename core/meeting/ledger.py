@@ -79,6 +79,12 @@ def brief(m: dict) -> dict[str, Any]:
         "topics": m.get("topics") or [],
         "source": m.get("source") or "manual",
         "status": m.get("status") or "draft",
+        # 线上会议（腾讯会议）的绑定信息。没有就是 None，不编一个空对象 ——
+        # 界面靠「有没有这个键」区分「没接」和「接了但没建成功」。
+        "online": m.get("online") or None,
+        # 原文从哪来：manual（人写的）/ wemeet（转写拉下来的）。
+        # 这个字段决定「能不能被下一次转写覆盖」——见 set_transcript()。
+        "text_source": m.get("text_source") or "manual",
         # 哪一条问答产出这场会（幂等键，也用来在会话回放里标「已建会」）
         "from_message": m.get("from_message") or "",
         "created_at": m.get("created_at"),
@@ -105,8 +111,18 @@ def list_meetings() -> list[dict[str, Any]]:
 
 
 def get(mid: str) -> dict[str, Any] | None:
+    """取一条完整会议。
+
+    `online` / `text_source` 是后加的字段，老数据里没有。这里补默认值而不是让
+    调用方各自 `m.get(...) or ...`：接口返回的形状要稳定，前端才敢直接读。
+    """
     m = _find(_doc(), mid)
-    return dict(m) if m else None
+    if m is None:
+        return None
+    out = dict(m)
+    out.setdefault("online", None)
+    out.setdefault("text_source", "manual")
+    return out
 
 
 def create(
@@ -171,6 +187,10 @@ def create(
             "topics": [t.strip() for t in (topics or []) if str(t).strip()],
             "source": source,
             "text": text,
+            # 原文从哪来（人写的 / 腾讯会议转写）。set_transcript() 靠它决定能不能覆盖
+            "text_source": "manual",
+            # 线上会议绑定信息，没接腾讯会议时是 None
+            "online": None,
             # 待召开的会不该有「待解析」这个状态：还没开，没有东西可解析
             "status": "planned" if kind == "plan" else "draft",
             "created_at": _now(),
@@ -248,6 +268,117 @@ def save_parse(mid: str, parsed: dict[str, Any]) -> dict[str, Any]:
 
 
 ALLOWED_PATCH = ("title", "assignee", "deadline", "standard")
+
+
+# --------------------------------------------------------------------------
+# 腾讯会议：绑定会议号 / 把转写落成原文
+# --------------------------------------------------------------------------
+def set_online(mid: str, online: dict[str, Any]) -> dict[str, Any]:
+    """把腾讯会议的会议号与入会链接挂到这场会上。
+
+    可以重复调用：重新预约就覆盖上一次（旧会议号在腾讯会议那边仍然有效，我们
+    这边只记最新一次 —— 记两场会反而让人不知道该进哪一个）。
+    """
+    box: dict[str, Any] = {"ok": False}
+
+    def _do(doc: dict) -> dict:
+        m = _find(doc, mid)
+        if m is None:
+            box["error"] = "meeting_not_found"
+            return doc
+        old = m.get("online") or {}
+        m["online"] = {
+            "platform": "wemeet",
+            "meeting_id": str(online.get("meeting_id") or ""),
+            "meeting_code": str(online.get("meeting_code") or ""),
+            "join_url": str(online.get("join_url") or ""),
+            "password": str(online.get("password") or ""),
+            "subject": str(online.get("subject") or m.get("title") or ""),
+            "start_time": str(online.get("start_time") or ""),
+            "end_time": str(online.get("end_time") or ""),
+            "bound_at": _now(),
+            # 重新预约时，上一场的录制信息就作废了
+            "record_file_id": old.get("record_file_id") if old.get("meeting_id") == str(online.get("meeting_id") or "") else "",
+            "transcript_at": old.get("transcript_at") if old.get("meeting_id") == str(online.get("meeting_id") or "") else None,
+        }
+        box["ok"] = True
+        box["meeting"] = m
+        return doc
+
+    store.update(FILE, _do, default=_empty())
+    return box
+
+
+def set_transcript(mid: str, text: str, *, record_file_id: str = "",
+                   truncated: bool = False) -> dict[str, Any]:
+    """把腾讯会议的录制转写落成会议原文。
+
+    「原文不可变」这条规则在这里照样有效，只开一个**窄口子**：如果原文本身就是
+    转写拉下来的（`text_source == "wemeet"`），允许重拉覆盖 —— 转写可能分页、
+    可能第一次没生成完。但：
+
+    - 已经有人工粘贴的原文（`text_source != "wemeet"`）→ 拒绝。人和接口各写一版，
+      下一轮解析到底以哪版为准就说不清了。
+    - 已经有事项落了督办 → 拒绝。原文一换，那些引文就悬空了。
+    - 已解析出的事项可以重来（它们是同一份转写的产物），但要如实告诉调用方
+      「重置了几条」，别让人以为还在。
+    """
+    text = (text or "").strip()
+    if not text:
+        return {"ok": False, "error": "空转写不能当原文。"}
+    box: dict[str, Any] = {"ok": False, "replaced_items": 0}
+
+    def _do(doc: dict) -> dict:
+        m = _find(doc, mid)
+        if m is None:
+            box["error"] = "meeting_not_found"
+            return doc
+        committed = [i for i in (m.get("items") or []) if i.get("oversight_id")]
+        if committed:
+            box["error"] = (
+                f"这场会已经有 {len(committed)} 条事项落了督办，换原文会让那些引文悬空。"
+                "要重来请新建一场会议。"
+            )
+            return doc
+        existing = (m.get("text") or "").strip()
+        if existing and (m.get("text_source") or "manual") != "wemeet":
+            box["error"] = (
+                "这场会已经有手工填写的原文，不能被转写覆盖。"
+                "要改用转写，请新建一场会再拉。"
+            )
+            return doc
+
+        dropped = len(m.get("items") or [])
+        if dropped:
+            m["items"] = []
+            box["replaced_items"] = dropped
+        m["text"] = text
+        m["text_source"] = "wemeet"
+        # 开了会、有了原文，它就不再是「待召开」了
+        m["kind"] = "record"
+        m["status"] = "draft"
+        m["parsed_at"] = None
+        online = dict(m.get("online") or {})
+        online.update({
+            "platform": "wemeet",
+            "record_file_id": str(record_file_id or ""),
+            "transcript_at": _now(),
+            "transcript_chars": len(text),
+            "transcript_truncated": bool(truncated),
+        })
+        m["online"] = online
+        # 旧提醒（比如上一次截断）不能留着让人以为这次也截断了
+        m["warnings"] = [w for w in (m.get("warnings") or []) if "截断" not in str(w)]
+        if truncated:
+            m["warnings"].append(
+                f"转写过长，落库时截到 {len(text)} 字；解析只读前 12000 字，完整内容请回腾讯会议查。"
+            )
+        box["ok"] = True
+        box["meeting"] = m
+        return doc
+
+    store.update(FILE, _do, default=_empty())
+    return box
 
 
 def update_item(mid: str, iid: str, patch: dict[str, Any]) -> dict[str, Any]:

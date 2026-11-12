@@ -5,6 +5,8 @@ data/
 config/local.env
 # 推送通道配置里有 webhook key 和邮箱授权码，只提交 notify.example.json
 config/notify.json
+# 腾讯会议的企业凭证（SecretKey 等同密码），只提交 wemeet.example.json
+config/wemeet.json
 
 # Python
 __pycache__/

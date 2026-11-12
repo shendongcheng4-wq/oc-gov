@@ -1220,6 +1220,8 @@ html.embedded .drawer{top:0;height:100%}
 /* 会议助手本身也是一个 .modal（同 z-index 60，且在本弹窗之后入 DOM），
    不抬高就会被它盖住 —— 而通知恰恰是从那个弹窗里点开的。 */
 #noticeModal{z-index:70}
+/* 腾讯会议配置同理：从会议详情里点开，不抬高会被会议助手盖住 */
+#wmCfgModal{z-index:72}
 .notice-ta{
   width:100%;min-height:44vh;max-height:70vh;padding:14px 16px;border:1px solid var(--line);border-radius:10px;
   background:var(--surface);color:var(--ink);font-size:13px;line-height:1.95;resize:vertical;
@@ -1334,7 +1336,73 @@ html.embedded .drawer{top:0;height:100%}
 .mt-head{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:4px}
 .mt-head h4{margin:0;font-size:14px}
 .mt-meta{font-size:11.5px;color:var(--muted);margin:4px 0 0}
+.mt-wm{color:var(--brand);word-break:break-all}
+.mt-wm a{color:inherit}
 .mt-acts{display:flex;gap:6px;margin:10px 0 4px;flex-wrap:wrap}
+/* 说明文字单独占一行：和按钮挤在一行时，「未配置」那句会插在两个按钮中间，
+   读起来像是按钮名的一部分 */
+.mt-acts-hint{flex:1 0 100%;margin:2px 0 0}
+
+/* 腾讯会议配置弹窗 */
+.wm-box{width:min(760px,94vw)}
+.wm-state{padding:9px 11px;border-radius:8px;font-size:12px;line-height:1.7;margin-bottom:12px}
+.wm-state.ok{background:var(--ok-bg);color:var(--ok);border:1px solid var(--ok-line)}
+.wm-state.bad{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line)}
+.wm-sec{margin-top:14px}
+.wm-sec>label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:6px;letter-spacing:.02em}
+.wm-path{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.wm-path code{font-size:11.5px;background:var(--surface-3);border:1px solid var(--line);
+  border-radius:6px;padding:4px 8px;word-break:break-all}
+.wm-pre{font-size:11.5px;line-height:1.6;background:var(--surface-3);border:1px solid var(--line);
+  border-radius:8px;padding:10px;max-height:190px;overflow:auto;margin:0 0 8px;white-space:pre}
+.wm-list{margin:0;padding-left:18px;font-size:12px;line-height:1.95;color:var(--ink-2)}
+.wm-list b{color:var(--ink)}
+.wm-test{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+#wmTestOut{flex:1 1 260px}
+.wm-link{color:var(--brand);cursor:pointer;text-decoration:none;border-bottom:1px dashed currentColor}
+
+.wm-acts{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:0 0 4px}
+.wm-act{display:flex;flex-direction:column;gap:3px;text-align:left;padding:10px 12px;border:1px solid var(--line);
+  border-radius:10px;background:var(--surface-3);cursor:pointer;font:inherit;color:var(--ink)}
+.wm-act:hover{border-color:var(--brand);background:var(--brand-soft)}
+.wm-act:disabled{opacity:.5;cursor:default}
+.wm-act b{font-size:12.5px}
+.wm-act span{font-size:11px;color:var(--muted);line-height:1.5}
+.wm-adv{margin-top:14px;border-top:1px dashed var(--line);padding-top:10px}
+.wm-adv summary{font-size:11.5px;color:var(--muted);cursor:pointer}
+.wm-row{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;padding:8px 10px;
+  border:1px solid var(--line);border-radius:8px;margin-bottom:6px}
+.wm-row-main{display:flex;flex-direction:column;gap:3px;min-width:0}
+.wm-row-main b{font-size:12.5px}
+.wm-row-main span{font-size:11px;color:var(--muted)}
+.wm-tags{display:flex;gap:6px;flex-wrap:wrap}
+.wm-tag{font-size:10.5px;padding:1px 6px;border-radius:999px;font-style:normal}
+.wm-tag.ok{background:var(--ok-bg);color:var(--ok)}
+.wm-tag.dim{background:var(--surface-3);color:var(--faint)}
+.wm-card{border:1px solid var(--line);border-radius:10px;padding:12px;margin:8px 0 10px;background:var(--surface-2)}
+.wm-kv{display:flex;gap:10px;font-size:12px;line-height:2}
+.wm-kv span{color:var(--muted);min-width:56px}
+.wm-kv b{font-size:13px;letter-spacing:.02em}
+.wm-kv a{color:var(--brand);word-break:break-all}
+.wm-p-en{font-size:10px;color:var(--faint);font-weight:400;margin-left:2px}
+.wm-primary{display:inline-block;margin-top:10px;padding:9px 18px;border:none;border-radius:8px;
+  background:var(--brand);color:#fff;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;
+  box-shadow:0 2px 8px rgba(13,84,200,.25)}
+.wm-primary:hover{background:var(--brand-2)}
+.wm-primary:disabled{opacity:.55;cursor:default;box-shadow:none}
+#wmToolModal{z-index:74}
+.wm-form{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px}
+.wm-f{display:flex;flex-direction:column;gap:4px}
+.wm-f label{font-size:11px;color:var(--muted)}
+.wm-f input,.wm-f select,.wm-f textarea{
+  font-size:12px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;
+  background:var(--surface);color:var(--ink);font-family:inherit
+}
+.wm-f textarea{grid-column:1/-1;resize:vertical}
+.wm-out{max-height:260px}
+.wm-raw{margin-top:10px}
+.wm-raw summary{font-size:11.5px;color:var(--muted);cursor:pointer}
+.wm-raw .wm-pre{margin-top:6px;max-height:220px}
 .mt-warn{
   margin:8px 0;padding:7px 10px;border-radius:7px;font-size:11.5px;line-height:1.7;
   background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line);
@@ -2502,6 +2570,32 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
         <span class="hint" id="mnLines"></span>
       </div>
     </div>
+  </div>
+</div>
+
+<div class="modal" id="wmCfgModal">
+  <div class="modal-box wm-box">
+    <div class="modal-head">
+      <div>
+        <h3>腾讯会议配置</h3>
+        <p>凭证只放本机 config/wemeet.json。这里没有写配置的入口 —— 能打开页面就能改企业会议账号，比没有这个功能更糟。</p>
+      </div>
+      <span class="modal-x" id="wmClose">✕</span>
+    </div>
+    <div class="modal-body" id="wmBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="wmToolModal">
+  <div class="modal-box wm-box">
+    <div class="modal-head">
+      <div>
+        <h3>腾讯会议</h3>
+        <p>订会、取纪要、查会都在这里。结果不会自动写进台账，要你点一下才算。</p>
+      </div>
+      <span class="modal-x" id="wmToolClose">✕</span>
+    </div>
+    <div class="modal-body" id="wmToolBody"></div>
   </div>
 </div>
 
@@ -7141,7 +7235,7 @@ async function saveLayout() {
 /* ---------- 会议助手 ----------
    解析和落库是两个显式动作，中间一定要经过人：模型抽出来的东西先摆出来给人看，
    勾选之后才进督办台账。不要为了"顺手"把这两步合成一步。 */
-let MT = { list: [], stats: {}, units: [], model_ready: false, current: null, sel: new Set() };
+let MT = { list: [], stats: {}, units: [], model_ready: false, current: null, sel: new Set(), wemeet: null };
 
 /* ---------------- 消息提醒 ----------------
    三件事分开做，混在一起会互相拖累：
@@ -8854,6 +8948,7 @@ async function refreshMeetList() {
     MT.stats = d.stats || {};
     MT.units = d.units || [];
     MT.model_ready = !!d.model_ready;
+    if (d.wemeet) MT.wemeet = d.wemeet;
   } catch (e) {
     $("#mtList").innerHTML = `<div class="mt-empty" style="padding:14px 6px">加载失败：${esc(e.message)}</div>`;
     return;
@@ -8861,7 +8956,7 @@ async function refreshMeetList() {
   $("#mtList").innerHTML = MT.list.length
     ? MT.list.map((m) => `
       <div class="mt-item ${m.id === MT.current ? "on" : ""}" data-mt="${esc(m.id)}">
-        <b>${esc(m.title)}${m.kind === "plan" ? ` <em class="mt-plan">待召开</em>` : ""}</b>
+        <b>${esc(m.title)}${m.kind === "plan" ? ` <em class="mt-plan">待召开</em>` : ""}${m.online && m.online.meeting_code ? ` <em class="mt-plan" title="已绑定腾讯会议">线上</em>` : ""}</b>
         <span>${esc(m.held_at || "—")}${m.place ? ` · ${esc(m.place)}` : ""}</span>
         <span>${m.kind === "plan"
           ? `参会 ${(m.attendees || []).length} 家 · 还没开，没有议定事项`
@@ -8937,19 +9032,40 @@ function renderMeetDetail(m) {
   const planned = m.kind === "plan";
   const where = [m.held_at || "—", m.place ? esc(m.place) : "", m.host ? `主持 ${esc(m.host)}` : "",
     (m.attendees || []).length ? `参会 ${esc(m.attendees.join("、"))}` : ""].filter(Boolean).join(" · ");
+
+  /* 腾讯会议：配好了才给按钮，没配就把「缺哪项」写在旁边。
+     按钮点了必然失败（503）比按钮不存在更糟 —— 用户会以为系统坏了。 */
+  const wm = m.online || {};
+  const wmReady = !!(MT.wemeet && MT.wemeet.ready);
+  const wmHas = !!wm.meeting_id;
+  const wmMissing = (MT.wemeet && MT.wemeet.missing) || [];
+  const wmLine = (wm.meeting_code || wm.join_url)
+    ? `<p class="mt-meta mt-wm">腾讯会议 ${esc(wm.meeting_code || "—")}${wm.join_url ? ` · <a href="${esc(wm.join_url)}" target="_blank" rel="noopener">入会链接</a>` : ""}${wm.password ? ` · 密码 ${esc(wm.password)}` : ""}</p>`
+    : "";
+  // 一个入口：工具面板。开会、查会、拿纪要都是面板里的工具，
+  // 不再为每个动作单开一个按钮 —— 动作有哪些由服务端说了算。
+  const wmButtons = wmReady ? `<button class="mini" id="mtWmOpen">腾讯会议</button>` : "";
+  const wmHintText = wmReady
+    ? ""
+    : `腾讯会议未配置${wmMissing.length ? "：" + wmMissing.join("、") : ""}`;
+
   $("#mtDetail").innerHTML = `
     <div class="mt-head">
       <h4>${esc(m.title)}</h4>
       <span class="mt-tag ${m.status === "draft" || m.status === "planned" ? "" : "done"}">${esc(STATUS_CN[m.status] || m.status)}</span>
     </div>
     <p class="mt-meta">${where}</p>
+    ${wmLine}
     <div class="mt-acts">
       ${planned
-        ? `<button class="mini" id="mtNotice">生成会议通知</button>
-           <span class="hint" style="margin:6px 0 0">成文后可复制或导出到桌面，由你自行下发</span>`
-        : `<button class="mini" id="mtParse" ${committed ? "disabled" : ""}>${items.length ? "重新解析" : "解析议定事项"}</button>
-           <span class="hint" style="margin:6px 0 0">${MT.model_ready ? "模型就绪" : "未配置模型，无法解析"} · 事项 ${items.length} 条，已落督办 ${committed} 条</span>`}
+        ? `<button class="mini" id="mtNotice">生成会议通知</button>`
+        : `<button class="mini" id="mtParse" ${committed ? "disabled" : ""}>${items.length ? "重新解析" : "解析议定事项"}</button>`}
+      ${wmButtons}
       <button class="mini" id="mtDel">删除会议</button>
+      <span class="hint mt-acts-hint">${planned
+        ? "成文后可复制或导出到桌面，由你自行下发"
+        : `${MT.model_ready ? "模型就绪" : "未配置模型，无法解析"} · 事项 ${items.length} 条，已落督办 ${committed} 条`}</span>
+      <span class="hint mt-acts-hint">${wmHintText ? `${esc(wmHintText)} · ` : ""}<a class="wm-link" id="mtWmCfg">腾讯会议配置</a></span>
     </div>
     ${planned ? `<div class="mt-warn info">这是一场还没召开的会，没有纪要原文。开完把纪要粘进正文再解析议定事项 —— 现在解析，抽出来的只会是模型编的东西。</div>` : ""}
     ${(m.warnings || []).map((w) => `<div class="mt-warn info">${esc(w)}</div>`).join("")}
@@ -9034,6 +9150,497 @@ function bindNoticeModal() {
   };
 }
 
+/* 腾讯会议配置说明：**只读展示，不写配置**。
+   写配置要 POST，而这个项目没有、也不该有那个接口 —— 能打开页面的人就能换掉
+   别人的会议账号，比没有这个功能更糟。所以这里只说三件事：Token 去哪拿、
+   文件在哪、模板长什么样。 */
+function openWmCfg() {
+  const w = MT.wemeet || {};
+  const ready = !!w.ready;
+  const tpl = w.template || "";
+  // 模板里的 _说明 是给读文件的人看的，弹窗下方已经成文，留着只会把关键信息挤出屏幕
+  let tplShown = tpl;
+  try {
+    const obj = JSON.parse(tpl);
+    delete obj._说明;
+    tplShown = JSON.stringify(obj, null, 2);
+  } catch (e) { /* 模板坏了就原样显示，别把问题藏起来 */ }
+  const path = w.config_path || "config/wemeet.json";
+  $("#wmBody").innerHTML = `
+    <div class="wm-state ${ready ? "ok" : "bad"}">${
+      ready
+        ? `已配置 · Token 尾号 ${esc(w.token_tail || "—")} · ${esc(w.url || "")}`
+        : `未配置${(w.missing || []).length ? "：" + esc(w.missing.join("、")) : ""}`
+    }</div>
+
+    <div class="wm-sec">
+      <label>验一下</label>
+      <div class="wm-test">
+        <button class="mini" id="wmTest" ${ready ? "" : "disabled"}>测试连接</button>
+        <span class="hint" id="wmTestOut">${ready ? "握手 + 列工具，不建会、不改任何东西" : "先填 Token 再测"}</span>
+      </div>
+    </div>
+
+    <div class="wm-sec">
+      <label>配置文件（真实文件已 gitignore，别提交）</label>
+      <div class="wm-path"><code>${esc(path)}</code>
+        <button class="mini" id="wmCopyPath">复制路径</button></div>
+      <p class="hint">改完保存就生效 —— 配置是每次请求现读的，不用重启服务。</p>
+    </div>
+
+    <div class="wm-sec">
+      <label>模板（复制成 wemeet.json，只填 token 一行）</label>
+      <pre class="wm-pre" id="wmTpl">${esc(tplShown || "（没找到 config/wemeet.example.json）")}</pre>
+      <button class="mini" id="wmCopyTpl">复制模板</button>
+    </div>
+
+    <div class="wm-sec">
+      <label>Token 怎么拿</label>
+      <ol class="wm-list">
+        <li>打开 <a href="${esc(w.auth_url || "https://meeting.tencent.com/ai-skill.html")}" target="_blank" rel="noopener">meeting.tencent.com/ai-skill.html</a>，用你的腾讯会议账号登录</li>
+        <li>页面上会给出一个 Token，整段复制</li>
+        <li>粘进 <code>config/wemeet.json</code> 的 <code>token</code> 字段，保存</li>
+      </ol>
+      <p class="hint">走的是官方 MCP，不是企业自建应用：不用 AppId/SdkId、不用申请权限点、
+        没有「高级账号 × 月」的建会配额、也不用换 STS-Token。代价是它只看得见
+        <b>这个 Token 所属账号</b>的会议。</p>
+    </div>`;
+
+  $("#wmCopyPath").onclick = async () => {
+    try { await copyText(path); toast("路径已复制"); } catch (e) { toast("复制失败，手动选中吧"); }
+  };
+  $("#wmCopyTpl").onclick = async () => {
+    if (!tplShown) return toast("没有模板文件可复制");
+    try { await copyText(tplShown); toast("模板已复制"); } catch (e) { toast("复制失败，手动选中吧"); }
+  };
+  $("#wmTest").onclick = async () => {
+    const btn = $("#wmTest"), out = $("#wmTestOut");
+    btn.disabled = true;
+    btn.textContent = "连接中…";
+    out.textContent = "";
+    try {
+      const r = await fetch("/api/wemeet/test", { method: "POST", headers: authHeaders() });
+      const d = await r.json();
+      if (r.status === 403) { handleWriteDeny(d); out.textContent = d.error || "未登录或越权"; return; }
+      out.textContent = d.detail || d.error || (d.ok ? "通了" : "没通");
+      out.style.color = d.ok ? "var(--ok)" : "var(--warn)";
+      if (d.ok) toast("连接可用");
+    } catch (e) {
+      out.textContent = "连接失败：" + e.message;
+      out.style.color = "var(--warn)";
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "测试连接";
+    }
+  };
+
+  $("#wmCfgModal").classList.add("on");
+}
+
+/* ---------- 腾讯会议工具面板 ----------
+   工具名与参数**都不硬编码**：/api/wemeet/tools 把服务端 tools/list 原样带回来，
+   这里按 inputSchema 渲染表单。写死 create_meeting(subject, start_time) 那种签名，
+   换个版本就静默失效，而界面只会说「调用失败」。 */
+let WM = { tools: [], cur: "", result: null, meta: null };
+
+function wmTool() { return WM.tools.find((t) => t.name === WM.cur) || null; }
+
+async function openWmPanel() {
+  WM.result = null;
+  WM.meta = null;
+  $("#wmToolBody").innerHTML = `<div class="mt-empty">正在连接腾讯会议…</div>`;
+  $("#wmToolModal").classList.add("on");
+  try {
+    const d = await (await fetch("/api/wemeet/tools")).json();
+    if (!d.ok) {
+      $("#wmToolBody").innerHTML = `<div class="wm-state bad">${esc(d.detail || d.error || "连接失败")}</div>`;
+      return;
+    }
+    WM.tools = d.tools || [];
+    WM.meta = d;
+    if (!WM.cur || !WM.tools.some((t) => t.name === WM.cur)) {
+      const first = ["schedule_meeting", "get_user_meetings"].find((n) => WM.tools.some((t) => t.name === n));
+      WM.cur = first || (WM.tools.length ? WM.tools[0].name : "");
+    }
+    renderWmPanel();
+  } catch (e) {
+    $("#wmToolBody").innerHTML = `<div class="wm-state bad">${esc(e.message)}</div>`;
+  }
+}
+
+/* 工具中文名与分组。**服务端只给英文工具名**（schedule_meeting、get_transcripts_details…），
+   直接摆给人看等于让人背单词。这里补一层中文对照，分组也只按「开会的人关心什么」分，
+   不按接口文档分。认不出的工具不硬编，退回原名 + 服务端描述。 */
+const WM_CN = {
+  // 会议
+  schedule_meeting: ["订会议", "按主题和时间在腾讯会议里订一场会", "会议"],
+  update_meeting: ["改会议", "改已有会议的主题或时间（写操作）", "会议"],
+  cancel_meeting: ["取消会议", "取消一场已订的会（写操作）", "会议"],
+  get_meeting: ["查会议详情", "按会议 ID 看一场会的完整信息", "会议"],
+  get_meeting_by_code: ["按会议号查", "用 9 位会议号查会议信息", "会议"],
+  get_user_meetings: ["我的待开会", "还没开始或正在进行的会", "会议"],
+  get_user_ended_meetings: ["我的已开会", "已经结束的会（可给时间范围）", "会议"],
+  search_meetings: ["搜会议", "按关键词、会议号、时间范围找会", "会议"],
+  // 成员
+  get_meeting_participants: ["参会成员", "谁真的进了会（含入会离会时间）", "成员"],
+  get_meeting_invitees: ["受邀成员", "这場会邀请了谁", "成员"],
+  get_waiting_room: ["等候室名单", "会中等候室里还有谁", "成员"],
+  manage_waiting_room: ["管理等候室", "让等候室的人进来或移出（写操作）", "成员"],
+  meeting_invitees_add: ["加受邀人", "往已订的会里追加受邀人（写操作）", "成员"],
+  meeting_invitees_remove: ["移除受邀人", "从会里去掉某位受邀人（写操作）", "成员"],
+  meeting_invitees_replace: ["替换受邀人", "整份替换受邀名单（写操作）", "成员"],
+  export_participants: ["导出参会统计", "把参会明细导出成文件（异步，给 job_id）", "成员"],
+  meeting_control_call: ["呼叫入会", "会中批量呼叫成员进来（写操作）", "成员"],
+  meeting_control_kick: ["移出成员", "会中把成员移出（写操作）", "成员"],
+  // 录制与纪要
+  get_records_list: ["录制列表", "这场会有哪些录制文件", "录制与纪要"],
+  get_record_addresses: ["录制下载地址", "拿录制视频/音频的下载链接", "录制与纪要"],
+  get_transcripts_details: ["转写详情", "录制的逐字转写（按发言人分段）", "录制与纪要"],
+  get_transcripts_paragraphs: ["转写分段", "分页看转写段落", "录制与纪要"],
+  search_transcripts: ["搜转写", "在转写里搜关键词", "录制与纪要"],
+  get_smart_minutes: ["智能纪要", "AI 生成的会议纪要（摘要，不是逐字稿）", "录制与纪要"],
+  get_minutes: ["元宝纪要", "腾讯会议「元宝纪要」的完整内容", "录制与纪要"],
+  search_minutes: ["搜纪要", "在我的纪要里搜关键词", "录制与纪要"],
+  search_records: ["搜录制", "按关键词/时间在我的录制里找", "录制与纪要"],
+  // 权限
+  apply_record_permission_prepare: ["申请录制权限（预览）", "没权限看录制时，先拿申请预览", "权限"],
+  apply_record_permission_commit: ["申请录制权限（提交）", "提交录制权限申请", "权限"],
+  // 通讯录
+  contact_lookup_by_email: ["邮箱查人", "邮箱 → open_id，给邀请成员用", "通讯录"],
+  contact_lookup_by_phone: ["手机号查人", "手机号 → open_id，给邀请成员用", "通讯录"],
+  contact_search: ["按姓名查人", "姓名/部门 → open_id，给邀请成员用", "通讯录"],
+  // 其他
+  convert_timestamp: ["时间格式转换", "时间戳 ↔ 日期，也能取当前/昨天/一周前", "其他"],
+  get_job_result: ["取异步结果", "导出类任务的进度与下载链接", "其他"],
+  check_skill_version: ["查版本", "这个腾讯会议 Skill 有没有新版本", "其他"],
+  submit_feedback: ["意见反馈", "把工具用不了的情况反馈给腾讯", "其他"],
+};
+
+/* 参数名中文。模型能读英文，人不能 —— 表单标签必须说人话。 */
+const WM_PARAM_CN = {
+  subject: "会议主题", start_time: "开始时间", end_time: "结束时间",
+  password: "入会密码", time_zone: "时区", meeting_type: "会议类型",
+  meeting_id: "会议 ID", meeting_code: "会议号", sub_meeting_id: "子会议 ID",
+  record_file_id: "录制文件 ID", meeting_record_id: "录制 ID",
+  pid: "起始段落", limit: "段落数", page_size: "每页条数", page_number: "页码",
+  page_token: "翻页游标", pos: "起始位置", cursory: "每页条数",
+  from: "开始时间", to: "结束时间", day: "日期", days: "天数",
+  keyword: "关键词", text: "搜索词", lang: "语言", pwd: "录制密码",
+  size: "每页条数", userid: "用户 ID", open_id: "用户 open_id",
+  email: "邮箱", phone: "手机号", invitees: "受邀成员",
+  auto_record_type: "自动录制", auto_asr: "自动转写",
+  auto_in_waiting_room: "等候室", only_user_join_type: "入会限制",
+  audio_watermark: "音频水印", is_compact: "精简返回",
+  timezone: "时区", operator_id: "操作者", recurring_rule: "周期规则",
+  duration_minutes: "时长（分钟）", auto_record: "自动录制",
+};
+
+function wmMeta(name) {
+  const hit = WM_CN[name];
+  return hit ? { cn: hit[0], desc: hit[1], group: hit[2] }
+             : { cn: "", desc: "", group: "其他" };
+}
+
+function wmParamLabel(key, prop, required) {
+  const cn = WM_PARAM_CN[key];
+  return `${esc(cn || key)}${cn ? ` <code class="wm-p-en">${esc(key)}</code>` : ""}`
+    + (required ? ' <b style="color:var(--danger)">*</b>' : "");
+}
+
+function wmFormHtml(tool) {
+  const schema = (tool && tool.input_schema) || {};
+  const props = schema.properties || {};
+  const req = new Set(schema.required || []);
+  const keys = Object.keys(props);
+  if (!keys.length) return `<p class="hint">这个工具不需要参数。</p>`;
+  // _client_info 是服务端的「系统参数」，我们自动补，不摆给人填
+  return keys.filter((k) => k !== "_client_info").map((k) => {
+    const p = props[k] || {};
+    const label = wmParamLabel(k, p, req.has(k));
+    const attrs = `data-wmp="${esc(k)}" data-wmtype="${esc(p.type || "string")}"`;
+    const ph = p.description ? ` placeholder="${esc(String(p.description).replace(/\s+/g, " ").slice(0, 48))}"` : "";
+    let input;
+    if (Array.isArray(p.enum) && p.enum.length) {
+      input = `<select ${attrs}><option value="">（不填）</option>${p.enum
+        .map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join("")}</select>`;
+    } else if (p.type === "boolean") {
+      input = `<select ${attrs}><option value="">（不填）</option><option value="true">true</option><option value="false">false</option></select>`;
+    } else if (p.type === "number" || p.type === "integer") {
+      input = `<input ${attrs} type="number" step="any"${ph}>`;
+    } else if (/text|content|transcript|minutes|summary|body/i.test(k)) {
+      input = `<textarea ${attrs} rows="4"${ph}></textarea>`;
+    } else {
+      input = `<input ${attrs}${ph}>`;
+    }
+    return `<div class="wm-f"><label>${label}</label>${input}</div>`;
+  }).join("");
+}
+
+const WM_GROUPS = ["会议", "成员", "录制与纪要", "权限", "通讯录", "其他"];
+
+/* 组内顺序按「多久用一次」排，不按字母排：订会议 / 取纪要排第一，比
+   apply_record_permission_commit 排第一有用得多。 */
+const WM_ORDER = ["schedule_meeting", "update_meeting", "cancel_meeting",
+  "get_user_meetings", "get_user_ended_meetings", "search_meetings",
+  "get_meeting", "get_meeting_by_code",
+  "get_meeting_participants", "get_meeting_invitees",
+  "get_transcripts_details", "get_smart_minutes", "get_records_list"];
+
+function wmToolMenu() {
+  const by = {};
+  for (const t of WM.tools) {
+    const m = wmMeta(t.name);
+    (by[m.group] = by[m.group] || []).push(t);
+  }
+  for (const g of Object.keys(by)) {
+    by[g].sort((a, b) => {
+      const ia = WM_ORDER.indexOf(a.name), ib = WM_ORDER.indexOf(b.name);
+      if (ia === ib) return a.name.localeCompare(b.name);
+      if (ia < 0) return 1;
+      if (ib < 0) return -1;
+      return ia - ib;
+    });
+  }
+  return WM_GROUPS.filter((g) => by[g]).map((g) => {
+    const opts = by[g].map((t) => {
+      const m = wmMeta(t.name);
+      const label = m.cn ? `${m.cn}（${t.name}）` : t.name;
+      return `<option value="${esc(t.name)}" ${t.name === WM.cur ? "selected" : ""}>${esc(label)}</option>`;
+    }).join("");
+    return `<optgroup label="${esc(g)}">${opts}</optgroup>`;
+  }).join("");
+}
+
+function wmToolIntro() {
+  const t = wmTool();
+  if (!t) return "服务端没给工具清单。";
+  const m = wmMeta(t.name);
+  const cn = m.cn ? `${esc(m.cn)}` : esc(t.name);
+  const server = (t.description || "").replace(/\s+/g, " ").slice(0, 120);
+  return `${cn}${m.cn ? `（${esc(t.name)}）` : ""}：${esc(m.desc || server)}`;
+}
+
+function renderWmPanel() {
+  const server = (WM.meta && WM.meta.server) || {};
+  const who = [server.name, server.version].filter(Boolean).join(" ");
+  $("#wmToolBody").innerHTML = `
+    <div class="wm-state ok">已连上腾讯会议${who ? `（${esc(who)}）` : ""}。
+      下面的三个动作参数都从这场会的主档里取，不用手填。</div>
+
+    <div class="wm-acts">
+      <button class="wm-act" id="wmPresetSchedule">
+        <b>订腾讯会议</b><span>用这场会的主题和时间在腾讯会议里订一场</span></button>
+      <button class="wm-act" id="wmPresetTranscript">
+        <b>取会议纪要</b><span>取录制转写（没有转写时退到智能纪要）</span></button>
+      <button class="wm-act" id="wmPresetRecent">
+        <b>查最近的会</b><span>最近 30 天开过哪些会、有没有纪要</span></button>
+    </div>
+
+    <div id="wmResult"></div>
+
+    <details class="wm-adv">
+      <summary>高级：直接调腾讯会议的工具（${WM.tools.length} 个）</summary>
+      <div class="wm-sec">
+        <label>工具</label>
+        <select id="wmToolSel">${wmToolMenu()}</select>
+        <p class="hint" id="wmToolDesc">${wmToolIntro()}</p>
+      </div>
+      <div class="wm-sec"><label>参数</label>
+        <div id="wmForm" class="wm-form">${wmFormHtml(wmTool())}</div></div>
+      <div class="wm-sec wm-test">
+        <button class="mini" id="wmRun">调用</button>
+        <span class="hint" id="wmRunOut">只回结果，不写进会议主档</span>
+      </div>
+    </details>`;
+
+  $("#wmToolSel").onchange = () => {
+    WM.cur = $("#wmToolSel").value;
+    WM.result = null;
+    renderWmPanel();
+  };
+  $("#wmRun").onclick = wmRun;
+  const ps = $("#wmPresetSchedule");
+  if (ps) ps.onclick = () => wmPreset("schedule", ps);
+  const pt = $("#wmPresetTranscript");
+  if (pt) pt.onclick = () => wmPreset("transcript", pt);
+  const pr = $("#wmPresetRecent");
+  if (pr) pr.onclick = () => wmPreset("recent", pr);
+  if (WM.result) renderWmResult(WM.result);
+}
+
+/* 预设动作：参数拼在服务端，这里只管调。结果同样不落库 ——
+   「订会」回来的是会议号，「取纪要」回来的是原文，都要人再点一次。 */
+async function wmPreset(action, btn, extra) {
+  const label = btn ? btn.innerHTML : "";
+  if (btn) { btn.disabled = true; }
+  try {
+    const payload = Object.assign({ action }, extra || {});
+    if (action === "schedule" || action === "transcript") payload.meeting_id = MT.current;
+    const r = await fetch("/api/wemeet/preset", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (r.status === 403) return handleWriteDeny(d);
+    if (!d.ok) {
+      toast(({ schedule: "订会失败：", transcript: "取纪要失败：",
+              recent: "查询失败：", participants: "查参会人失败：" }[action] || "失败：")
+            + (d.detail || d.error || "未知错误"));
+      return;
+    }
+    if (action === "recent") return renderWmRecent(d);
+    if (action === "participants") return renderWmPeople(d);
+    WM.result = d;
+    renderWmResult(d);
+    toast(d.summary || "完成");
+  } catch (e) {
+    toast("失败：" + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; if (label) btn.innerHTML = label; }
+  }
+}
+
+/* 查最近的会：只读。点某一场可以看参会人，或把它当成本地会议的线上信息。 */
+function renderWmRecent(d) {
+  const rows = (d.meetings || []).map((m) => `
+    <div class="wm-row">
+      <div class="wm-row-main">
+        <b>${esc(m.subject)}</b>
+        <span>${esc((m.start || "").replace("T", " ").slice(0, 16))}${m.meeting_code ? ` · 会议号 ${esc(m.meeting_code)}` : ""}</span>
+        <span class="wm-tags">
+          ${m.has_transcript ? `<em class="wm-tag ok">有转写</em>` : ""}
+          ${m.has_minutes ? `<em class="wm-tag ok">有智能纪要</em>` : ""}
+          ${!m.has_transcript && !m.has_minutes ? `<em class="wm-tag dim">无纪要</em>` : ""}
+        </span>
+      </div>
+      <div class="wm-row-acts">
+        <button class="mini" data-wm-people="${esc(m.meeting_id)}">参会人</button>
+      </div>
+    </div>`).join("");
+  $("#wmResult").innerHTML = `
+    <div class="wm-sec">
+      <label>${esc(d.summary || "最近的会")}</label>
+      ${rows || `<p class="hint">这段时间没有会。</p>`}
+    </div>`;
+  document.querySelectorAll("[data-wm-people]").forEach((b) => {
+    b.onclick = () => wmPreset("participants", b, { wemeet_meeting_id: b.dataset.wmPeople });
+  });
+}
+
+function renderWmPeople(d) {
+  const people = d.people || [];
+  const names = people.map((n) => `<span class="wm-tag ok">${esc(n)}</span>`).join("");
+  $("#wmResult").innerHTML = `
+    <div class="wm-sec">
+      <label>${esc(d.summary || "参会人")}</label>
+      ${names || `<p class="hint">没查到参会人（可能还没开，或不在你的可见范围）。</p>`}
+    </div>`;
+}
+
+async function wmRun() {
+  const tool = wmTool();
+  if (!tool) return;
+  const args = {};
+  document.querySelectorAll("#wmForm [data-wmp]").forEach((el) => {
+    const v = el.value;
+    if (v === "" || v == null) return;
+    const type = el.dataset.wmtype;
+    if (type === "number" || type === "integer") {
+      const n = Number(v);
+      if (!Number.isNaN(n)) args[el.dataset.wmp] = type === "integer" ? Math.trunc(n) : n;
+    } else if (type === "boolean") {
+      args[el.dataset.wmp] = v === "true";
+    } else {
+      args[el.dataset.wmp] = v;
+    }
+  });
+
+  const btn = $("#wmRun"), out = $("#wmRunOut");
+  btn.disabled = true;
+  btn.textContent = "调用中…";
+  out.textContent = "";
+  try {
+    const r = await fetch("/api/wemeet/call", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ tool: tool.name, args }),
+    });
+    const d = await r.json();
+    if (r.status === 403) { handleWriteDeny(d); out.textContent = d.error || "未登录或越权"; return; }
+    if (!d.ok) {
+      out.textContent = d.detail || d.error || "调用失败";
+      out.style.color = "var(--warn)";
+      return;
+    }
+    WM.result = d;
+    out.textContent = d.is_error ? "工具自己报了错（isError），内容见下" : "调用完成";
+    out.style.color = d.is_error ? "var(--warn)" : "var(--ok)";
+    renderWmResult(d);
+  } catch (e) {
+    out.textContent = "调用失败：" + e.message;
+    out.style.color = "var(--warn)";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "调用";
+  }
+}
+
+function renderWmResult(d) {
+  const f = d.found || {};
+  const online = f.online || {};
+  const hasOnline = !!(online.meeting_code || online.join_url || online.meeting_id);
+  const text = (f.text || "").trim();
+  // 只给人看该看的：会议号/链接，或者原文。信封和原始 JSON 不往界面上摆 ——
+  // 那是一屏 headers 和 trace id，领导看不懂，出问题该看服务端日志。
+  $("#wmResult").innerHTML = `
+    <div class="wm-sec">
+      ${d.summary ? `<div class="wm-state ok">${esc(d.summary)}</div>` : ""}
+      ${d.is_error ? `<div class="wm-state bad">工具返回了错误，内容见下。</div>` : ""}
+      ${hasOnline ? `<div class="wm-card">
+          <div class="wm-kv"><span>会议号</span><b>${esc(online.meeting_code || online.meeting_id || "")}</b></div>
+          ${online.join_url ? `<div class="wm-kv"><span>入会链接</span><a href="${esc(online.join_url)}" target="_blank" rel="noopener">${esc(online.join_url)}</a></div>` : ""}
+          ${online.password ? `<div class="wm-kv"><span>入会密码</span><b>${esc(online.password)}</b></div>` : ""}
+          <button class="wm-primary" id="wmApplyOnline">写进会议主档</button>
+        </div>` : ""}
+      ${text ? `<pre class="wm-pre wm-out">${esc(text)}</pre>
+        <button class="wm-primary" id="wmApplyText">落成会议原文</button>` : ""}
+    </div>`;
+  const a1 = $("#wmApplyOnline");
+  if (a1) a1.onclick = (e) => wmApply("online", e.currentTarget);
+  const a2 = $("#wmApplyText");
+  if (a2) a2.onclick = (e) => wmApply("text", e.currentTarget);
+}
+
+async function wmApply(kind, btn) {
+  if (!WM.result || !MT.current) return;
+  const f = WM.result.found || {};
+  const body = kind === "online" ? { online: f.online || {} } : { text: f.text || "" };
+  if (kind === "online" && !Object.keys(body.online).length) return toast("这次结果里没有会议号");
+  if (kind === "text" && !body.text) return toast("这次结果里没有可落库的文本");
+
+  const label = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "落库中…"; }
+  try {
+    const r = await fetch(`/api/meetings/${encodeURIComponent(MT.current)}/wemeet`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (r.status === 403) return handleWriteDeny(d);
+    if (!d.ok) { toast("落库失败：" + (d.error || "未知错误")); return; }
+    await refreshMeetList();
+    renderMeetDetail(d.meeting);
+    if (kind === "online") toast("会议号已写进主档，会议通知会带上入会链接");
+    else toast(`原文已落库（${(d.meeting.text || "").length} 字${d.replaced_items ? `，重置 ${d.replaced_items} 条旧事项` : ""}）`);
+  } catch (e) {
+    toast("落库失败：" + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  }
+}
+
 function bindMeetDetail() {
   const box = $("#mtDetail");
 
@@ -9088,6 +9695,13 @@ function bindMeetDetail() {
       parseBtn.textContent = "重新解析";
     }
   };
+
+  const wmOpen = $("#mtWmOpen");
+  if (wmOpen) wmOpen.onclick = () => openWmPanel();
+
+  // 配置说明的入口一直在（没配 Token 时旁边那句「腾讯会议未配置」后面就是它）
+  const wmCfgLink = $("#mtWmCfg");
+  if (wmCfgLink) wmCfgLink.onclick = (e) => { e.preventDefault(); openWmCfg(); };
 
   const delBtn = $("#mtDel");
   if (delBtn) delBtn.onclick = async () => {
@@ -10641,6 +11255,10 @@ $("#mtList").onclick = (e) => {
 $("#modelModal").onclick = (e) => { if (e.target.id === "modelModal") closeModelModal(); };
 bindNoticeModal();
 $("#tmClose").onclick = () => $("#themeModal").classList.remove("on");
+$("#wmClose").onclick = () => $("#wmCfgModal").classList.remove("on");
+$("#wmCfgModal").onclick = (e) => { if (e.target.id === "wmCfgModal") $("#wmCfgModal").classList.remove("on"); };
+$("#wmToolClose").onclick = () => $("#wmToolModal").classList.remove("on");
+$("#wmToolModal").onclick = (e) => { if (e.target.id === "wmToolModal") $("#wmToolModal").classList.remove("on"); };
 $("#themeModal").onclick = (e) => { if (e.target.id === "themeModal") $("#themeModal").classList.remove("on"); };
 $("#pluginsClose").onclick = () => $("#pluginsModal").classList.remove("on");
 $("#pluginsModal").onclick = (e) => { if (e.target.id === "pluginsModal") $("#pluginsModal").classList.remove("on"); };

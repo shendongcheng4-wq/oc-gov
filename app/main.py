@@ -106,6 +106,7 @@ import experts as expert_mod  # noqa: E402
 import meetplan as meetplan_mod  # noqa: E402
 import rag as rag_mod  # noqa: E402
 import harness as harness_mod  # noqa: E402
+import wemeet as wemeet_mod  # noqa: E402
 import auth  # noqa: E402
 import audit  # noqa: E402
 import authz  # noqa: E402
@@ -299,6 +300,20 @@ def turn_close(turn_id: str) -> None:
             turn["ts"] = time.time()
 
 
+def _wemeet_display(payload: object, fallback: str) -> str:
+    """给人看的结果文本：有业务对象就格式化它，没有才退回原串。
+
+    真服务端的 content[].text 是三层信封（含 headers、trace id、版本提示），
+    原样甩进界面等于让人读日志。信封留给「原始 JSON」折叠区。
+    """
+    if isinstance(payload, (dict, list)):
+        try:
+            return json.dumps(payload, ensure_ascii=False, indent=2)[:8000]
+        except (TypeError, ValueError):
+            pass
+    return fallback
+
+
 def turn_events(turn_id: str, after: int, owner: str) -> dict | None:
     """取 seq > after 的事件。turn 不存在或不属于这个人时返回 None。"""
     with _TURN_LOCK:
@@ -419,6 +434,12 @@ WRITE_POLICY: tuple[tuple[str, str, str | None], ...] = (
     ("POST", r"/api/meetings", authz.MEETING_COMMIT),
     ("POST", r"/api/meetings/[^/]+/parse", authz.MEETING_COMMIT),
     ("POST", r"/api/meetings/[^/]+/commit", authz.MEETING_COMMIT),
+    # 调腾讯会议建会 / 拉转写：会真的往外部系统写东西，也真的把会议全文拉回来
+    ("POST", r"/api/meetings/[^/]+/wemeet", authz.MEETING_COMMIT),
+    # 凭证自检 / 调 MCP 工具。调用可能建会，所以按写操作管
+    ("POST", r"/api/wemeet/test", authz.MEETING_COMMIT),
+    ("POST", r"/api/wemeet/call", authz.MEETING_COMMIT),
+    ("POST", r"/api/wemeet/preset", authz.MEETING_COMMIT),
     ("POST", r"/api/meetplan", authz.MEETING_COMMIT),
     ("PATCH", r"/api/meetings/[^/]+/items/[^/]+", authz.MEETING_EDIT),
     ("DELETE", r"/api/meetings/[^/]+", authz.MEETING_EDIT),
@@ -1225,8 +1246,20 @@ class Handler(BaseHTTPRequestHandler):
                         "stats": meetings.stats(),
                         "units": meeting_extract.known_units(),
                         "model_ready": modelcfg.available(),
+                        # 只回「有没有配好、缺哪项」，凭证本身永不出现在响应里
+                        "wemeet": wemeet_mod.public_config(),
                     }
                 )
+
+            # 腾讯会议 MCP 的工具清单（含 inputSchema）。界面据此渲染参数表单 ——
+            # 工具名与参数不硬编码，服务端给什么就是什么。
+            if path == "/api/wemeet/tools":
+                res = wemeet_mod.probe()
+                if res.get("ok"):
+                    return self._json(res)
+                if res.get("error") == "not_configured":
+                    return self._json({**res, "error": "wemeet_not_configured"}, 503)
+                return self._json(res, 502)
 
             parts = _parts(path, "/api/meetings/")
             if len(parts) == 2 and parts[1] == "notice":
@@ -1240,7 +1273,12 @@ class Handler(BaseHTTPRequestHandler):
                 one = meetings.get(parts[0])
                 if one is None:
                     return self._json({"ok": False, "error": "meeting_not_found"}, 404)
-                return self._json({"ok": True, "meeting": one, "units": meeting_extract.known_units()})
+                return self._json({
+                    "ok": True,
+                    "meeting": one,
+                    "units": meeting_extract.known_units(),
+                    "wemeet": wemeet_mod.public_config(),
+                })
 
             self.send_error(404)
         except Exception as exc:  # noqa: BLE001 统一兜住，别让异常变成空响应
@@ -1289,6 +1327,18 @@ class Handler(BaseHTTPRequestHandler):
             # 提问整理：只把输入框里那句话改写得更像指标问法，不发出去。
             if path == "/api/ask/polish":
                 return self._ask_polish(body)
+
+            # 腾讯会议自检：握手 + 列工具，不建会、不改任何东西
+            if path == "/api/wemeet/test":
+                return self._wemeet_test()
+
+            # 调一个 MCP 工具。只回结果，落库走 /api/meetings/<id>/wemeet
+            if path == "/api/wemeet/call":
+                return self._wemeet_call(body)
+
+            # 预设动作：一键建会 / 一键取纪要（参数拼装在服务端）
+            if path == "/api/wemeet/preset":
+                return self._wemeet_preset(body)
 
             # 停止一轮。只登记标记，真正的停发生在 ask 的下一个步骤边界；
             # 返回 ok 只代表"收到了"，不代表"已经停了"——界面不该等这个结果。
@@ -1756,6 +1806,8 @@ class Handler(BaseHTTPRequestHandler):
 
             if len(parts) == 2 and parts[1] == "parse":
                 return self._parse_meeting(parts[0], body)
+            if len(parts) == 2 and parts[1] == "wemeet":
+                return self._wemeet_apply(parts[0], body)
             if len(parts) == 2 and parts[1] == "commit":
                 # 议定事项落库也是写操作，需登录 + 领导权限。
                 scope, allowed, why = self._require(authz.MEETING_COMMIT)
@@ -2171,6 +2223,260 @@ class Handler(BaseHTTPRequestHandler):
                 "usage": parsed.get("usage") or {},
             }
         )
+
+    # ---------------- 腾讯会议 ----------------
+    def _wemeet_test(self) -> None:
+        """凭证自检。只读，不改任何数据，也不建会。"""
+        scope, allowed, why = self._require(authz.MEETING_COMMIT)
+        if not allowed:
+            audit.user_event(scope.get("person") if scope else None, "access.denied",
+                             target="meeting.wemeet_test", payload={"reason": why})
+            return self._json({"ok": False, "error": why}, 403)
+
+        res = wemeet_mod.probe()
+        audit.user_event(scope["person"], "meeting.wemeet_test",
+                         target="wemeet", payload={"ok": res.get("ok"), "error": res.get("error")})
+        if res.get("ok"):
+            return self._json(res)
+        if res.get("error") == "not_configured":
+            # 对外统一一个码：客户端级的 not_configured 只在 wemeet.py 内部用
+            return self._json({**res, "error": "wemeet_not_configured"}, 503)
+        return self._json(res, 502)
+
+    def _wemeet_call(self, body: dict) -> None:
+        """调一个腾讯会议 MCP 工具。**只回结果，不写任何本地数据。**
+
+        为什么拆两步：服务端给什么工具、参数怎么填，我们事先并不知道（工具清单是
+        运行时 list 出来的）。如果「调用」顺手把结果写进会议主档，等于让远端服务
+        决定督办台账里出现什么字。所以这里只认一认结果里有没有会议号 / 会议原文，
+        真正落库由人点「写进会议主档」「落成会议原文」。
+        """
+        scope, allowed, why = self._require(authz.MEETING_COMMIT)
+        if not allowed:
+            audit.user_event(scope.get("person") if scope else None, "access.denied",
+                             target="meeting.wemeet_call", payload={"reason": why})
+            return self._json({"ok": False, "error": why}, 403)
+
+        name = str(body.get("tool") or body.get("name") or "").strip()
+        raw_args = body.get("args")
+        args = raw_args if isinstance(raw_args, dict) else {}
+        if not name:
+            return self._json({"ok": False, "error": "bad_param", "detail": "没给工具名。"}, 400)
+
+        res = wemeet_mod.call_tool(name, args)
+        audit.user_event(scope["person"], "meeting.wemeet_call",
+                         target=name, payload={"ok": res.get("ok"), "error": res.get("error")})
+        if not res.get("ok"):
+            if res.get("error") == "not_configured":
+                return self._json({**res, "error": "wemeet_not_configured"}, 503)
+            return self._json(res, 502)
+
+        text = res.get("text") or ""
+        # 认结果只看剥过信封的业务对象：信封里有 headers 和 trace id，
+        # 混进来会把「Date: Thu, 12 Nov 2026」当成会议原文。
+        payload = res.get("payload")
+        online = wemeet_mod.extract_online(payload) or {}
+        transcript = wemeet_mod.extract_text(payload) or ""
+        # 有些工具只把整段东西塞在 content[].text 里（比如智能纪要的 markdown）
+        if not transcript and len(text) >= 40:
+            transcript = text
+        return self._json({
+            "ok": True,
+            "is_error": res.get("is_error"),
+            "tool": name,
+            "text": transcript or _wemeet_display(payload, text),
+            "raw": res.get("raw"),
+            "found": {
+                "online": online,
+                # 全文一并回给界面：落库时前端要原样送回来，不自己拼文本
+                "text": transcript,
+                "text_chars": len(transcript),
+                "text_preview": transcript[:160],
+            },
+            "hint": "结果没有写进任何地方。要落库请分别点「写进会议主档」「落成会议原文」。",
+        })
+
+    def _wemeet_preset(self, body: dict) -> None:
+        """中文预设动作：订会议 / 取纪要 / 查最近的会 / 看参会人。
+
+        这四个动作把「调哪个工具、参数怎么拼」都收在服务端（`wemeet.preset_*`）：
+        时间是 ISO 8601、转写要先查 record_file_id、详情还要 pid —— 这些不该让
+        用户看见。界面只给中文按钮，工具名和 schema 收进「高级」。
+
+        结果形状仍分两类：写操作（订会）回会议号，读操作（查会/参会人）回列表，
+        取纪要回文本。**都不落库**，落库仍要人再点一次。
+        """
+        scope, allowed, why = self._require(authz.MEETING_COMMIT)
+        if not allowed:
+            audit.user_event(scope.get("person") if scope else None, "access.denied",
+                             target="meeting.wemeet_preset", payload={"reason": why})
+            return self._json({"ok": False, "error": why}, 403)
+
+        action = str(body.get("action") or "").strip().lower()
+        if action not in ("schedule", "transcript", "recent", "participants"):
+            return self._json({"ok": False, "error": "bad_action",
+                               "detail": f"不认识的动作：{action}"
+                                         "（只认 schedule / transcript / recent / participants）"}, 400)
+
+        # ---- 只读：查最近的会 ----
+        if action == "recent":
+            raw_days = body.get("days")
+            try:
+                days = int(raw_days) if raw_days not in (None, "") else 30
+            except (TypeError, ValueError):
+                days = 30
+            res = wemeet_mod.preset_recent(days)
+            audit.user_event(scope["person"], "meeting.wemeet_preset",
+                             target="wemeet", payload={"action": action, "ok": res.get("ok")})
+            if not res.get("ok"):
+                return self._preset_error(res)
+            # 变量名别用 meetings：那是模块级的 ledger 导入，函数里一赋值就变成
+            # 局部变量，后面 meetings.get(mid) 直接 UnboundLocalError。
+            rows = res.get("meetings") or []
+            return self._json({
+                "ok": True,
+                "preset": "recent",
+                "meetings": rows,
+                "raw": res.get("raw"),
+                "summary": f"最近 {days} 天有 {len(rows)} 场会",
+            })
+
+        # ---- 只读：看参会人 ----
+        if action == "participants":
+            wid = str(body.get("wemeet_meeting_id") or "").strip()
+            if not wid:
+                return self._json({"ok": False, "error": "bad_param",
+                                   "detail": "要看到参会人，得先给一场腾讯会议的会议 ID。"}, 400)
+            res = wemeet_mod.preset_participants(wid)
+            audit.user_event(scope["person"], "meeting.wemeet_preset",
+                             target="wemeet", payload={"action": action, "ok": res.get("ok")})
+            if not res.get("ok"):
+                return self._preset_error(res)
+            people = res.get("people") or []
+            return self._json({
+                "ok": True,
+                "preset": "participants",
+                "people": people,
+                "raw": res.get("raw"),
+                "summary": f"这场会查到 {len(people)} 位参会人",
+            })
+
+        # ---- 写/取：都需要一场本地会议做上下文 ----
+        mid = str(body.get("meeting_id") or "").strip()
+        one = meetings.get(mid) if mid else None
+        if one is None:
+            return self._json({"ok": False, "error": "meeting_not_found"}, 404)
+
+        if action == "schedule":
+            raw_minutes = body.get("minutes")
+            try:
+                minutes = int(raw_minutes) if raw_minutes not in (None, "") else 60
+            except (TypeError, ValueError):
+                minutes = 60
+            res = wemeet_mod.preset_schedule(one, minutes=minutes)
+        else:
+            res = wemeet_mod.preset_transcript(one)
+
+        audit.user_event(scope["person"], "meeting.wemeet_preset",
+                         target=mid, payload={"action": action, "ok": res.get("ok")})
+        if not res.get("ok"):
+            return self._preset_error(res)
+
+        online = res.get("online") if action == "schedule" else (wemeet_mod.extract_online(res.get("payload")) or {})
+        transcript = res.get("transcript") if action == "transcript" else ""
+        transcript = transcript or wemeet_mod.extract_text(res.get("payload")) or ""
+        source = res.get("source") or ("transcript" if action == "transcript" else "")
+        if action == "schedule":
+            code = (online or {}).get("meeting_code") or ""
+            summary = f"已订会，会议号 {code}" if code else "已订会"
+        else:
+            summary = f"取到 {len(transcript)} 字"
+            if source == "minutes":
+                summary += "（智能纪要摘要，不是逐字转写）"
+        return self._json({
+            "ok": True,
+            "is_error": res.get("is_error"),
+            "preset": action,
+            "tool": res.get("tool"),
+            "text": transcript or _wemeet_display(res.get("payload"), res.get("text") or ""),
+            "raw": res.get("raw"),
+            "found": {
+                "online": online or {},
+                "text": transcript,
+                "text_chars": len(transcript),
+                "text_preview": transcript[:160],
+                "record_file_id": res.get("record_file_id") or "",
+                "source": source,
+            },
+            "sent": res.get("sent") or None,
+            "summary": summary,
+            "hint": "结果没有写进任何地方。要落库请分别点「写进会议主档」「落成会议原文」。",
+        })
+
+    def _preset_error(self, res: dict) -> None:
+        """预设动作的错映射。码不同，用户该做的事也不同。"""
+        err = res.get("error")
+        if err == "not_configured":
+            return self._json({**res, "error": "wemeet_not_configured"}, 503)
+        if err in ("bad_time", "tool_missing", "bad_param"):
+            return self._json(res, 400)
+        if err in ("no_recording", "no_transcript"):
+            return self._json(res, 404)
+        return self._json(res, 502)
+
+    def _wemeet_apply(self, mid: str, body: dict) -> None:
+        """把工具结果落到会议主档：写会议号 / 把文本落成会议原文。
+
+        两个落点各自有边界，都由 ledger 判：会议号可以重复写（重新预约就覆盖）；
+        原文只在「原本就是腾讯会议转写」时允许重拉，手工粘的原文、已落督办的事项
+        一律拒绝 —— 前者会让两版原文并存，后者会让已通过的引文悬空。
+        """
+        scope, allowed, why = self._require(authz.MEETING_COMMIT)
+        if not allowed:
+            audit.user_event(scope.get("person") if scope else None, "access.denied",
+                             target="meeting.wemeet_apply", payload={"reason": why})
+            return self._json({"ok": False, "error": why}, 403)
+
+        one = meetings.get(mid)
+        if one is None:
+            return self._json({"ok": False, "error": "meeting_not_found"}, 404)
+
+        online = body.get("online")
+        text = body.get("text")
+        applied: list[str] = []
+        replaced = 0
+
+        if isinstance(online, dict) and online:
+            saved = meetings.set_online(mid, online)
+            if not saved.get("ok"):
+                return self._json({"ok": False, "error": saved.get("error")}, 409)
+            applied.append("online")
+
+        if isinstance(text, str) and text.strip():
+            saved = meetings.set_transcript(
+                mid, text, record_file_id=str(body.get("record_file_id") or "")
+            )
+            if not saved.get("ok"):
+                return self._json({"ok": False, "error": saved.get("error")}, 409)
+            applied.append("text")
+            replaced = saved.get("replaced_items") or 0
+
+        if not applied:
+            return self._json({
+                "ok": False,
+                "error": "nothing_to_apply",
+                "detail": "既没给会议号也没给原文，没有可落库的东西。",
+            }, 400)
+
+        audit.user_event(scope["person"], "meeting.wemeet_apply", target=mid,
+                         payload={"applied": applied})
+        out: dict = {"ok": True, "meeting": meetings.get(mid), "applied": applied}
+        if "text" in applied:
+            out["replaced_items"] = replaced
+            out["hint"] = "原文已落库，接着点「解析议定事项」—— 三道闸照旧。"
+        else:
+            out["hint"] = "会议号已写进主档，生成会议通知时会自动带上入会链接。"
+        return self._json(out)
 
     # ---------------- 问数 ----------------
     def _prepare(self, body: dict) -> tuple[dict, list, str, dict, list]:

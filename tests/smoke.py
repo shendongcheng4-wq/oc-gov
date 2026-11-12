@@ -9,6 +9,9 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -18,6 +21,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -57,11 +61,13 @@ import docparse  # noqa: E402
 import extdata as ext_mod  # noqa: E402
 import extract as mt_extract  # noqa: E402
 import ledger as mt_ledger  # noqa: E402
+import notice as mt_notice  # noqa: E402
 import modelcfg  # noqa: E402
 import numgate  # noqa: E402
 import oversight as ov  # noqa: E402
 import pdfdoc  # noqa: E402
 import rag as rag_mod  # noqa: E402
+import wemeet as wm_mod  # noqa: E402
 import workbench as wb  # noqa: E402
 from mockdata import DISCLOSURE_DAY, METRICS, latest_available, query_metric  # noqa: E402
 
@@ -1414,6 +1420,366 @@ def test_meeting() -> None:
     check("全部落库后状态为 committed", mt_ledger.get(m["id"])["status"] == "committed", "")
 
 
+def test_wemeet() -> None:
+    """腾讯会议（官方 MCP + 个人 Token）：协议 / 工具清单 / 调用 / 认结果 / 落库。
+
+    这套测试**碰不到真的腾讯会议**。协议（initialize → tools/list → tools/call）
+    与两个 Header 是照 Octop 的 tencent-meeting 连接器写的
+    （`infra/connectors/builder.py`），本地桩只能证明「我们发出去的报文自洽、
+    落库链路完整」，证明不了「腾讯会议认这个 Token」。第一次拿真 Token 跑通
+    之前，README 里不许写「已联调」。
+    """
+    print("\n[9b] 腾讯会议 MCP：协议 / 工具 / 认结果 / 落库")
+
+    # ---- 未配置：如实拒绝，不抛异常 ----
+    old_cfg = os.environ.get("OCGOV_WEMEET_CONFIG")
+    old_tok = os.environ.get("OCGOV_WEMEET_TOKEN")
+    proxy_env = {
+        k: os.environ.pop(k)
+        for k in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+        if k in os.environ
+    }
+    data_dir = Path(os.environ["OCGOV_DATA"])
+    cfg_path = data_dir / "wemeet-test.json"
+    srv = None
+    try:
+        os.environ["OCGOV_WEMEET_CONFIG"] = str(data_dir / "no-such-wemeet.json")
+        os.environ.pop("OCGOV_WEMEET_TOKEN", None)
+        check("没配置时 ready() 为假", wm_mod.ready() is False, "")
+        check("缺项只说 Token", any("Token" in x for x in wm_mod.missing()), str(wm_mod.missing()))
+        nc = wm_mod.probe()
+        check("没配置时探活返回 not_configured 而不是抛异常",
+              nc.get("ok") is False and nc.get("error") == "not_configured", str(nc)[:160])
+        pub = wm_mod.public_config()
+        check("public_config 不回传 Token 本身",
+              "token" not in {k for k in pub} and not pub.get("token_tail"), str(pub)[:160])
+        check("public_config 给出授权页", "meeting.tencent.com" in str(pub.get("auth_url")), "")
+
+        # ---- 本地 MCP 桩 ----
+        calls: list[dict] = []
+        CALLS_BOX: dict[str, dict] = {}
+
+        class McpStub(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _send(self, obj, status=200, sid=None):
+                raw = json.dumps(obj, ensure_ascii=False).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                if sid:
+                    self.send_header("Mcp-Session-Id", sid)
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_POST(self):
+                raw = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode("utf-8")
+                try:
+                    msg = json.loads(raw or "{}")
+                except ValueError:
+                    msg = {}
+                calls.append({"headers": dict(self.headers), "msg": msg})
+
+                if (self.headers.get("X-Tencent-Meeting-Token") or "") != "TOK-STUB":
+                    return self._send({"jsonrpc": "2.0", "id": msg.get("id"),
+                                       "error": {"code": -32001, "message": "invalid token"}},
+                                      status=401)
+
+                method = msg.get("method")
+                if method == "initialize":
+                    return self._send(
+                        {"jsonrpc": "2.0", "id": msg.get("id"), "result": {
+                            "protocolVersion": "2024-11-05",
+                            "serverInfo": {"name": "wemeet-open", "version": "stub-1"},
+                            "capabilities": {"tools": {}},
+                        }},
+                        sid="sess-1",
+                    )
+                if method == "notifications/initialized":
+                    self.send_response(202)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if method == "tools/list":
+                    return self._send({"jsonrpc": "2.0", "id": msg.get("id"), "result": {"tools": [
+                        {"name": "create_meeting",
+                         "description": "创建一场腾讯会议",
+                         "inputSchema": {"type": "object", "properties": {
+                             "subject": {"type": "string", "description": "会议主题"},
+                             "start_time": {"type": "string", "description": "开始时间"},
+                             "duration_minutes": {"type": "integer", "description": "时长（分钟）"},
+                         }, "required": ["subject", "start_time"]}},
+                        {"name": "list_meetings", "description": "查我的会议",
+                         "inputSchema": {"type": "object", "properties": {
+                             "keyword": {"type": "string"}}}},
+                        {"name": "get_transcript", "description": "取会议录制转写",
+                         "inputSchema": {"type": "object", "properties": {
+                             "meeting_code": {"type": "string"}}}},
+                        {"name": "schedule_meeting", "description": "建会",
+                         "inputSchema": {"type": "object", "required": ["subject"], "properties": {
+                             "subject": {"type": "string"},
+                             "start_time": {"type": "string"},
+                             "end_time": {"type": "string"},
+                             "time_zone": {"type": "string"},
+                             "_client_info": {"type": "object"}}}},
+                        {"name": "get_records_list", "description": "录制列表",
+                         "inputSchema": {"type": "object", "properties": {
+                             "start_time": {"type": "string"}, "end_time": {"type": "string"},
+                             "meeting_id": {"type": "string"},
+                             "_client_info": {"type": "object"}}}},
+                        {"name": "get_transcripts_details", "description": "转写详情",
+                         "inputSchema": {"type": "object", "required": ["record_file_id", "pid"],
+                                          "properties": {
+                             "record_file_id": {"type": "string"},
+                             "pid": {"type": "string"},
+                             "meeting_id": {"type": "string"},
+                             "_client_info": {"type": "object"}}}},
+                    ]}})
+                if method == "tools/call":
+                    name = (msg.get("params") or {}).get("name")
+                    args = (msg.get("params") or {}).get("arguments") or {}
+                    # 真服务端是三层信封：content[].text = {_meta, data:{status_code, body}}
+                    def envelope(body_obj):
+                        inner = json.dumps({"_meta": {"hints": []},
+                                            "data": {"status_code": 200,
+                                                     "headers": {"Date": "Thu, 12 Nov 2026"},
+                                                     "body": json.dumps(body_obj, ensure_ascii=False)}},
+                                           ensure_ascii=False)
+                        return self._send({"jsonrpc": "2.0", "id": msg.get("id"), "result": {
+                            "content": [{"type": "text", "text": inner}]
+                        }})
+
+                    if name == "create_meeting":
+                        return envelope({"meeting_info_list": [{
+                            "meeting_code": "424242",
+                            "join_url": "https://meeting.tencent.com/dm/stub",
+                        }]})
+                    if name == "schedule_meeting":
+                        CALLS_BOX["schedule_args"] = args
+                        return envelope({"meeting_info_list": [{
+                            "meeting_id": "1125",
+                            "meeting_code": "424242",
+                            "join_url": "https://meeting.tencent.com/dm/stub",
+                            "subject": args.get("subject"),
+                        }]})
+                    if name == "get_records_list":
+                        CALLS_BOX["records_args"] = args
+                        return envelope({"record_meeting_list": [{
+                            "meeting_id": args.get("meeting_id") or "1125",
+                            "record_files": [{"record_file_id": "99001", "record_type": 3}],
+                        }]})
+                    if name == "get_transcripts_details":
+                        CALLS_BOX["transcript_args"] = args
+                        return envelope({"minutes": {"paragraphs": [
+                            {"start_time": 0, "speaker_info": {"user_name": "张局长"},
+                             "sentences": [{"text": "请市住建局牵头管线迁改，11 月 20 日前完成。"}]},
+                            {"start_time": 62000, "speaker_info": {"user_name": "李主任"},
+                             "sentences": [{"text": "同意，按这个办。"}]},
+                        ]}})
+                    if name == "get_transcript":
+                        return envelope({"transcript": TXT})
+                    return envelope({"ok": True})
+                return self._send({"jsonrpc": "2.0", "id": msg.get("id"),
+                                   "error": {"code": -32601, "message": f"no method {method}"}}, status=404)
+
+        TXT = ("以下为腾讯会议录制转写原文：\n"
+               "[00:00:00] 张局长：请市住建局牵头管线迁改，11 月 20 日前完成。\n"
+               "[00:01:02] 李主任：同意，按这个办。")
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), McpStub)
+        port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        cfg_path.write_text(json.dumps({
+            "enabled": True,
+            "token": "TOK-STUB",
+            "url": f"http://127.0.0.1:{port}/mcp/wemeet-open/v1",
+        }), encoding="utf-8")
+        os.environ["OCGOV_WEMEET_CONFIG"] = str(cfg_path)
+        check("有 Token 就 ready()", wm_mod.ready() is True, "")
+
+        # ---- 协议：握手 → 工具清单 ----
+        tools_res = wm_mod.list_tools()
+        check("tools/list 拿到 6 个工具",
+              tools_res.get("ok") is True and len(tools_res.get("tools") or []) == 6, str(tools_res)[:200])
+        names = [t["name"] for t in tools_res["tools"]]
+        check("工具名不被改写", "create_meeting" in names and "get_transcript" in names, str(names))
+        create = next(t for t in tools_res["tools"] if t["name"] == "create_meeting")
+        check("工具带 description", "创建" in create["description"], create["description"])
+        check("工具带 inputSchema（界面靠它渲染表单）",
+              (create["input_schema"].get("properties") or {}).get("subject", {}).get("type") == "string",
+              str(create["input_schema"])[:160])
+        check("服务端名字带回来", (tools_res.get("server") or {}).get("name") == "wemeet-open",
+              str(tools_res.get("server")))
+
+        init = calls[0]["msg"]
+        check("先 initialize 再列工具", init.get("method") == "initialize", str(init)[:120])
+        h = {k.lower(): v for k, v in calls[0]["headers"].items()}
+        check("带 X-Tencent-Meeting-Token", h.get("x-tencent-meeting-token") == "TOK-STUB", "")
+        check("带 X-Skill-Version", bool(h.get("x-skill-version")), "")
+        check("Accept 同时要 JSON 与 SSE", "text/event-stream" in (h.get("accept") or ""), h.get("accept"))
+        list_calls = [c for c in calls if c["msg"].get("method") == "tools/list"]
+        check("握手后把 Mcp-Session-Id 回传",
+              bool(list_calls) and (list_calls[0]["headers"].get("Mcp-Session-Id") or "") == "sess-1",
+              str(list_calls[0]["headers"].get("Mcp-Session-Id")) if list_calls else "")
+
+        n_before = len([c for c in calls if c["msg"].get("method") == "tools/list"])
+        wm_mod.list_tools()
+        wm_mod.list_tools()
+        n_after = len([c for c in calls if c["msg"].get("method") == "tools/list"])
+        check("工具清单有缓存（不每次都打网络）", n_after == n_before, f"{n_before} -> {n_after}")
+        wm_mod.list_tools(fresh=True)
+        check("fresh=True 会强制重取",
+              len([c for c in calls if c["msg"].get("method") == "tools/list"]) == n_after + 1, "")
+
+        # ---- 调用 + 认结果 ----
+        made = wm_mod.call_tool("create_meeting", {"subject": "冒烟测试会", "start_time": "2026-11-20 09:00"})
+        check("调工具拿到文本", made.get("ok") is True and "424242" in str(made.get("text")), str(made)[:160])
+        online = wm_mod.extract_online(made.get("payload")) or {}
+        check("认得出会议号与入会链接",
+              online.get("meeting_code") == "424242" and online.get("join_url", "").startswith("https://"),
+              str(online))
+
+        got = wm_mod.call_tool("get_transcript", {"meeting_code": "424242"})
+        text = wm_mod.extract_text(got.get("payload"))
+        check("认得出会议原文", "管线迁改" in text and len(text) > 40, text[:60])
+
+        # 认结果必须谨慎：认错会议号会往主档写一个进不去的号，认错文本会让引文闸
+        # 把「成功」两个字当会议记录
+        check("没有会议号字段就不硬认", wm_mod.extract_online({"ok": True, "id": "9", "code": "7"}) is None, "")
+        check("短文本不当原文", wm_mod.extract_text({"summary": "成功"}) == "", "")
+
+        # ---- 落库：会议号 / 原文 ----
+        plan = mt_ledger.create("冒烟线上会", "", held_at="2026-11-20 09:00", kind="plan",
+                                attendees=["市住建局"])
+        bound = mt_ledger.set_online(plan["id"], {**online, "subject": "冒烟测试会"})
+        check("会议号写进主档",
+              bound.get("ok") is True and bound["meeting"]["online"]["meeting_code"] == "424242",
+              str(bound)[:160])
+        brf = mt_ledger.brief(mt_ledger.get(plan["id"]))
+        check("brief 带出 online（列表页要用）", (brf.get("online") or {}).get("meeting_code") == "424242", "")
+        notice = mt_notice.build(mt_ledger.get(plan["id"]))
+        check("会议通知带腾讯会议会议号", "424242" in notice["text"], "")
+        check("会议通知单列「线上参会」一节", "线上参会" in notice["text"], "")
+        check("有线上会议就不再报「没有地点」",
+              not any("没有会议地点" in w for w in notice["warnings"]), str(notice["warnings"]))
+
+        manual = mt_ledger.create("手工原文的会", "一、人工写的原文。", held_at="2026-11-19 09:00")
+        refused = mt_ledger.set_transcript(manual["id"], text, record_file_id="RF-TRANS")
+        check("手工原文不被转写覆盖",
+              refused.get("ok") is False and "手工" in str(refused.get("error")), str(refused))
+
+        saved = mt_ledger.set_transcript(plan["id"], text, record_file_id="RF-TRANS")
+        after = mt_ledger.get(plan["id"])
+        check("转写落成原文", saved.get("ok") is True and after["text"] == text, "")
+        check("落原文后不再是待召开",
+              after["kind"] == "record" and after["status"] == "draft", f"{after['kind']}/{after['status']}")
+        check("原文来源标成 wemeet", after.get("text_source") == "wemeet", str(after.get("text_source")))
+
+        parsed = {"model_ref": "test/fake", "warnings": [], "items": [{
+            "title": "完成管线迁改", "assignee": "市住建局", "deadline": None,
+            "standard": "管线全部入地", "quote": "请市住建局牵头管线迁改，11 月 20 日前完成。",
+            "confidence": "low", "verify": {"status": "needs_review", "issues": []},
+        }]}
+        mt_ledger.save_parse(plan["id"], parsed)
+        again = mt_ledger.set_transcript(plan["id"], text + "\n补一句。", record_file_id="RF-TRANS")
+        again_m = mt_ledger.get(plan["id"])
+        check("重拉转写会重置上次抽出的事项",
+              again.get("ok") is True and again.get("replaced_items") == 1, str(again)[:200])
+        check("重置后回到待解析", again_m["status"] == "draft" and not again_m["items"], "")
+
+        locked_meeting = mt_ledger.create("已交办的会", "", held_at="2026-11-18 09:00", kind="plan")
+        mt_ledger.set_transcript(locked_meeting["id"], text)
+        mt_ledger.save_parse(locked_meeting["id"], {"model_ref": "t/f", "warnings": [], "items": [{
+            "title": "完成管线迁改", "assignee": "市住建局", "deadline": "2026-11-20",
+            "standard": "管线全部入地", "quote": "请市住建局牵头管线迁改，11 月 20 日前完成。",
+            "confidence": "low", "verify": {"status": "ok", "issues": []},
+        }]})
+        locked_m = mt_ledger.get(locked_meeting["id"])
+        mt_ledger.commit(locked_meeting["id"], [locked_m["items"][0]["id"]])
+        locked = mt_ledger.set_transcript(locked_meeting["id"], text + "改一版")
+        check("已落督办就拒绝换原文",
+              locked.get("ok") is False and "督办" in str(locked.get("error")), str(locked))
+
+        # ---- 错误映射：Token 被拒要单独说 ----
+        os.environ["OCGOV_WEMEET_TOKEN"] = "BAD-TOKEN"
+        bad = wm_mod.list_tools(fresh=True)
+        check("Token 被拒映射成 wemeet_auth（不冒充网络故障）",
+              bad.get("ok") is False and bad.get("error") == "wemeet_auth", str(bad)[:160])
+        os.environ.pop("OCGOV_WEMEET_TOKEN", None)
+
+        # ---- SSE：服务端按 event-stream 回也要能解析 ----
+        sse = (
+            "event: message\n"
+            'data: {"jsonrpc":"2.0","id":77,"result":{"tools":[{"name":"x"}]}}\n\n'
+        )
+        parsed_sse = wm_mod._parse_body(sse, "text/event-stream", 77)
+        check("SSE 帧能解析出 JSON-RPC", isinstance(parsed_sse, dict)
+              and (parsed_sse.get("result") or {}).get("tools"), str(parsed_sse)[:120])
+        plain = wm_mod._parse_body('{"jsonrpc":"2.0","id":1,"result":{}}', "application/json", 1)
+        check("普通 JSON 也能解析", isinstance(plain, dict) and plain.get("id") == 1, "")
+        # ---- 预设动作：参数拼装在服务端 ----
+        plan2 = mt_ledger.create("预设动作用的会", "", held_at="2026-11-22 14:30", kind="plan")
+        made2 = wm_mod.preset_schedule(plan2)
+        check("一键建会成功并认出会议号",
+              made2.get("ok") is True and (made2.get("online") or {}).get("meeting_code") == "424242",
+              str(made2)[:200])
+        sched = CALLS_BOX.get("schedule_args") or {}
+        check("时间按 ISO 8601 传（不是时间戳）",
+              str(sched.get("start_time", "")).startswith("2026-11-22T14:30:00")
+              and str(sched.get("end_time", "")).endswith("+08:00"), str(sched)[:160])
+        check("建会传了主题与时区",
+              sched.get("subject") == "预设动作用的会" and sched.get("time_zone") == "Asia/Shanghai",
+              str(sched)[:160])
+        check("声明了 _client_info 的工具会自动补上",
+              isinstance(sched.get("_client_info"), dict), str(sched)[:160])
+
+        tr2 = wm_mod.preset_transcript({**mt_ledger.get(plan2["id"]),
+                                        "online": {"meeting_id": "1125"}})
+        check("一键取纪要串联了 record_file_id",
+              tr2.get("ok") is True and tr2.get("record_file_id") == "99001", str(tr2)[:200])
+        check("转写详情带了必填的 pid",
+              str((CALLS_BOX.get("transcript_args") or {}).get("pid")) == "0",
+              str(CALLS_BOX.get("transcript_args"))[:160])
+        check("转写被拼成「发言人：正文」",
+              "张局长：请市住建局牵头管线迁改" in str(tr2.get("transcript")), str(tr2.get("transcript"))[:120])
+        check("取纪要时把会议 ID 带进录制查询",
+              str((CALLS_BOX.get("records_args") or {}).get("meeting_id")) == "1125",
+              str(CALLS_BOX.get("records_args"))[:160])
+
+        # 信封剥离：真返回里 body 是**字符串套 JSON**，剥不干净会把 headers 当原文
+        nested = {"_meta": {}, "data": {"status_code": 200,
+                                         "headers": {"Date": "Thu, 12 Nov 2026"},
+                                         "body": json.dumps({"total_count": 3})}}
+        check("信封能剥到业务 body",
+              (wm_mod._payload_of(json.dumps(nested)) or {}).get("total_count") == 3, "")
+        check("剥不动的原样返回，不炸", wm_mod._payload_of("not json") == "not json", "")
+
+    finally:
+        if srv is not None:
+            srv.shutdown()
+        if old_cfg is None:
+            os.environ.pop("OCGOV_WEMEET_CONFIG", None)
+        else:
+            os.environ["OCGOV_WEMEET_CONFIG"] = old_cfg
+        if old_tok is None:
+            os.environ.pop("OCGOV_WEMEET_TOKEN", None)
+        else:
+            os.environ["OCGOV_WEMEET_TOKEN"] = old_tok
+        os.environ.update(proxy_env)
+
+    # ---- 前端接线：删掉不会报错，只会让功能静默消失 ----
+    html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
+    check("会议详情有「腾讯会议」入口", 'id="mtWmOpen"' in html, "")
+    check("工具面板存在", 'id="wmToolModal"' in html and "function openWmPanel(" in html, "")
+    check("参数表单按 inputSchema 渲染", "tool.input_schema" in html or "input_schema" in html, "")
+    check("调用走 /api/wemeet/call", "/api/wemeet/call" in html, "")
+    check("落库单独一个动作", "async function wmApply(" in html, "")
+    check("没配置时把缺项写在页面上", "腾讯会议未配置" in html, "")
+    check("配置弹窗教人去哪拿 Token", "ai-skill.html" in html or "auth_url" in html, "")
+    check("列表项标出线上会议", 'title="已绑定腾讯会议"' in html, "")
+
+
 def test_knowledge() -> None:
     """知识库：口径 / 事项 / 会议原文。
 
@@ -2087,22 +2453,24 @@ def test_agent() -> None:
     import numgate
 
     schema_names = [t["function"]["name"] for t in agent_mod.tools_schema()]
+    # 腾讯会议那两个只在配了 Token 时出现（没配就不给模型一个必然失败的工具），
+    # 所以断言按「基础工具集 ⊆ 实际」写，多出来的只允许是那两把只读工具。
+    BASE_TOOLS = {"list_metrics", "query_metric", "scan_oversight",
+                  "search_knowledge", "clarify", "advance_item",
+                  "draft_meeting", "draft_document", "compare_material"}
+    WEMEET_TOOLS = {"wemeet_meetings", "wemeet_transcript"}
     check(
         "工具面含查、澄清、写、草稿与材料对照",
-        set(schema_names) == {"list_metrics", "query_metric", "scan_oversight",
-                              "search_knowledge", "clarify", "advance_item",
-                              "draft_meeting", "draft_document", "compare_material"},
+        BASE_TOOLS <= set(schema_names) and set(schema_names) <= (BASE_TOOLS | WEMEET_TOOLS),
         str(schema_names),
     )
     # 写工具只允许「提议」。这条不能靠工具名断言（改个名就失效），真正的边界由
     # 下面「调它之后台账事件数一条没变」那条行为断言钉住。三个 draft_*/compare_*
     # 是草稿和只读对照，不写任何数据 —— 它们同样在下面用行为断言验。
     check(
-        "写工具只有一个，且是提议式的",
+        "写工具只有一个，且是提议式的（腾讯会议的两把是只读）",
         [n for n in schema_names
-         if n not in {"list_metrics", "query_metric", "scan_oversight",
-                      "search_knowledge", "clarify", "draft_meeting",
-                      "draft_document", "compare_material"}] == ["advance_item"],
+         if n not in ((BASE_TOOLS - {"advance_item"}) | WEMEET_TOOLS)] == ["advance_item"],
         str(schema_names),
     )
 
@@ -5553,6 +5921,7 @@ def main() -> int:
     test_people()
     test_experts()
     test_meeting()
+    test_wemeet()
     test_oversight_flow()
     test_schedule()
     test_briefdoc()

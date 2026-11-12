@@ -1,0 +1,14 @@
+{
+  "_说明": [
+    "复制成 config/wemeet.json 再填。这个文件已被 .gitignore 忽略，别提交。",
+    "只需要一个 Token：登录 https://meeting.tencent.com/ai-skill.html 复制页面上的 Token。",
+    "走的是腾讯会议官方 MCP（wemeet-open），不是企业自建应用 —— 不用 AppId/SdkId、不用申请权限点、没有建会配额、不用 STS-Token。",
+    "代价：只看得见这个 Token 所属账号的会议。",
+    "改完保存就生效：配置是每次请求现读的，不用重启服务。",
+    "url / skill_version 一般不用改；换版本时再说。"
+  ],
+  "enabled": true,
+  "token": "",
+  "url": "https://mcp.meeting.tencent.com/mcp/wemeet-open/v1",
+  "skill_version": "v1.0.1"
+}

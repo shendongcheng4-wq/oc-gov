@@ -133,10 +133,27 @@ def build(
     attendees = _clean_list(m.get("attendees"))
     topics = _clean_list(m.get("topics"))
 
+    # 线上参会（腾讯会议）。会议号、入会链接、密码三样里有一项就成行 —— 只给
+    # 链接不行：打印稿上看不见链接，电话里念不出链接，能念的只有会议号。
+    online = m.get("online") or {}
+    wm_code = str(online.get("meeting_code") or "").strip()
+    wm_join = str(online.get("join_url") or "").strip()
+    wm_pwd = str(online.get("password") or "").strip()
+    online_line = ""
+    if wm_code or wm_join:
+        bits = []
+        if wm_code:
+            bits.append(f"腾讯会议 {wm_code}")
+        if wm_join:
+            bits.append(wm_join)
+        online_line = "；".join(bits)
+        if wm_pwd:
+            online_line += f"（入会密码：{wm_pwd}）"
+
     warnings: list[str] = []
     if not attendees:
         warnings.append("没有参会单位：主送机关写成了「各有关单位」，发之前请补上具体单位。")
-    if not place:
+    if not place and not online_line:
         warnings.append("没有会议地点：地点一栏写成了「另行通知」。")
     if day and not clock:
         warnings.append("时间只有日期没有钟点，正文里看不出几点开始。")
@@ -148,11 +165,16 @@ def build(
     intro = f"　　经研究，定于{when}" if when else "　　经研究，决定"
     if place:
         intro += f"在{place}"
+    elif online_line:
+        intro += "以视频会议形式"
     intro += f"召开{name}。现将有关事项通知如下："
 
     sections: list[tuple[str, list[str]]] = []
     sections.append(("会议时间", [when or "另行通知"]))
-    sections.append(("会议地点", [place or "另行通知"]))
+    sections.append(("会议地点", [place or ("线上（腾讯会议）" if online_line else "另行通知")]))
+    if online_line:
+        # 线上会单独立一节：混进地点一栏，打印出来的通知上会议号会被折行拆断
+        sections.append(("线上参会", [online_line]))
     if host:
         sections.append(("主持人", [host]))
     sections.append(("参会单位", ["、".join(attendees) if attendees else "各有关单位"]))

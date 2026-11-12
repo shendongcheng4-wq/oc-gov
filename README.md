@@ -99,8 +99,9 @@ python seed_docs.py --force    :: 清掉重建；内容与台账/会议咬合，
 | 8 | **约会议只能建、通知只能成文** | 不能改期（只能删了重建）、不知道谁参加；会议通知能成文并导出到桌面，但**不发送**——发给哪个群、谁收到，系统不知道也不记录；没有人员日历和会议室资源，撞车只能提示「同一时间段还有另一场会」 |
 | 9 | **存储只支持单进程** | `data/*.json` 的写锁是进程内的。多 worker 会互相覆盖，要多人用得换 SQLite/PostgreSQL（`core/store.py` 是唯一要改的地方） |
 | 10 | **材料得先有人转成文本** | `.xlsx` / `.docx` / `.pdf` 能读（PDF 要装可选依赖 `pypdfium2`）；图片、**扫描件 PDF 没有 OCR**，只能看到页面图、搜不到字；`.xls` / `.doc` 读不了（旧版二进制）。材料**只在当轮生效**，不落盘、不进知识库 |
-| 11 | **不做录音转写、不做 AI 生成纪要** | 本机没有 ASR；会议记录原文是输入，不是模型产物 —— 让模型写纪要再让模型抽事项，等于自己出题自己判卷 |
+| 11 | **不做录音转写、不做 AI 生成纪要** | 本机没有 ASR；会议记录原文是输入，不是模型产物 —— 让模型写纪要再让模型抽事项，等于自己出题自己判卷。接了腾讯会议也只是**把它的转写搬进来**当原文，转写本身仍是腾讯会议的 ASR，不是我们造的 |
 | 12 | **开文种只管「写得对不对」** | 请示 / 通知的体检查要素齐不齐、文种对不对、一文一事、结语与附注日期，**不查所请事项有没有政策依据、要不要法核、要不要上会** —— 那属于合法性审查，规则做不了。只做两个文种（批复要引用来文文号、函要对接外单位，都缺可靠事实源）；文号不代编、签发日不定、不盖印、不上报；生成的是**草稿**，送签前必须有人逐句看过并认账 |
+| 13 | **腾讯会议只验到「建会 / 查会 / 无录制」这一段** | 已用真 Token 打过真服务端（`open_platform_mcp 1.0.0`，36 个工具）：`tools/list` 正常、`schedule_meeting` 真建出一场会（拿到会议号与入会链接）后立刻 `cancel_meeting` 取消、没有录制时正确回 `no_recording`、信封三层能剥到业务对象。**没验到的是真实转写文本**：账号里没有可用的云录制，`get_transcripts_details` / `get_smart_minutes` 只验过参数形状与串联逻辑，没见着真数据；`get_records_list` 也只跑过空结果。第一次真取纪要时请当成首次联调看结果。另外服务端会提示 skill 有新版本（我们声明 v1.0.1，最新 v1.1.0），暂不跟进 |
 
 ## 目录结构
 
@@ -147,9 +148,11 @@ oc-gov/
 │   ├── metrics/{mockdata,realdata,ask,llm}.py    指标字典 / 真实值覆盖 / 问数 / 提示词
 │   ├── metrics/extdata.py     外部数据：上传表格 → 对齐指标库 → 逐期对照
 │   ├── meeting/{extract,ledger,notice}.py        纪要抽取与三道闸 / 会议主档与写督办 / 通知成文与导出
+│   ├── wemeet.py              腾讯会议官方 MCP：JSON-RPC 客户端 + 工具清单 + 认会议号/原文（纯标准库）
 │   └── oversight/oversight.py                    台账 + 状态机守卫 + 风险派生 + scan()
 ├── config/local.env           首次启动从这导入 provider（已 gitignore）
 ├── config/notify.example.json 推送通道配置模板（真实配置 notify.json 已 gitignore）
+├── config/wemeet.example.json 腾讯会议 Token 模板（真实配置 wemeet.json 已 gitignore）
 ├── data/                      运行时状态（会话/会议/台账/模型/审计，整个目录 gitignore）
 ├── docs/permission-design.md  权限设计（三档、单一收口、审计口径）
 ├── docs/upstream-notes.md     与上游 octop 原型的关系（设计溯源，使用时不必读）
@@ -487,6 +490,63 @@ app/main.py ──► app/workbench.py ──► core/metrics ─┐
 
 **会议通知只成文，不发。** `core/meeting/notice.py` 把一场 `plan` 拼成公文：标题、主送机关、时间（带星期）、地点、主持人、参会单位、议题、有关要求、落款。逐字段拼、不经模型 —— 通知错一个字就得重发，而重发的东西收件人手上会有两版。**缺字段不编**：没地点写「另行通知」、没单位写「各有关单位」，缺口同时进 `warnings` 摆给人看。导出默认写桌面（`OCGOV_EXPORT_DIR` 可改），UTF-8 带 BOM（记事本不乱码），同名不覆盖而是加 `-2`，页面上改过的正文优先于系统原稿。**这里没有「已送达」这个概念** —— 系统不知道谁收到了，所以界面只说「复制后由你发」；发送与撤回见下一步第 4 条。
 
+### 接腾讯会议（`core/wemeet.py`）
+
+走**腾讯会议官方 MCP + 个人 Token**，和 Octop 内置的 `tencent-meeting` 连接器同一条路
+（同一个地址、同一组 Header）。登录 https://meeting.tencent.com/ai-skill.html 复制一个
+Token 填进 `config/wemeet.json` 就能用 —— **不用企业自建应用、不用 AppId/SdkId、不用申请
+权限点、没有「高级账号 × 月」的建会配额、也不用换 STS-Token**。代价是它只看得见这个
+Token 所属账号的会议。
+
+```
+initialize ─► tools/list ─► tools/call          （JSON-RPC over HTTP，响应 JSON 或 SSE 都认）
+      │            │              │
+      │            │              └─ content[].text = {_meta, data:{status_code, body}}
+      │            │                   真正要的只有 data.body 那一层
+      │            └─ 工具名 + description + inputSchema（**不硬编码**）
+      └─ Mcp-Session-Id（服务端给了就回传）
+```
+
+真服务端返回的是**三层信封**：`content[0].text` 是一段 JSON 字符串，里面 `data.body`
+才是腾讯会议的 API 响应（又是一段 JSON 字符串）。所以 `_payload_of()` 要一路剥到底 ——
+不剥干净，「认会议原文」会把信封 headers 里的 `Date: Thu, 12 Nov 2026` 当成会议内容。
+
+**工具不写死，这是关键。** 服务端给什么工具、参数怎么填，运行时 `tools/list` 取回来，
+会议详情里的面板照着 `inputSchema` 渲染表单。写死 `create_meeting(subject, start_time)`
+这种签名，换一版就静默失效，而界面上只会显示「调用失败」。
+
+**界面上是三个中文动作，不是工具清单。** 会议详情里的「腾讯会议」首屏只有：订腾讯会议 / 取会议纪要 / 查最近的会。参数全部从会议主档取（主题、时间、会议号），人不用填；36 个原始工具收进「高级」折叠，给排障用。领导不该看见 `schedule_meeting` 和它的 inputSchema。
+
+**对话里也能直接问。** `core/agent.py` 的工具面加了两把**只读**工具：`wemeet_meetings`（查最近的会）和 `wemeet_transcript`（取某场会的转写/纪要）。问「上周开了哪些会」「那次项目会定了什么」，模型自己挑工具、拿结果答 —— 这就是 Octop 那种「说人话」的用法。**建会故意不在工具面**：往外部系统写必须人点按钮，跟「写操作只生成提议」是同一条线。
+
+**两个预设动作**（「一键建会」「一键取纪要」）把参数拼装收回了服务端。理由很实在：
+这个服务端要的是 **ISO 8601 时间**（不是时间戳）、转写详情要 `record_file_id` + `pid`，
+而 `record_file_id` 得先查录制列表。让通用面板去手填，等于把一串咒语推给人；写成
+预设之后，界面上就是两个按钮。预设会先核对工具在不在清单里，缺了就明说缺哪个 ——
+不会静默失效。
+
+**调用与落库是两步。** 点「调用」只把结果拿回来，并在结果里认一认有没有会议号
+（`meeting_code` / `join_url` / `meeting_id` 这几个键，别的一概不猜）或会议原文
+（`transcript` / `minutes` / `summary` 这类键，且要够长）。要写进会议主档、要落成原文，
+都得再点一下。让「调用」顺手落库，等于让远端服务决定督办台账里出现什么字。
+
+**落库的边界照旧**（`ledger.set_online` / `set_transcript`）：会议号可以重复写；原文只在
+「原本就是腾讯会议转写」时允许重拉，手工粘的原文、已落督办的事项一律拒绝。
+
+**为什么不用企业自建应用那套（AK/SK）**：这条路要企业管理员开应用、申请「管理企业会议
+详细信息」等权限点、建会按高级账号数按月计次、转写还要手工换 STS-Token。内网政务场景
+里这几道门槛没有一道是能自己解决的；MCP + 个人 Token 把这些全省了，代价只是视角变成
+「这个人自己的会议」。
+
+**配置**：`config/wemeet.example.json` → `config/wemeet.json`，只填 `token` 一行。会议详情里
+点「腾讯会议配置」有完整说明：Token 去哪拿、文件路径、可复制的模板、以及一个「测试连接」
+按钮（握手 + 列工具，不建会）。**配置每次请求现读，改完保存即生效，不用重启；配置没有
+HTTP 写入口** —— 写配置的接口等于给任何能打开页面的人换掉别人的会议账号。
+
+**出网**：这是本仓库第三个主动出网的口子（模型服务、提醒通道之外），送出去的是会议主题
+与时间、拿回来的是会议全文。内网部署要放行 `mcp.meeting.tencent.com`，或者走反向代理后
+改 `url`。
+
 ## 督办闭环
 
 ```
@@ -585,6 +645,11 @@ app/main.py ──► app/workbench.py ──► core/metrics ─┐
 | POST | `/api/meetplan` | 🔒 确认草稿 → 建「待召开」的会（同一消息重复确认只建一场） |
 | GET/DELETE | `/api/meetings/<id>` | 单个会议 / 🔒 删除 |
 | POST | `/api/meetings/<id>/parse` | 🔒 抽取议定事项 + 服务端校验（不写台账）。限市领导 |
+| GET | `/api/wemeet/tools` | 腾讯会议 MCP 的工具清单（含 `inputSchema`）。界面据此渲染参数表单。没配置 503 |
+| POST | `/api/wemeet/call` | 🔒 调一个 MCP 工具，只回结果并认出会议号/原文，**不落库** |
+| POST | `/api/wemeet/preset` | 🔒 预设动作：`action: schedule`（一键建会）/ `transcript`（录制→转写）。参数在服务端拼，**不落库** |
+| POST | `/api/meetings/<id>/wemeet` | 🔒 把结果落库：`{online}` 写会议号 / `{text}` 落成原文。原文冲突 409 |
+| POST | `/api/wemeet/test` | 🔒 握手 + 列工具（`initialize` + `tools/list`）。不建会、不改任何东西 |
 | PATCH | `/api/meetings/<id>/items/<iid>` | 🔒 人工修正字段并原地重新校验（`quote` 不可改） |
 | POST | `/api/meetings/<id>/commit` | 🔒 勾选事项写台账（任一条不通过整体拒绝） |
 | GET | `/api/meetings/<id>/notice` | 会议通知成文：纯拼装、不经模型，缺字段进 `warnings` |
