@@ -811,6 +811,23 @@ def test_memory() -> None:
     bg2 = mem_mod.background("你好", limit=5)
     check("宽泛问句也召回背景", bool(bg2), "")
 
+    # 口径偏好：只在用户明说「以后都这样」时记，且带数字的一律不记
+    check("明说的口径偏好被识别",
+          mem_mod._prefs_for_question("以后都按投资额加权看镇街") != [], "")
+    check("一次性的话不当偏好",
+          mem_mod._prefs_for_question("9 月工业增速按镇街看") == [], "")
+    check("带数字的偏好不落库",
+          mem_mod._prefs_for_question("以后都看 1-9 月累计") == [], "")
+    check("太长的句子不当偏好",
+          mem_mod._prefs_for_question("以后都按这个口径算" + "很长的说明" * 15) == [], "")
+
+    rec("t7", [], [], "记住：镇街分解一律按投资额加权")
+    bg3 = mem_mod.background("镇街怎么样")
+    t3 = bg3[0]["content"] if bg3 else ""
+    check("口径偏好被召回", "按投资额加权" in t3, t3[:120])
+    check("偏好排在指标前面", t3.find("按投资额加权") < t3.find("关注指标"), t3[:120])
+    check("偏好背景仍不含数值", not re.search(r"\d+", t3), t3[:120])
+
 
 def test_experts() -> None:
     """专家团：能判断、能给动作，数值必须可溯源。
@@ -2350,7 +2367,9 @@ def test_agent() -> None:
             self.calls: list[dict] = []
 
         def __call__(self, system_prompt, messages, *, tools, **kw):
-            self.calls.append({"tools": list(tools), "messages": list(messages)})
+            self.calls.append(
+                {"system": system_prompt, "tools": list(tools), "messages": list(messages)}
+            )
             step = self.script.pop(0) if self.script else {"text": ""}
             text = step.get("text") or ""
             return {
@@ -2441,6 +2460,29 @@ def test_agent() -> None:
         agent_mod.llmclient.chat_tools = old_tools
         agent_mod.llmclient.available = old_avail2
     check("主循环：可被用户停止", stopped, "")
+
+    # 跨会话记忆是作为 system 消息混在 history 里的，而 chat_tools 只转发
+    # user/assistant —— 混着传会被静默丢掉。这条钉住「记忆真的进了 system prompt」。
+    stub_mem = _StubLLM([{"text": "好。"}])
+    agent_mod.llmclient.chat_tools = stub_mem
+    agent_mod.llmclient.available = lambda: True
+    try:
+        agent_mod.run(
+            "镇街怎么样",
+            history=[{"role": "system", "content": "口径偏好：镇街一律按投资额加权"}],
+            person_id="mayor", today=date(2026, 11, 12),
+        )
+    finally:
+        agent_mod.llmclient.chat_tools = old_tools
+        agent_mod.llmclient.available = old_avail2
+    sent_system = (stub_mem.calls[0]["system"] if stub_mem.calls else "") or ""
+    check("记忆进了 system prompt", "按投资额加权" in sent_system, sent_system[-60:])
+    check(
+        "记忆不进对话消息（否则会被丢掉或被复述）",
+        all("按投资额加权" not in str(m.get("content") or "")
+            for m in (stub_mem.calls[0]["messages"] if stub_mem.calls else [])),
+        "",
+    )
 
     # 卡片要跟着落库：刷新之后不能只剩正文说「点确认」，按钮却没了
     import main as srv_mod2

@@ -272,8 +272,18 @@ def plan(
             + "\n".join(f"- {name}" for name in known_metrics[:12])
         )
 
+    # 跨会话记忆是以 system 消息拼在 history 最前面的（core/memory.background），
+    # 但 chat_json 只转发 user/assistant —— 混在 history 里会被静默丢掉。
+    # 记忆写了却从没进过模型，就是这么发生的。摘出来接进 system。
+    sys_notes = [
+        str(m.get("content")).strip()
+        for m in (history or [])
+        if m.get("role") == "system" and m.get("content")
+    ]
+
     out = llmclient.chat_json(
-        system_prompt_text(today_iso) + memory,
+        system_prompt_text(today_iso) + memory
+        + ("\n\n" + "\n".join(sys_notes) if sys_notes else ""),
         _materials_prompt(attachments or []) + ("\n\n用户的问题：\n" if attachments else "") + question,
         history=history or [],
         model_ref=model_ref,

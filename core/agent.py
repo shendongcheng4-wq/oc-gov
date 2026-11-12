@@ -1133,6 +1133,18 @@ def run(
 
     materials = _materials_text(attachments)
 
+    # 跨会话记忆是作为 system 消息拼在 history 前面的（见 core/memory.background），
+    # 而 chat_tools 只转发 user/assistant —— 直接混在 history 里会被静默丢掉。
+    # 记忆写过却从没进过模型，就是这么发生的。所以这里把它摘出来接进 system。
+    sys_notes = [
+        str(m.get("content")).strip()
+        for m in (history or [])
+        if m.get("role") == "system" and m.get("content")
+    ]
+    system_prompt = SYSTEM.format(today=today.isoformat())
+    if sys_notes:
+        system_prompt += "\n\n## 跨会话记忆\n" + "\n".join(sys_notes)
+
     messages: list[dict[str, Any]] = [
         {"role": m["role"], "content": m["content"]}
         for m in (history or [])
@@ -1167,7 +1179,7 @@ def run(
             raise ask_mod.TurnCancelled()
         try:
             resp = llmclient.chat_tools(
-                SYSTEM.format(today=today.isoformat()),
+                system_prompt,
                 messages,
                 # 最后一轮撤掉工具：模型前几轮已经把该查的查了，再给它工具只会
                 # 继续查下去，永远不给结论。撤掉之后它只能说话，这一轮必定收口。

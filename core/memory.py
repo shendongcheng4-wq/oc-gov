@@ -12,7 +12,14 @@
   「无记忆」，不影响问答主链路。oc-gov 原本零依赖能跑，加了这个也依然是
   可选增强，不是硬前提。
 - **范围**：指标（metric_codes）+ 维度（问句里的区县/镇街等词）+ 主题
-  （指标责任部门 → 领域）。全部规则算得出来，不引入模型提炼，守住边界。
+  （指标责任部门 → 领域）+ **口径偏好**（「以后都按投资额加权」「统一看同比」
+  这类长期要求）。全部规则算得出来，不引入模型提炼，守住边界。
+
+**偏好是这次新加的一类**：指标名只说明「他关心什么」，说明不了「他要怎么算」。
+问十次镇街分解，系统仍然按简单平均给，用户每次都得纠一遍 —— 那不像助理，
+像个每次都失忆的查询框。偏好只在用户明说（「以后都」「记住」「一律」）时记，
+且**带数字的一律不记**（「以后都看 1-9 月累计」这种含期次的也跳过）：
+这条边界和「只记名称不记数值」是同一条。
 
 回灌给模型的方式不是「全量塞」，而是按当前问句 `recall()` 定向召回最相关的
 几条，控制在一个小预算内 —— 否则记忆越大，上下文越脏，反而伤问答。
@@ -74,6 +81,34 @@ def _theme_for_department(department: str | None) -> str | None:
 
 def _dims_for_question(question: str) -> list[str]:
     return [dim for dim, words in _DIM_WORDS.items() if any(w in question for w in words)]
+
+
+# 用户「明说要长期照这个来」的说法。只在出现这些词时才记偏好 —— 否则每一句
+# 「按 9 月看」都会被当成长期约定，越记越脏，最后召回出来的全是过期要求。
+_PREF_MARKERS = (
+    "记住", "以后都", "以后统一", "以后按", "今后都", "今后按",
+    "一律", "统一按", "每次都", "下次都", "默认按", "不要再用", "别再用",
+)
+
+
+def _prefs_for_question(question: str) -> list[str]:
+    """这句里有没有一条「长期口径要求」。有就返回原句，没有返回空。
+
+    三条限制，都是为了别把一次性的话记成长期约定：
+
+    1. 必须出现 `_PREF_MARKERS` 里的词；
+    2. **带数字的一律不记** ——「以后都看 1-9 月累计」里那个期次是这一轮的事实，
+       不是长期口径，而记忆层的规矩是只存名称不存数值；
+    3. 超过 60 字不当偏好：那种多半是一整段业务说明，压成一句会走样。
+    """
+    q = str(question or "").strip()
+    if not q or len(q) > 60:
+        return []
+    if any(ch.isdigit() for ch in q):
+        return []
+    if not any(m in q for m in _PREF_MARKERS):
+        return []
+    return [q.rstrip("。？！?! 　")]
 
 
 def _db_path() -> str:
@@ -168,6 +203,18 @@ def record(thread_id: str | None, question: str, result: dict[str, Any]) -> None
         except Exception:  # noqa: BLE001
             continue
 
+    # 口径偏好：只在用户明说「以后都这样」时记一句，见 _prefs_for_question。
+    for pref in _prefs_for_question(question):
+        try:
+            mem.store(
+                f"口径偏好：{pref}",
+                topic="偏好",
+                conversation_id=thread_id,
+                metadata={"kind": "pref", "text": pref},
+            )
+        except Exception:  # noqa: BLE001
+            continue
+
 
 # ── 读 ──────────────────────────────────────────────────────────────────
 
@@ -212,6 +259,7 @@ def background(question: str, limit: int = 4) -> list[dict[str, str]]:
     metrics: Counter[str] = Counter()
     dims: Counter[str] = Counter()
     themes: Counter[str] = Counter()
+    prefs: list[str] = []
     for a in atoms:
         text = getattr(a, "assertion", None) or ""
         if text.startswith("关注指标："):
@@ -220,9 +268,18 @@ def background(question: str, limit: int = 4) -> list[dict[str, str]]:
             dims[text[len("常看的分解维度："):]] += 1
         elif text.startswith("长期关注的主题："):
             themes[text[len("长期关注的主题："):]] += 1
+        elif text.startswith("口径偏好："):
+            # 偏好按「最近说过」排，不按频次 —— 用户改主意时，新说法必须压过旧的。
+            # 「按投资额加权」说过十次、「改回简单平均」说过一次，后者才算数。
+            one = text[len("口径偏好："):]
+            if one and one not in prefs:
+                prefs.append(one)
 
-    # 拼成一句背景。指标优先、维度次之、主题垫底，各取最靠前的几项。
+    # 拼成一句背景。偏好放最前：它是「怎么算」的约束，比「关心什么」更要紧，
+    # 放后面容易被模型当成补充说明略过。指标、维度、主题依次跟上。
     parts: list[str] = []
+    if prefs:
+        parts.append("口径偏好（用户明确要求长期照此办理，冲突时以它为准）：" + "；".join(prefs[:2]))
     if metrics:
         parts.append("关注指标：" + "、".join(n for n, _ in metrics.most_common(limit)))
     if dims:
