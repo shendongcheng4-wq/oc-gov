@@ -2336,6 +2336,20 @@ class Handler(BaseHTTPRequestHandler):
                 # 建会草稿要跟着落库：回放时要能重新画出那张卡（含当时的假设与缺项），
                 # 只留一句 headline 的话，用户回看时不知道自己当时确认了什么
                 "meet_draft": meetplan_mod.to_meta(result.get("meet_draft")),
+                # 待确认动作与公文草稿也要跟着落库。不落的话，刷新之后卡片凭空消失，
+                # 而正文里还留着「点『确认催办』才生效」——按钮没了，指示还在，
+                # 这就是界面在说谎。回放时按「已失效」渲染，不假装还能点。
+                "proposals": [
+                    {k: p.get(k) for k in
+                     ("id", "kind", "action", "item_id", "title", "text", "expires_at")}
+                    for p in (result.get("proposals") or [])[:3]
+                ],
+                # 公文草稿带 meta/doc 一起存：回放时「导出 Word」仍然要导出当时那一份，
+                # 不能重新装配（重新装配会和屏幕上看到的措辞对不上）。几 KB，值。
+                "doc_draft": (
+                    {k: v for k, v in (result.get("doc_draft") or {}).items() if k != "issues"}
+                    if result.get("doc_draft") else None
+                ),
                 # 用量：调用链（trace）不落库，如果这里也不存，本轮花掉多少 token
                 # 就永久丢失了 —— 回看历史、做预算都无从统计。几十字节，值得存。
                 # 上下文统计跟着落库：刷新后用量行还在，说明也该还在

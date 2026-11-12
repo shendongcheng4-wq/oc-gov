@@ -3478,7 +3478,7 @@ function docBlock(d, ref) {
     .map((t) => `<p style="margin:6px 0;font-size:13px;line-height:1.75">${esc(t)}</p>`).join("");
   const score = d.score != null ? `体例 ${d.score} 分` : "";
   return `<div class="mp-card" data-doc="${esc(tid)}">
-    <div class="mp-head"><b>${esc(d.label || "公文")}草稿</b><span class="mp-tag">未导出</span></div>
+    <div class="mp-head"><b>${esc(d.label || "公文")}草稿</b><span class="mp-tag">草稿</span></div>
     <div class="mp-meta">${esc(d.title)}${d.to ? ` · 主送：${esc(d.to)}` : ""}</div>
     ${paras}
     ${d.paras && d.paras.length > 3 ? `<div class="mp-note">（共 ${d.paras.length} 段，导出后可看全文）</div>` : ""}
@@ -3492,12 +3492,13 @@ function docBlock(d, ref) {
   </div>`;
 }
 
-/* 草稿数据挂在答案气泡上（h.__r = result），卡片本身只存一个占位。
-   这样复制/导出用的是这一轮真正返回的那份，不会串到别的回答上。 */
+/* 草稿数据挂在答案气泡上：实时那一轮是 __r（完整 result），历史回放是 __m
+   （historyView 的产物）。两个都要认 —— 只认 __r 的话，刷新后点「导出 Word」
+   会得到一句「草稿不在页面里」，而屏幕上明明画着它。 */
 function bubbleResult(el) {
   let n = el;
-  while (n && !n.__r) n = n.parentElement;
-  return n ? n.__r : null;
+  while (n && !n.__r && !n.__m) n = n.parentElement;
+  return n ? (n.__r || n.__m) : null;
 }
 
 async function docExport(btn) {
@@ -3553,16 +3554,28 @@ function docCopy(btn) {
    免得回放旧数据时空白。 */
 function propBlocks(r, ref) {
   const list = (r && r.proposals) || ((r && r.proposal) ? [r.proposal] : []);
-  return list.map((p) => propBlock(p, ref)).join("");
+  // 历史回放时这些提议几乎必然过期（TTL 30 分钟），按「已失效」画，
+  // 不画按钮 —— 点一个注定 409 的按钮，比不画更糟。
+  const hist = !!(r && r.__history);
+  return list.map((p) => propBlock(p, ref, hist)).join("");
 }
 
-function propBlock(p, ref) {
+function propBlock(p, ref, hist) {
   if (!p || !p.id) return "";
   const tid = (ref && ref.threadId) || "";
   const label = p.action || "操作";
+  const head = `<div class="mp-meta">${esc(p.title || "")}${p.item_id ? ` · 编号 ${esc(p.item_id)}` : ""}</div>`;
+  if (hist) {
+    return `<div class="mp-card">
+      <div class="mp-head"><b>${esc(label)}（当时的提议）</b><span class="mp-tag">已失效</span></div>
+      ${head}
+      ${p.text ? `<div class="mp-note">说明：${esc(p.text)}</div>` : ""}
+      <div class="mp-note">这一条已经过期，没有执行。要办请重新说一句。</div>
+    </div>`;
+  }
   return `<div class="mp-card" data-prop="${esc(p.id)}" data-tid="${esc(tid)}">
     <div class="mp-head"><b>待确认：${esc(label)}</b><span class="mp-tag">未执行</span></div>
-    <div class="mp-meta">${esc(p.title || "")}${p.item_id ? ` · 编号 ${esc(p.item_id)}` : ""}</div>
+    ${head}
     ${p.text ? `<div class="mp-note">说明：${esc(p.text)}</div>` : ""}
     <div class="mp-acts">
       <button class="mini" data-prgo>确认${esc(label)}</button>
@@ -5154,6 +5167,12 @@ function historyView(m, threadId) {
     // 建会草稿同理：回放要能看出当时解析成了什么、哪些字段是推定的。
     // 已经建过会的，后端 annotate 会补上 meeting_id，卡片自动变成「已建会」。
     meet_draft: meta.meet_draft || null,
+    // 待确认动作与公文草稿同理：刷新后卡片不能消失。正文里还写着「点确认才生效」，
+    // 按钮却没了，等于界面说谎。待确认卡回放成「已失效」（提议 30 分钟过期，
+    // 回看时几乎必然过期），公文草稿仍然可导出——导的是当时那一份。
+    proposals: meta.proposals || [],
+    doc_draft: meta.doc_draft || null,
+    __history: true,
     planner: meta.planner,
     // 降级提示要跟着回放：刷新后答案还在、提示没了，等于让人以为这就是模型给的
     degraded: meta.degraded || null,

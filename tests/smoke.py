@@ -2296,6 +2296,127 @@ def test_agent() -> None:
         str(assembled.get("proposals"))[:80],
     )
 
+    # ---- 主循环本身：会连着调工具、会被数闸打回、会被用户停掉 ----
+    # 这些分支以前只在真模型上手动验过。用打桩替 chat_tools，把「模型会怎么回」
+    # 写成脚本 —— 循环的正确性不该依赖某台机器上有没有模型在跑。
+    class _StubLLM:
+        def __init__(self, script: list) -> None:
+            self.script = list(script)
+            self.calls: list[dict] = []
+
+        def __call__(self, system_prompt, messages, *, tools, **kw):
+            self.calls.append({"tools": list(tools), "messages": list(messages)})
+            step = self.script.pop(0) if self.script else {"text": ""}
+            text = step.get("text") or ""
+            return {
+                "message": {"content": text},
+                "tool_calls": step.get("tool_calls") or [],
+                "text": text,
+                "model": "stub",
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            }
+
+    def _call(cid: str, name: str, args: dict) -> dict:
+        return {"id": cid, "name": name, "args": args}
+
+    old_tools = agent_mod.llmclient.chat_tools
+    old_avail2 = agent_mod.llmclient.available
+    agent_mod.llmclient.available = lambda: True
+
+    # ① 查一次 → 收口
+    stub = _StubLLM([
+        {"tool_calls": [_call("c1", "query_metric",
+                              {"codes": ["GY_VA_GROWTH"], "period": "2026-07", "want": "value"})]},
+        {"text": "这个数已经查到了，见下方指标卡。"},
+    ])
+    agent_mod.llmclient.chat_tools = stub
+    try:
+        loop1 = agent_mod.run("7 月工业增加值增速", person_id="mayor", today=date(2026, 11, 12))
+    finally:
+        agent_mod.llmclient.chat_tools = old_tools
+    check("主循环：调工具后收口", loop1 is not None and loop1.get("planner") == "agent",
+          str(loop1)[:60])
+    check("主循环：两轮模型调用", len(stub.calls) == 2, str(len(stub.calls)))
+    check("主循环：指标卡进了结果", bool((loop1 or {}).get("facts")),
+          str((loop1 or {}).get("facts"))[:60])
+    check(
+        "主循环：工具结果回喂给模型",
+        len(stub.calls) > 1
+        and any(m.get("role") == "tool" for m in stub.calls[1]["messages"]),
+        "",
+    )
+
+    # ② 一直调工具不给结论：第 6 轮必须撤掉工具逼它收口
+    stub2 = _StubLLM(
+        [{"tool_calls": [_call(f"c{i}", "list_metrics", {})]} for i in range(5)]
+        + [{"text": "就这些。"}]
+    )
+    agent_mod.llmclient.chat_tools = stub2
+    try:
+        loop2 = agent_mod.run("有哪些指标", person_id="mayor", today=date(2026, 11, 12))
+    finally:
+        agent_mod.llmclient.chat_tools = old_tools
+    check("主循环：跑满 6 轮", len(stub2.calls) == agent_mod.MAX_ROUNDS, str(len(stub2.calls)))
+    check("主循环：最后一轮撤掉工具", stub2.calls[-1]["tools"] == [], "")
+    check("主循环：最后仍能给出结论", (loop2 or {}).get("planner") == "agent", str(loop2)[:40])
+
+    # ③ 数闸不过：先给模型一次改的机会，不是直接换模板
+    stub3 = _StubLLM([
+        {"tool_calls": [_call("c1", "query_metric",
+                              {"codes": ["GY_VA_GROWTH"], "period": "2026-07"})]},
+        {"text": "增速 99.9%，明显偏高。"},
+        {"text": "数据已查到，见指标卡。"},
+    ])
+    agent_mod.llmclient.chat_tools = stub3
+    try:
+        loop3 = agent_mod.run("7 月工业增加值增速", person_id="mayor", today=date(2026, 11, 12))
+    finally:
+        agent_mod.llmclient.chat_tools = old_tools
+    gate_rows = [t for t in (loop3 or {}).get("trace") or [] if t.get("tool") == "numgate"]
+    check(
+        "主循环：数闸不过会重试一次",
+        any(t.get("status") == "retry" for t in gate_rows),
+        str([t.get("status") for t in gate_rows]),
+    )
+    check(
+        "主循环：重试后采用改过的正文",
+        (loop3 or {}).get("headline") == "数据已查到，见指标卡。",
+        str((loop3 or {}).get("headline"))[:40],
+    )
+
+    # ④ 用户点停止：抛 TurnCancelled，由上层落「已停止」而不是半条答案
+    agent_mod.llmclient.chat_tools = _StubLLM([{"text": "不该被用到"}])
+    stopped = False
+    try:
+        try:
+            agent_mod.run("7 月工业增加值增速", person_id="mayor", should_stop=lambda: True)
+        except ask_mod.TurnCancelled:
+            stopped = True
+    finally:
+        agent_mod.llmclient.chat_tools = old_tools
+        agent_mod.llmclient.available = old_avail2
+    check("主循环：可被用户停止", stopped, "")
+
+    # 卡片要跟着落库：刷新之后不能只剩正文说「点确认」，按钮却没了
+    import main as srv_mod2
+
+    th = chat.create(title="落库-卡片")
+    msg = srv_mod2.Handler._persist_answer(None, th["id"], {
+        "headline": "已生成催办草稿。",
+        "proposals": [{"id": "pr_x1", "kind": "advance", "action": "催办",
+                       "item_id": "DB2026-0001", "title": "测试事项", "text": "请反馈",
+                       "expires_at": 1}],
+        "doc_draft": {"title": "关于测试的通知", "label": "通知", "to": "各单位",
+                      "paras": ["第一段"], "score": 97, "issues": [{"detail": "不该落库"}],
+                      "meta": {"kind": "tongzhi"}, "doc": {"title": "关于测试的通知"}},
+    })
+    meta = (msg or {}).get("meta") or {}
+    check("待确认动作跟着落库", (meta.get("proposals") or [{}])[0].get("id") == "pr_x1",
+          str(meta.get("proposals"))[:60])
+    check("公文草稿跟着落库", (meta.get("doc_draft") or {}).get("title") == "关于测试的通知",
+          str(meta.get("doc_draft"))[:60])
+    check("公文草稿落库不含临时 issue", "issues" not in (meta.get("doc_draft") or {}), "")
+
     # 没有模型时必须交回原链路，不能自己发明一个答案。
     # 用打桩而不是清空配置：清配置会写真实文件，测试不该改用户的模型设置。
     original = agent_mod.llmclient.available
