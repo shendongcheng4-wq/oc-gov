@@ -40,7 +40,7 @@
 
 | octop 的做法 | 这里的选择 | 理由 |
 | --- | --- | --- |
-| LangGraph 的 function calling 循环（模型可连续调工具、自主拆解） | 保持「模型只出查询计划，程序取数」 | 一套能生成数字的模型，就多一条编数字的路径 |
+| LangGraph 的 function calling 循环（模型可连续调工具、自主拆解） | 不引 LangGraph，但补了一层自己的：`core/agent.py` 手写的 4 轮工具循环，工具面限 4 个只读查询，正文每个数过 `numgate` | 要的是「能调工具、能反问」，不是「能自主拆解」；而模型一旦拿到正文自由，就必须同时有数闸兜住 —— 这两件配套，只搬循环不搬闸，就是多一条编数字的路 |
 | WebSocket + hub/subscribe/active_turns 断线重连 | SSE | 标准库手写 WS 握手代价高、收益为零；单机演示不需要「断开不杀任务」 |
 | `thread_history_projection` 双来源（投影 + checkpoint） | 只有一份存储 | 那是兼容老数据的迁移产物 |
 | `trajectory_events` 观测表 | 不建 | 与对话正确性无关，需要时再加 |

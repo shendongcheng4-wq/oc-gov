@@ -330,3 +330,133 @@ def chat_text(
         "usage": body.get("usage") or {},
         "fell_back": bool(conn.get("fell_back")),
     }
+
+
+def _parse_args(raw: Any) -> tuple[dict[str, Any], str]:
+    """工具参数解析。
+
+    模型偶尔把参数写成空串、写成带引号的 JSON、或者直接给个数组。这些都不是
+    「调用失败」，而是「这一轮没调对」—— 返回空 dict 让主循环把错误喂回去，
+    它下一轮通常自己就改对了。抛异常会把整轮对话搞挂，代价不成比例。
+    """
+    if isinstance(raw, dict):
+        return raw, ""
+    text = str(raw or "").strip()
+    if not text:
+        return {}, ""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return {}, f"参数不是合法 JSON：{str(exc)[:120]}"
+    if not isinstance(data, dict):
+        return {}, f"参数必须是对象，收到 {type(data).__name__}"
+    return data, ""
+
+
+def chat_tools(
+    system_prompt: str,
+    messages: list[dict[str, Any]],
+    *,
+    tools: list[dict[str, Any]],
+    model_ref: str | None = None,
+    temperature: float = 0.0,
+    timeout: float = 60.0,
+    max_tokens: int | None = None,
+) -> dict[str, Any]:
+    """带工具的一轮对话，返回 `{"message", "tool_calls", "text", "model", "usage"}`。
+
+    与 chat_json / chat_text 的区别只有两点：请求里带 `tools`，响应里可能不带
+    正文而是带 `tool_calls`。**这里不做循环** —— 要不要接着调工具、什么时候
+    收口说话，是 `core/agent.py` 的事；这一层只管把一次调用发出去、把响应
+    翻译成统一形状。两者分开的好处是循环能被单独替换（换模型、换策略），
+    而传输层不用动。
+
+    `messages` 由调用方整段维护（含 role=tool 的结果消息），因为多轮工具调用
+    的上下文顺序是有语义的，压平或重排都会让模型丢掉「哪个结果对应哪次调用」。
+    """
+    conn = modelcfg.resolve(model_ref)
+    if conn is None:
+        raise ModelUnavailable("no_model_configured")
+
+    payload: dict[str, Any] = {
+        "model": conn["model"],
+        "temperature": temperature,
+        "messages": [{"role": "system", "content": system_prompt}, *messages],
+    }
+    if tools:
+        payload["tools"] = tools
+        # auto 而不是 required：多数问句（寒暄、追问、要建议）根本不需要工具，
+        # 强制调用只会让它为了凑格式去查一个不相干的指标。
+        payload["tool_choice"] = "auto"
+    if conn.get("llamacpp"):
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
+
+    req = urllib.request.Request(
+        f"{conn['base_url']}/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {conn['api_key']}",
+        },
+        method="POST",
+    )
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:300]
+        _record({"ok": False, "model": conn["model"], "ms": _ms(started)})
+        raise ModelError(
+            f"HTTP {exc.code}: {detail}", kind="http", status=int(exc.code)
+        ) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        _record({"ok": False, "model": conn["model"], "ms": _ms(started)})
+        raise ModelError(f"连接失败: {exc}", kind="network") from exc
+
+    _record(
+        {
+            "ok": True,
+            "model": body.get("model") or conn["model"],
+            "model_ref": conn["ref"],
+            "usage": body.get("usage") or {},
+            "ms": _ms(started),
+        }
+    )
+
+    try:
+        msg = body["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ModelError(f"返回没有 message: {str(exc)[:200]}", kind="json") from exc
+
+    calls: list[dict[str, Any]] = []
+    for item in msg.get("tool_calls") or []:
+        fn = (item or {}).get("function") or {}
+        args, err = _parse_args(fn.get("arguments"))
+        calls.append(
+            {
+                "id": str(item.get("id") or ""),
+                "name": str(fn.get("name") or ""),
+                "args": args,
+                "error": err,
+                "raw_arguments": fn.get("arguments") if not args else None,
+            }
+        )
+
+    text = str(msg.get("content") or "").strip()
+    if not text and not calls:
+        reasoning = str(msg.get("reasoning_content") or "").strip()
+        if reasoning:
+            text = reasoning.split("\n")[-1].strip().lstrip("。-–—").strip()[:500]
+
+    return {
+        "message": msg,
+        "tool_calls": calls,
+        "text": text,
+        "model": body.get("model") or conn["model"],
+        "model_ref": conn["ref"],
+        "usage": body.get("usage") or {},
+        "finish_reason": ((body.get("choices") or [{}])[0] or {}).get("finish_reason"),
+    }

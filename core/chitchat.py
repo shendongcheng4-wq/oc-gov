@@ -1,4 +1,4 @@
-"""对话里的寒暄：打招呼、问身份、问能力、道谢。
+"""对话里的寒暄与「要判断」类问句：打招呼、问身份、问能力、要建议、道谢。
 
 ## 为什么需要这一层
 
@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
-for _p in (ROOT / "core", ROOT / "core" / "metrics"):
+for _p in (ROOT / "core", ROOT / "core" / "metrics", ROOT / "core" / "oversight"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -62,6 +62,17 @@ _CAP = (
     r"|(有什么|有哪些)(功能|能力)|可以(做|干)(什么|啥)"
     r"|怎么用|如何使用|使用说明|能查(什么|啥)|能问(什么|啥)|帮助|help"
 )
+# 「要判断」的那类问句：建议、对策、怎么办、你怎么看。
+# 它们和问数不是同一种请求 —— 问数要一个带出处的数，这里要一段**结论**，
+# 而结论不能从指标字典里查出来。以前这类话落到「没有对应的指标」，
+# 用户看到的是「系统说我没查到 GDP」，而他根本没问 GDP。
+_ADVICE = (
+    r"你有什么建议|你(有|给|提)(什么|啥|点|些)?建议|给(我|点|些)?(一?些)?建议"
+    r"|(提|出)(点|些|个)?建议|你建议(一下)?|建议一下|有(什么|啥)(好)?建议"
+    r"|有(什么|啥)(办法|措施|对策)|怎么(办|改进|提升|弄)"
+    r"|下一步(怎么|该|要)(办|抓|做|干|推|盯)?(什么|啥)?"
+    r"|你(怎么|如何)看|你(有|有什么)(看法|意见)|帮我(分析|看看|想想)(一下|下)?|分析(一下|下)?"
+)
 _THANKS = r"谢谢(你|您)?|多谢|感谢|thanks?|thankyou|thx"
 _BYE = r"再见|拜拜|bye|goodbye"
 _OK = r"好的|好|嗯|哦"
@@ -71,12 +82,15 @@ _OK = r"好的|好|嗯|哦"
 #
 # 前缀与尾缀拆成两个变量：它们的内容几乎一样，但要分开维护 —— 尾缀里的
 # 「呀 / 啊 / 吗 / 你」这类语气词放在句首会变成灾难（「啊 9 月工业多少」）。
-_POLITE = rf"请问|请问一下|问一下|我想问一下|那个|这里|这儿|都|{_OK}"
-_TAIL = rf"{_SELF}|{_CAP}|{_GREET}|{_THANKS}|{_BYE}|请问|这里|这儿|都|{_OK}"
+# 前缀里补了「你觉得 / 你看 / 该」：它们只出现在要判断的句子里（「你觉得怎么办」
+# 「下一步该抓什么」），而 fullmatch 要求整句由前缀+核心构成，所以放宽前缀不会
+# 把「你觉得 9 月工业多少」这种真问题抢走 —— 那半句匹配不到任何核心。
+_POLITE = rf"请问|请问一下|问一下|我想问一下|那个|这里|这儿|都|你觉得|您觉得|你看|该|{_OK}"
+_TAIL = rf"{_ADVICE}|{_SELF}|{_CAP}|{_GREET}|{_THANKS}|{_BYE}|请问|这里|这儿|都|{_OK}"
 _ENDINGS = r"呀|啊|呢|吧|哦|哈|啦|嘛|哟|吗|你|您|的"
 
 _CHITCHAT = re.compile(
-    rf"^(?:{_POLITE})*(?:{_SELF}|{_CAP}|{_GREET}|{_THANKS}|{_BYE}|{_OK})"
+    rf"^(?:{_POLITE})*(?:{_ADVICE}|{_SELF}|{_CAP}|{_GREET}|{_THANKS}|{_BYE}|{_OK})"
     rf"(?:(?:{_TAIL})|(?:{_ENDINGS}))*$",
     re.IGNORECASE,
 )
@@ -113,6 +127,7 @@ def kind(question: str) -> str:
     low = s.lower()
     for name, pattern in (
         ("cap", _CAP),
+        ("advice", _ADVICE),
         ("self", _SELF),
         ("bye", _BYE),
         ("thanks", _THANKS),
@@ -140,7 +155,7 @@ _CAP_ROWS = (
     ("问数", "取值 / 走势 / 分解 / 对比 / 口径"),
     ("查记录", "督办、会议纪要与议定事项"),
     ("查材料", "你上传文件里的原文段落"),
-    ("听解读", "参谋从各自角度点评，不报数"),
+    ("听解读", "参谋判断好坏并给动作，引用的数可溯源"),
     ("约会议", "一句话出草稿，确认才落库"),
 )
 
@@ -148,6 +163,7 @@ _HEADS = {
     "hello": "你好。问数、查记录、查材料、听解读、约会议，这五件事都能做。",
     "cap": "能做的事分五类，都在这张卡上。",
     "self": "我是这个工作台的问数助手。生成文字的是本机部署的模型，数值不经过它。",
+    "advice": "「给建议」这件事我不现场编 —— 只把台账和指标里的事实摆出来，判断留给你。",
     "thanks": "不客气。",
     "bye": "好，随时回来。",
     "ok": "嗯。有要查的随时说。",
@@ -158,6 +174,9 @@ _DETAILS = {
     "cap": "只答系统里有记录的东西；对不上的会直说没有，并列出能问的指标。",
     "self": "模型只负责把你的话映射成「问哪个指标」，数字由指标接口返回，"
             "每条都带部门、报表和期次，所以能追到出处。",
+    "advice": "一段「该抓什么」的建议，要么由模型基于台账事实写（研判简报的最后一节，"
+              "没接模型时退回规则文本，只复述逾期/临期/停滞），要么由参谋按各自角度点评。"
+              "我不会为了把话答圆满，临时拼一段没有出处的判断。",
     "thanks": "有要查的随时说。",
     "bye": "",
     "ok": "",
@@ -173,6 +192,21 @@ def _model_hint() -> str:
         return "已接（只用于理解意图）" if modelcfg.available() else "未接（问数不受影响）"
     except Exception:  # noqa: BLE001 —— 配置读坏了不该让寒暄跟着挂
         return "状态未知"
+
+
+def _oversight_line() -> str:
+    """台账现状一行。没接模型时，这是「建议」唯一能拿到的原料 ——
+    逾期几项、几项快到期、几项停滞，都是台账算出来的，不是我编的。"""
+    try:
+        import oversight as ov  # noqa: PLC0415 —— 只在这条分支上才需要
+
+        st = ov.stats()
+        return (
+            f"{st['total']} 项（在办 {st['open']}、逾期 {st['overdue']}、"
+            f"{ov.SOON_DAYS} 天内到期 {st['due_soon']}、停滞 {st['stalled']}）"
+        )
+    except Exception:  # noqa: BLE001 —— 台账文件坏了不该让这句回答跟着挂
+        return "台账当前读不到"
 
 
 def _starters() -> list[dict[str, str]]:
@@ -202,6 +236,14 @@ def as_result(question: str) -> dict[str, Any]:
             {"label": "数字来源", "value": "指标接口，不由模型生成"},
             {"label": "答不了时", "value": "明说没有，并列出可问指标"},
         ]
+    elif k == "advice":
+        # 四行，全部是可核对的事实或明确的出口；没有一行是「建议」本身。
+        facts = [
+            {"label": "这类问题", "value": "要判断，不是查数"},
+            {"label": "台账现状", "value": _oversight_line()},
+            {"label": "要成段建议", "value": "研判简报 →「下一步工作建议」"},
+            {"label": "本地模型", "value": _model_hint()},
+        ]
 
     return {
         "refused": False,
@@ -225,7 +267,11 @@ def as_result(question: str) -> dict[str, Any]:
                 "tool": "chitchat.match",
                 "call": f"chitchat.match(question) → {k}",
                 "status": "ok",
-                "summary": "整句是寒暄或能力询问，直接回能力说明；没调模型，也没查指标",
+                "summary": (
+                    "整句是要判断类问句，说清边界与出口；没调模型，也没查指标"
+                    if k == "advice"
+                    else "整句是寒暄或能力询问，直接回能力说明；没调模型，也没查指标"
+                ),
             }
         ],
     }

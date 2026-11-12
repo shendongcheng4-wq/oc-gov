@@ -3466,6 +3466,147 @@ function meetBlock(d, ref) {
   </div>`;
 }
 
+/* 公文草稿卡。正文、分条、出处全部由后端代码装配，界面只负责预览和导出。
+   导出认「屏幕上这一份」（meta + doc 原样回灌），不重新装配 —— 重新装配会让
+   文件里的措辞和屏幕上的对不上，而这份稿子是要打印送签的。 */
+function docBlock(d, ref) {
+  if (!d || !d.title) return "";
+  const tid = (ref && ref.threadId) || "";
+  const issues = (d.issues || []).slice(0, 3).map((x) =>
+    `<div class="mp-warn">${esc(x.where ? x.where + "：" : "")}${esc(x.detail || x.rule || "")}</div>`).join("");
+  const paras = (d.paras || []).slice(0, 3)
+    .map((t) => `<p style="margin:6px 0;font-size:13px;line-height:1.75">${esc(t)}</p>`).join("");
+  const score = d.score != null ? `体例 ${d.score} 分` : "";
+  return `<div class="mp-card" data-doc="${esc(tid)}">
+    <div class="mp-head"><b>${esc(d.label || "公文")}草稿</b><span class="mp-tag">未导出</span></div>
+    <div class="mp-meta">${esc(d.title)}${d.to ? ` · 主送：${esc(d.to)}` : ""}</div>
+    ${paras}
+    ${d.paras && d.paras.length > 3 ? `<div class="mp-note">（共 ${d.paras.length} 段，导出后可看全文）</div>` : ""}
+    ${d.no ? `<div class="mp-note">文号：${esc(d.no)}（不代编，按发文登记簿补填）</div>` : ""}
+    ${issues}
+    <div class="mp-acts">
+      <button class="mini" data-docdl>导出 Word</button>
+      <button class="mini ghost" data-doccp>复制全文</button>
+      <span class="hint">${esc(score)}</span>
+    </div>
+  </div>`;
+}
+
+/* 草稿数据挂在答案气泡上（h.__r = result），卡片本身只存一个占位。
+   这样复制/导出用的是这一轮真正返回的那份，不会串到别的回答上。 */
+function bubbleResult(el) {
+  let n = el;
+  while (n && !n.__r) n = n.parentElement;
+  return n ? n.__r : null;
+}
+
+async function docExport(btn) {
+  const card = btn.closest("[data-doc]");
+  const r = bubbleResult(card);
+  const d = r && r.doc_draft;
+  if (!d || !d.meta || !d.doc) return toast("这份草稿已经不在页面里了，重新问一次");
+  btn.disabled = true;
+  btn.textContent = "排版中…";
+  try {
+    const res = await fetch("/api/wenshu/docx", {
+      method: "POST",
+      headers: authHeaders({ "X-Person-Id": PID.get() }),
+      body: JSON.stringify({ meta: d.meta, doc: d.doc }),
+    });
+    const out = await res.json();
+    if (!res.ok || !out.ok) throw new Error(out.error || "导出失败");
+    const bin = atob(out.docx);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) buf[i] = bin.charCodeAt(i);
+    const blob = new Blob([buf], {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = out.filename || "文稿.docx";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 0);
+    toast(`已导出：${out.filename}`);
+    btn.textContent = "已导出";
+  } catch (e) {
+    toast("没导出：" + e.message);
+    btn.disabled = false;
+    btn.textContent = "导出 Word";
+  }
+}
+
+function docCopy(btn) {
+  const r = bubbleResult(btn.closest("[data-doc]"));
+  const text = (r && r.doc_draft && r.doc_draft.markdown) || "";
+  if (!text) return toast("这份草稿已经不在页面里了，重新问一次");
+  navigator.clipboard.writeText(text)
+    .then(() => toast("已复制全文"))
+    .catch(() => toast("复制失败，可以用导出 Word"));
+}
+
+/* 待确认动作卡。和建会草稿同一套交互：卡上什么都不写进台账，点「确认」才走
+   /api/proposal/confirm —— 那里用登录身份过同样的闸和状态机。
+   不画输入框：模型已经把要做什么写好了，要改就重新说一句，比让人在卡片上改字简单。
+
+   一轮可能生成多条（「把这几个逾期的都催一下」）。单条的老字段 proposal 仍然认，
+   免得回放旧数据时空白。 */
+function propBlocks(r, ref) {
+  const list = (r && r.proposals) || ((r && r.proposal) ? [r.proposal] : []);
+  return list.map((p) => propBlock(p, ref)).join("");
+}
+
+function propBlock(p, ref) {
+  if (!p || !p.id) return "";
+  const tid = (ref && ref.threadId) || "";
+  const label = p.action || "操作";
+  return `<div class="mp-card" data-prop="${esc(p.id)}" data-tid="${esc(tid)}">
+    <div class="mp-head"><b>待确认：${esc(label)}</b><span class="mp-tag">未执行</span></div>
+    <div class="mp-meta">${esc(p.title || "")}${p.item_id ? ` · 编号 ${esc(p.item_id)}` : ""}</div>
+    ${p.text ? `<div class="mp-note">说明：${esc(p.text)}</div>` : ""}
+    <div class="mp-acts">
+      <button class="mini" data-prgo>确认${esc(label)}</button>
+      <button class="mini ghost" data-prdrop>放弃</button>
+      <span class="hint">还没写进台账</span>
+    </div>
+  </div>`;
+}
+
+async function confirmProposal(card) {
+  const btn = card.querySelector("[data-prgo]");
+  const label = card.querySelector("[data-prgo]").textContent.replace("确认", "") || "操作";
+  btn.disabled = true;
+  btn.textContent = "写入中…";
+  try {
+    const r = await fetch("/api/proposal/confirm", {
+      method: "POST",
+      headers: authHeaders({ "X-Person-Id": PID.get() }),
+      body: JSON.stringify({ proposal_id: card.dataset.prop }),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || "确认失败");
+    const it = d.item || {};
+    card.className = "mp-card done";
+    card.innerHTML = `
+      <div class="mp-head"><b>${esc(label)}已执行</b><span class="mp-tag ok">已写入</span></div>
+      <div class="mp-meta">${esc(it.title || "")}${it.status ? ` · 当前状态「${esc(it.status)}」` : ""}</div>
+      <div class="mp-note">已记入台账事件流，督办页能直接看到这次${esc(label)}。</div>`;
+    toast(`已${label}`);
+  } catch (e) {
+    // 失败要把原因留在卡上：最常见的两种是「登录过期」和「状态已经变了」，
+    // 只弹一个 toast，用户回看时不知道这次到底成没成。
+    btn.disabled = false;
+    btn.textContent = `确认${label}`;
+    toast("没执行：" + e.message);
+    if (!card.querySelector(".mp-warn")) {
+      const why = document.createElement("div");
+      why.className = "mp-warn";
+      why.textContent = `没执行：${e.message}`;
+      card.appendChild(why);
+    }
+  }
+}
+
 async function commitMeet(card) {
   const pick = (k) => {
     const el = card.querySelector(`[data-mpf="${k}"]`);
@@ -3644,14 +3785,22 @@ function aiBubble(r, ref) {
 
   // 拒答时后端把 11 个已注册指标全列出来。点了看口径抽屉 —— 那里有「可用提问方式」，
   // 比替用户猜一个问题更有用。
+  //
+  // 对话层反问口径时，suggestions 里带的是 ask（可以直接回的一句话），不是指标代码。
+  // 那种情况要能点一下就发出去 —— 反问本来就是「你说一句就继续」，让人自己再打一遍
+  // 等于把澄清变成了又一道手续。
+  const anyAsk = (r.suggestions || []).some((s) => s.ask);
   const sugs = (r.suggestions || []).map((s) => {
+    if (s.ask) {
+      return `<button data-ask="${esc(s.ask)}" title="直接这么回">${esc(s.name || s.ask)}</button>`;
+    }
     const code = srcCode(s);
     return code
       ? `<button data-src="${esc(code)}" title="查看「${esc(s.name || code)}」的口径与可用问法">${esc(s.name || code)}</button>`
       : `<span class="src-pill">${esc(s.name || "")}</span>`;
   }).join("");
   const sugBlock = sugs
-    ? `<div class="sug"><div class="sug-h">这些指标可以问（点开看怎么问）：</div><div class="sug-list">${sugs}</div></div>`
+    ? `<div class="sug"><div class="sug-h">${anyAsk ? "回一句就行：" : "这些指标可以问（点开看怎么问）："}</div><div class="sug-list">${sugs}</div></div>`
     : "";
 
   const notes = (r.notes || []).slice(0, 2).map((n) => `<div class="note-row">${esc(n)}</div>`).join("");
@@ -3766,6 +3915,8 @@ function aiBubble(r, ref) {
       ${extBlock(r.external)}
       ${chartBlock}
       ${meetBlock(r.meet_draft, ref)}
+      ${propBlocks(r, ref)}
+      ${docBlock(r.doc_draft, ref)}
       ${kbBlock(r.knowledge)}
       ${ragBlock(r.rag)}
       ${dymBlock}
@@ -10021,6 +10172,29 @@ document.addEventListener("click", (e) => {
       renderWatch();
       toast(`已从「${desk.name}」移除`);
     }
+    return;
+  }
+  // 公文草稿卡：导出/复制认气泡上的 __r，别让别的委托接走
+  const docDl = e.target.closest("[data-docdl]");
+  if (docDl) return docExport(docDl);
+  const docCp = e.target.closest("[data-doccp]");
+  if (docCp) return docCopy(docCp);
+  // 待确认动作卡：和建会草稿同一类，卡上的按钮不能落到别的委托里
+  const prGo = e.target.closest("[data-prgo]");
+  if (prGo) return confirmProposal(prGo.closest("[data-prop]"));
+  const prDrop = e.target.closest("[data-prdrop]");
+  if (prDrop) {
+    const card = prDrop.closest("[data-prop]");
+    const pid = card.dataset.prop;
+    const gone = document.createElement("div");
+    gone.className = "mp-dropped";
+    gone.textContent = "已放弃这次操作，什么都没有写入。";
+    card.replaceWith(gone);
+    fetch("/api/proposal/cancel", {
+      method: "POST",
+      headers: authHeaders({ "X-Person-Id": PID.get() }),
+      body: JSON.stringify({ proposal_id: pid }),
+    }).catch(() => {});
     return;
   }
   // 建会草稿卡的按钮同理：卡在答案气泡里，别让别的委托接走

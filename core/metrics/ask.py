@@ -41,6 +41,10 @@ import rag as rag_mod
 # 指标匹配
 # --------------------------------------------------------------------------
 
+# 工具路径允许指定的口径。只列取数真能办的这几种：`definition`（口径说明）
+# 不该从取数口出，它没有数值；`rag` / `knowledge` 也不是指标查询的职责。
+_WANT_INTENTS = ("value", "trend", "compare", "breakdown")
+
 
 def match_metrics(question: str) -> list[dict[str, Any]]:
     """按别名长度从长到短匹配，命中就记录下来（支持一句话里多个指标）。
@@ -192,6 +196,69 @@ def _period_text(result: dict[str, Any]) -> str:
         # 1 月累计就是 1 月 —— 以前这里会拼出「2026年1—1月累计」
         return f"{year}年1月累计"
     return f"{year}年1—{month}月累计"
+
+
+def _asks_a_single_month(question: str) -> bool:
+    """这句话是不是点名要「某一个月」，而不是要最新值或一段时间。"""
+    return bool(re.search(r"\d{1,2}\s*月|本月|这个月|当月|上月|上个月", question))
+
+
+def _single_month_note(
+    question: str,
+    period_info: dict[str, Any],
+    result: dict[str, Any],
+    today: date,
+) -> tuple[str | None, dict[str, Any] | None, str | None]:
+    """问「7 月多少」，但指标是累计口径时，必须把这件事说出来。
+
+    背景：GDP、财政收入这类指标年内**从 1 月累计**核算，根本没有「7 月单月」这个
+    公布口径。取数本身没错（1—7 月累计就是该期唯一公开值），错在只把标签换成
+    「1—7 月累计」就交了 —— 用户问的是 7 月，看到一段「1—7 月累计」会以为系统
+    理解错了期次，而不是以为这个指标压根没有单月数。
+
+    两条不做：
+    - **不代算单月值**（硬规则 1：数值只能来自接口）。累计相减得到的 142.2 亿是
+      推算值，一旦混进答案正文就再也分不清哪个是公布的、哪个是算出来的；
+    - 不遮掉累计数。累计值本身是用户要的口径之一，只是得说明白。
+
+    做的是：说清没有单月值 + 把**相邻上一期的累计数**取出来摆着。用户要单月，
+    拿两个累计数相减他自己两秒就完了，比我替他算一个来路不明的数安全。
+
+    返回 `(备注, 相邻期取数结果, 相邻期标签)`；不需要说明时三者全为 None。
+    """
+    meta = md.METRICS.get(result.get("code", ""), {})
+    if not meta.get("cumulative"):
+        return None, None, None
+    if int(period_info.get("months") or 1) != 1:
+        return None, None, None
+    period = period_info.get("period") or ""
+    if len(period) < 7 or not _asks_a_single_month(question):
+        return None, None, None
+    try:
+        year, month = int(period[:4]), int(period[5:7])
+    except (ValueError, TypeError):
+        return None, None, None
+    # 1 月累计就等于 1 月本身，12 月累计就是全年 —— 这两个月不存在「单月 vs 累计」的歧义
+    if month in (1, 12):
+        return None, None, None
+
+    name = result.get("name") or meta.get("name") or ""
+    unit = result.get("unit") or meta.get("unit") or ""
+    head = (
+        f"「{name}」按累计口径公布，没有 {year}年{month}月单月值 —— "
+        f"上面的数字是年初到 {month} 月末的累计。"
+    )
+    prev = f"{year:04d}-{month - 1:02d}"
+    got = md.query_metric(result["code"], prev, 1, today)
+    if got.get("ok"):
+        return (
+            head
+            + f"{md._period_label(prev)}累计为 {_fmt(got['value'], unit)}；"
+            "要单月数得拿相邻两期累计相减（现价口径），本系统不代算。",
+            got,
+            prev,
+        )
+    return head + "要单月数得拿相邻两期累计相减，上一期数据这次没取到。", None, prev
 
 
 def _month_gap(older: str, newer: str) -> int:
@@ -540,12 +607,21 @@ def ask(
     known_metrics: list[str] | None = None,
     should_stop: Any = None,
     attachments: list[dict[str, Any]] | None = None,
+    rules_only: bool = False,
+    codes: list[str] | None = None,
+    period: str | None = None,
+    want: str | None = None,
 ) -> dict[str, Any]:
     """`attachments` 是本轮用户上传的纯文本材料（已裁剪）。
 
     它只喂意图解析，不进指标取值：材料里的数字不能变成答案里的数字，
     否则「每个数都能追到出处」这条就断了。所以这个函数不把它塞进 question ——
     规则兜底那条路要靠 question 做关键词匹配，混进材料正文会误命中指标。
+
+    `rules_only` + `codes` / `period` / `intent` 是给 `core/agent.py` 当工具用的：
+    agent 已经把「查哪个指标、哪一期、要什么口径」定好了，这里只需要照办取数并
+    装配出处。再让模型翻译一遍「2026年7月工业增加值增速」纯属多一次可能出错的
+    往返，而且会把 agent 已经确认过的期次改掉。
     """
     def check() -> None:
         # 停止信号只在这里判：分发阶段提示的那一处是整条流水线的唯一收窄口，
@@ -566,6 +642,10 @@ def ask(
                 should_stop,
                 attachments=attachments,
                 out=extra,
+                rules_only=rules_only,
+                codes=codes,
+                period=period,
+                want=want,
             )
             # 降级信息要跟着答案一起走：落库、回放、界面上都得看得见。
             # 只在实时那一条路径上提示的话，刷新一下就好像什么都没发生过。
@@ -680,6 +760,10 @@ def _ask_impl(
     should_stop: Any = None,
     attachments: list[dict[str, Any]] | None = None,
     out: dict[str, Any] | None = None,
+    rules_only: bool = False,
+    codes: list[str] | None = None,
+    period: str | None = None,
+    want: str | None = None,
 ) -> dict[str, Any]:
     """`out` 是给调用方传回附加信息的口子（目前只放 degraded）。
 
@@ -699,7 +783,9 @@ def _ask_impl(
     #
     # 注意它排在拒答之前：这类问句在指标字典里一定匹配不到，不前置就会变成
     # 「没有对应的指标」——用户提了个能办的需求，系统回一句它办不了。
-    if meetplan_mod.wants(question):
+    # 工具路径跳过下面两道门口判断：agent 已经决定「这是取数」，不该因为调用方
+    # 把问句写成「帮我看看建议」就被寒暄卡接管，返回一张能力卡当指标数据。
+    if not rules_only and meetplan_mod.wants(question):
         person = people_mod.meta(person_id)
         draft = meetplan_mod.parse(question, today=today, person=person)
         return meetplan_mod.as_result(draft, question)
@@ -711,12 +797,64 @@ def _ask_impl(
     #
     # 顺序放在 meetplan 之后：建会是有副作用的意图，不能被「你好」抢走。
     # 两者实际互斥（`chitchat.wants` 是整句匹配），但把有动作的那个放前面更安全。
-    if chitchat_mod.wants(question):
+    if not rules_only and chitchat_mod.wants(question):
         return chitchat_mod.as_result(question)
 
-    plan, planner, degraded = _plan_question(
-        question, today, history, model_ref, known_metrics, should_stop, attachments
-    )
+    if rules_only:
+        # 工具路径：查哪个指标、哪一期、要什么口径，都由调用方（core/agent.py）定好。
+        # 这里不再调模型规划 —— 一次多余的往返不仅慢，还可能把已经确认的期次改掉。
+        plan, planner, degraded = None, "tool", {}
+        hits = [
+            {"code": c, "alias": "调用方指定", "name": md.METRICS[c]["name"]}
+            for c in (codes or [])
+            if c in md.METRICS
+        ]
+        if hits:
+            base = parse_intent(question, hits)
+            intent = {
+                "intent": want if want in _WANT_INTENTS else base["intent"],
+                "dim": base.get("dim"),
+                "why": "调用方指定的口径" if want in _WANT_INTENTS else base["why"],
+            }
+            period_info = (
+                {"period": period, "months": 1, "why": "调用方指定的期次"}
+                if period
+                else parse_period(question, today)
+            )
+            # 调用链里要能看出「这一问是工具按代码查的」。混在规则匹配里的话，
+            # 事后分不清数字是模型挑的指标还是代码挑的 —— 这是排查错答的第一道线索。
+            trace.append(
+                {
+                    "step": 1,
+                    "tool": "metric.tool",
+                    "call": f"query_metric(codes={[h['code'] for h in hits]}, "
+                    f"period={period_info['period']!r}, want={intent['intent']!r})",
+                    "status": "ok",
+                    "summary": "、".join(h["name"] for h in hits),
+                }
+            )
+        else:
+            # 代码不在字典里就直说，别掉进知识库那条兜底：工具调用的语义是
+            # 「按代码取数」，悄悄改成检索记录，调用方会拿到一堆看着像答案的原文。
+            return {
+                "refused": True,
+                "question": question,
+                "planner": "tool",
+                "intent": "value",
+                "headline": "没有这个指标代码。",
+                "detail": "调用方给的代码不在指标字典里。可先用 list_metrics 取可查清单。",
+                "suggestions": [
+                    {"code": c, "name": m["name"], "department": m["department"]}
+                    for c, m in md.METRICS.items()
+                ],
+                "sources": [],
+                "notes": [],
+                "trace": trace,
+            }
+    else:
+        plan, planner, degraded = _plan_question(
+            question, today, history, model_ref, known_metrics, should_stop, attachments
+        )
     if out is not None and degraded:
         out["degraded"] = degraded
     # 材料里核出来过的数值。装配留在外层：这个函数有十来个提前返回，
@@ -754,7 +892,7 @@ def _ask_impl(
             "months": max(1, int(plan.get("months") or 1)),
             "why": plan.get("reason") or "模型判断",
         }
-    else:
+    elif not rules_only:
         if planner != "rules":
             trace.append(
                 {
@@ -931,7 +1069,9 @@ def _ask_impl(
     # 这是最坏的一种错：答非所问，但形式上完全正常，看的人不会起疑。
     # 所以只要问句里是「进展 / 办理 / 定了什么」这类话术，且知识库里确实有督办或会议记录，
     # 就以记录为准。
-    if hits and _wants_matter(question):
+    # 工具路径不适用：agent 已经按代码指定了指标，问句只是原话，
+    # 「12345办结率最近三个月走势」里的「办结」不该把一次取数改判成查台账。
+    if hits and not rules_only and _wants_matter(question):
         person = people_mod.meta(person_id)
         kb = knowledge_mod.answer(question, person)
         if not kb["refused"] and any(
@@ -1102,19 +1242,50 @@ def _ask_impl(
                 "summary": f"返回 {len(ok_rows)} 个指标同期数值",
             }
         )
+        def _tp(name: str, label: str) -> str:
+            # 期次标签本身可能带括号（「2025年（全年）」），直接套一层会变成
+            # 「地区生产总值（2025年（全年））」，读着像打错了。
+            clean = str(label or "").replace("（", "").replace("）", "")
+            return f"{name}（{clean}）"
+
+        notes = ["两个指标口径不同（一个是增速、一个是比率/总量），只能并排看，不能相加减。"]
+        if result.get("mixed_period"):
+            # 有一个指标取到的是公报年度值（GDP 就是这样），另一个是当月值。
+            # 还按「同期表现」写，等于把 2025 全年和 2026 年 10 月摆成一对 ——
+            # 用户按这个下判断，错得毫无痕迹。所以逐条带上各自的期次，并明说不同期。
+            headline = "两个指标的最新期次不同，分别如下：" + "；".join(
+                f"{_tp(r['name'], r['period_label'])}{_fmt(r['value'], r['unit'])}"
+                for r in ok_rows
+            ) + "。"
+            notes.insert(
+                0,
+                "两个指标的期次不同（"
+                + "、".join(
+                    f"{r['name']}到{str(r['period_label']).replace('（', '').replace('）', '')}"
+                    for r in ok_rows
+                )
+                + "），不能当成同期对比，只能各自看趋势。",
+            )
+        else:
+            headline = (
+                "、".join(r["name"] for r in ok_rows)
+                + f"在 {result['period_label']} 的同期表现为："
+                + "；".join(f"{r['name']} {_fmt(r['value'], r['unit'])}" for r in ok_rows)
+                + "。"
+            )
         return {
             "refused": False,
             "question": question,
             "planner": planner,
             "intent": "compare",
-            "headline": "、".join(r["name"] for r in ok_rows)
-                        + f"在 {result['period_label']} 的同期表现为："
-                        + "；".join(f"{r['name']} {_fmt(r['value'], r['unit'])}" for r in ok_rows)
-                        + "。",
-            "facts": [],
+            "headline": headline,
+            "facts": [
+                {"label": _tp(r["name"], r["period_label"]), "value": _fmt(r["value"], r["unit"])}
+                for r in ok_rows
+            ],
             "compare_rows": ok_rows,
             "sources": [_source_brief(r["source"]) for r in ok_rows],
-            "notes": ["两个指标口径不同（一个是增速、一个是比率/总量），只能并排看，不能相加减。"],
+            "notes": notes,
             "trace": trace,
         }
 
@@ -1284,6 +1455,77 @@ def _ask_impl(
         raw_yoy = result.get("yoy") if result.get("unit") == "%" else result.get("yoy_pct")
         facts.append({"label": "同比", "value": yoy_bit, "raw": raw_yoy})
 
+    # 问的是「某一个月」而指标只有累计口径：补一句说明，并把上一期累计摆出来。
+    # 放在 headline 之后、payload 之前 —— 只能进 notes，不能改正文数字。
+    month_note, prev_result, prev_period = _single_month_note(question, period_info, result, today)
+    if prev_period:
+        trace.append(
+            {
+                "step": len(trace) + 1,
+                "tool": "query_metric",
+                "call": f"query_metric(code={result['code']!r}, period={prev_period!r}, months=1)",
+                "status": "ok" if prev_result else "skip",
+                "summary": (
+                    f"该指标为累计口径，取相邻期 {prev_period} 累计数供相减"
+                    if prev_result
+                    else "该指标为累计口径，相邻期数据未取到"
+                ),
+            }
+        )
+
+    # 摊给参谋的数值清单。以前只喂方向（升/降），参谋因此看不见量级，
+    # 说不出「低于目标多少」。现在把接口返回的数原样列出来，配合 numgate
+    # 后置校验：模型可以引用、可以算（要写算式），但编不出清单外的数。
+    numbers: list[dict[str, Any]] = [
+        {"label": f.get("label"), "value": f.get("value")}
+        for f in facts
+        if f.get("label") and f.get("value") is not None
+    ]
+    if result.get("target") is not None:
+        numbers.append(
+            {
+                "label": "年度目标",
+                "value": _fmt(result["target"], result["unit"]),
+            }
+        )
+    if prev_result and prev_result.get("ok"):
+        numbers.append(
+            {
+                "label": f"{md._period_label(prev_period)}累计",
+                "value": _fmt(prev_result["value"], prev_result["unit"]),
+            }
+        )
+    # 上月 / 去年同期：由引擎算好放进来，不让模型自己减。
+    # 实测模型会把「环比回落 0.5」算成 8 - 0.5 = 7.5（方向反了），算术对、结论错，
+    # 数字闸拦不住这种错 —— 只能从源头把值给全。
+    #
+    # 标签里必须写清是哪个月（「2026年6月水平（推算）」）。只写「上月水平」的话，
+    # 模型答「比 6 月回落 0.5 个百分点」里的 6 就成了无出处的数，整段被数字闸丢掉 ——
+    # 那是把正确的话判死，比放过一个错数更冤。
+    def _shift(months: int) -> str:
+        m = re.fullmatch(r"(\d{4})-(\d{2})", str(result.get("period") or ""))
+        if not m:
+            return ""
+        idx = int(m.group(1)) * 12 + int(m.group(2)) - 1 + months
+        return f"{idx // 12}年{idx % 12 + 1}月"
+
+    if result.get("mom") is not None:
+        numbers.append(
+            {
+                "label": f"{_shift(-1)}水平（推算）" if _shift(-1) else "上月水平（推算）",
+                "value": _fmt(result["value"] - result["mom"], result["unit"]),
+            }
+        )
+    if result["unit"] == "%" and result.get("yoy") is not None:
+        # 只有比率类能这样倒推：yoy 是百分点差，两边同口径。
+        # 总量类不能推 —— 现价总量和不变价增速不能相互换算（见指标 caveats）。
+        numbers.append(
+            {
+                "label": f"{_shift(-12)}水平（推算）" if _shift(-12) else "去年同期水平（推算）",
+                "value": _fmt(result["value"] - result["yoy"], result["unit"]),
+            }
+        )
+
     # 时序类额外再取一次序列（单值查询只返回一期）
     payload: dict[str, Any] = {
         "refused": False,
@@ -1292,11 +1534,16 @@ def _ask_impl(
         "intent": intent["intent"],
         "headline": headline,
         "facts": facts,
+        "numbers": numbers,
+        "target_note": md.target_note(result) if result.get("target") is not None else None,
+        "prev_cumulative": prev_result["value"] if (prev_result and prev_result.get("ok")) else None,
         "unit": result["unit"],
         "period_label": result["period_label"],
         "sources": [_source_brief(result["source"])],
         "period_note": pending_note,
-        "notes": ([dim_note] if dim_note else []) + ([pending_note] if pending_note else []) + result["caveats"],
+        "notes": (
+            [month_note] if month_note else []
+        ) + ([dim_note] if dim_note else []) + ([pending_note] if pending_note else []) + result["caveats"],
         "trace": trace,
     }
     if intent["intent"] == "trend":

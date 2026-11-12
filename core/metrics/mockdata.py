@@ -788,9 +788,15 @@ def compare_metrics(codes: list[str], period: str | None = None, today: date | N
             )
         else:
             rows.append({"code": code, "error": result.get("error"), "message": result.get("message")})
+    labels = [r.get("period_label") for r in rows if r.get("period_label")]
+    # 期次可能对不上：GDP 取到的是公报年度值（2025 全年），另一个是当月值。
+    # 这时不能把其中任意一个当「本期」，只能把差异交给调用方说出来。
+    mixed = len(set(labels)) > 1
     return {
         "ok": any("value" in r for r in rows),
-        "period_label": rows[0].get("period_label") if rows else None,
+        "period_label": None if mixed else (labels[0] if labels else None),
+        "periods": labels,
+        "mixed_period": mixed,
         "rows": rows,
     }
 # --------------------------------------------------------------------------

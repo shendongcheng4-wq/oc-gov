@@ -595,6 +595,32 @@ def score(query: str, entry: dict[str, Any]) -> float:
 _KIND_ORDER = {"oversight": 0, "decision": 1, "metric": 2, "meeting": 3}
 
 
+# 「某一件事」而不是「一个可查的条目」：督办事项、会议、议定事项。
+# 指标是字典里的固定条目，语义近邻多半还是同一个口径；这三类是具体某件事，
+# 语义近邻经常是**另一件事** —— 它们是下面那条字面锚点规则的适用对象。
+_RECORD_KINDS = frozenset({"oversight", "meeting", "decision"})
+
+
+def _needs_lexical_anchor(entry: dict[str, Any]) -> bool:
+    """记录类命中是否必须有字面落点（而不是只靠向量相似）。
+
+    实测撞车现场：问「海绵城市建设的径流控制率要求是多少」，向量把
+    「城市运行管理服务平台数据接入」这条督办判到 **0.5509**，刚好越过
+    `MIN_VECTOR_SIM`（0.55），于是问数链路在知识库这一站就答了，永远走不到
+    资料库 —— 用户问海绵城市，得到一条数据接入的进展，看上去完全正常。
+
+    余弦只保证「说的是一类事」，不保证「说的是这一条」。同一个「城市」，
+    一个是海绵城市，一个是城市运行平台。所以这三类必须再有字面证据：
+    bigram 覆盖过门槛，或者命中了术语 / 单位 / 编号 / 标题。
+
+    反过来的样本也都支持这条线：问「供暖保障准备得怎么样」对到供暖预案
+    （lex 0.43）、「排污口的事办到哪了」对到入河排污口（0.29）、
+    「大数据平台对接有没有完成」对到数据接入（0.43）—— 对的那些都有字面落点，
+    只有错的那条是 0。
+    """
+    return entry.get("kind") in _RECORD_KINDS
+
+
 def _id_hit(query: str, entry: dict[str, Any]) -> bool:
     """问句里是否原样出现了这条记录的编号（DB2026-0033 / MT2026-0002）。
 
@@ -651,10 +677,21 @@ def search_in(entries: list[dict[str, Any]], query: str, limit: int = 6) -> list
             # 条目即使硬信号勉强命中也不放行——「数据」这种通用词不会再擦线进来。
             # 编号命中是例外：唯一键对上就是唯一键对上，语义阈值在这里只会帮倒忙。
             v = vec_scores.get(entry["id"], 0.0)
-            if not by_id and v < MIN_VECTOR_SIM and not (
-                v >= GRAY_VECTOR_FLOOR and _lexical_score(q, entry) >= GRAY_LEX_SUPPORT
-            ):
-                continue
+            lex: float | None = None
+            if not by_id and v < MIN_VECTOR_SIM:
+                # 灰度区：语义分不够，要看字面佐证够不够强
+                if v < GRAY_VECTOR_FLOOR:
+                    continue
+                lex = _lexical_score(q, entry)
+                if lex < GRAY_LEX_SUPPORT:
+                    continue
+            # 记录类（督办/会议/议定）不接受**纯语义**命中：余弦 0.5509 的
+            # 「城市运行管理平台」就是这么冒充「海绵城市」的。见 _needs_lexical_anchor。
+            if not by_id and _needs_lexical_anchor(entry):
+                if lex is None:
+                    lex = _lexical_score(q, entry)
+                if lex <= 0 and hard <= 0:
+                    continue
             s = round(min(v + hard, 2.0), 4)
         else:
             # bigram 兜底：保留原 threshold 语义

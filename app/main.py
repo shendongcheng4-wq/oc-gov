@@ -80,6 +80,7 @@ sys.path.insert(0, str(MEETING_DIR))
 sys.path.insert(0, str(CORE / "oversight"))
 
 import ask as ask_mod  # noqa: E402
+import agent as agent_mod  # noqa: E402
 import chat  # noqa: E402
 import docparse  # noqa: E402
 import extract as meeting_extract  # noqa: E402
@@ -92,6 +93,7 @@ import modelcfg  # noqa: E402
 import polish as polish_mod  # noqa: E402
 import oversight as ov  # noqa: E402
 import people  # noqa: E402
+import proposals as proposals_mod  # noqa: E402
 import saved as saved_mod  # noqa: E402
 import schedule as schedule_mod  # noqa: E402
 import notify as notify_mod  # noqa: E402
@@ -176,6 +178,19 @@ def _harness_fallback(question: str, result: dict) -> dict | None:
             }
         ],
     }
+
+
+# 材料 × 指标库的「逐期对照表」只有原链路实现（B 档边界：材料数字单独成区、与库并列）。
+# 问「对得上吗」「差多少」时交给它，别让对话层用一段话糊过去 —— 那种答案里看不出
+# 哪边是材料、哪边是库，而用户传文件来问，本来就是因为怀疑某一边。
+_COMPARE_WORDS = (
+    "对得上", "对不上", "对不对", "一致", "不一致", "核对", "比对",
+    "对照", "差异", "差多少", "相差", "准不准",
+)
+
+
+def _wants_compare(question: str) -> bool:
+    return any(w in str(question or "") for w in _COMPARE_WORDS)
 
 
 def _run_plugin_command(plugin_id: str, arg: str, question: str) -> dict | None:
@@ -401,6 +416,10 @@ WRITE_POLICY: tuple[tuple[str, str, str | None], ...] = (
     ("POST", r"/api/oversight", authz.GATE_SESSION),
     ("POST", r"/api/oversight/urge", authz.GATE_SESSION),
     ("POST", r"/api/oversight/[^/]+/action", authz.GATE_SESSION),
+    # 对话层生成的待确认动作。粗闸门只要求登录，行级判定在 handler 里按
+    # 「这条提议动的是哪条事项」再过一次 —— 和 /api/oversight/[id]/action 同构。
+    ("POST", r"/api/proposal/confirm", authz.GATE_SESSION),
+    ("POST", r"/api/proposal/cancel", authz.GATE_SESSION),
 
     # ── 会议：市级动作，只有市领导 ──
     ("POST", r"/api/meetings", authz.MEETING_COMMIT),
@@ -891,8 +910,9 @@ class Handler(BaseHTTPRequestHandler):
                         "experts": expert_mod.all_experts(),
                         "max": expert_mod.MAX_PER_CALL,
                         "model_ready": expert_mod.llmclient.available(),
-                        "rule": "专家只给解读，不报数字；解读里出现数字会被整段丢弃。"
-                        "参谋会检索本域内的记录作为依据，但记录里的数字同样不许复述。",
+                        "rule": "专家可以引用给定数值，也可以写算式推算（如 1024.8 - 882.6 = 142.2）；"
+                        "出现清单外、或等式不成立的数字会被整段丢弃。"
+                        "记录正文里的数字仍不许复述。",
                     }
                 )
 
@@ -1517,6 +1537,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/oversight/urge":
                 return self._urge(body)
 
+            # ---- 对话层生成的待确认动作 ----
+            if path == "/api/proposal/confirm":
+                return self._confirm_proposal(body)
+            if path == "/api/proposal/cancel":
+                return self._cancel_proposal(body)
+
             # ---- AI 日程：今日简报 ----
             # 模型只写一句重点和几条理由；事项、时间全部由服务端重算，前端传什么都不作数。
             if path == "/api/schedule/brief":
@@ -1967,6 +1993,95 @@ class Handler(BaseHTTPRequestHandler):
             }
         )
 
+    # ---------------- 对话层生成的待确认动作 ----------------
+    def _confirm_proposal(self, body: dict) -> None:
+        """确认一条待确认动作：用**点确认这个人**的身份去执行。
+
+        顺序是「看提议 → 取事项 → 判授权 → 占用 → 执行」，每一步都排在
+        `ov.advance` 之前。两个理由：
+
+        - 越权要回 403 而不是「已失效」。先 claim 再判授权的话，越权点一次
+          就把提议烧掉了，用户看到的是「按钮坏了」，不是「你没这个权限」。
+        - `ov.advance` 自己有状态机守卫，被拒时不落任何数据。所以这里只要保证
+          「授权过了、提议还在」，剩下那层不用复述。
+
+        audit 里记 `via: agent` + `proposal` 编号：事后要能分清这条是模型提议、
+        人确认的，还是人在页面上直接点的。
+        """
+        scope = self._session_scope()
+        if scope is None:
+            return self._json({"ok": False, "error": "未登录：请先在右上角登录身份。"}, 401)
+        pid = str(body.get("proposal_id") or "").strip()
+        if not pid:
+            return self._json({"ok": False, "error": "没有给 proposal_id。"}, 400)
+
+        person = scope["person"]
+        peek = proposals_mod.get(pid, person)
+        if peek is None:
+            return self._json(
+                {"ok": False, "error": "这条操作已经失效或已经被确认过了。"}, 409
+            )
+        one = ov.detail(str(peek.get("item_id") or ""))
+        if one is None:
+            return self._json({"ok": False, "error": "要操作的这件事项已经不在了。"}, 404)
+
+        action = str(peek.get("action") or "")
+        az_action = authz.ACTION_FROM_ZH.get(action)
+        if az_action is None:
+            return self._json({"ok": False, "error": f"未注册的操作：{action}"}, 400)
+        units = tuple(
+            [one.get("assignee") or ""] + [str(x) for x in (one.get("co_assignees") or [])]
+        )
+        allowed, why = authz.can(scope, az_action, {"units": units})
+        if not allowed:
+            audit.user_event(
+                person, "access.denied", target=az_action,
+                payload={"item_id": one.get("id"), "reason": why, "proposal": pid},
+            )
+            return self._json({"ok": False, "error": why}, 403)
+        if action not in (one.get("allowed_actions") or []):
+            return self._json(
+                {
+                    "ok": False,
+                    "error": f"当前状态「{one.get('status')}」不能{action}，这条草稿已经过期了。",
+                },
+                409,
+            )
+
+        prop, why2 = proposals_mod.claim(pid, person)
+        if prop is None:
+            return self._json({"ok": False, "error": why2}, 409)
+
+        extra = prop.get("extra") or {}
+        res = ov.advance(
+            str(prop.get("item_id") or ""),
+            action,
+            actor=person,
+            text=str(prop.get("text") or ""),
+            # 佐证和完成度原样转交：确认的是「这条草稿」，不是「这一类动作」。
+            # 状态机守卫会在 advance 里再判一次（提交办结必须有佐证和说明）。
+            evidence=[str(x) for x in (extra.get("evidence") or [])],
+            percent=extra.get("percent"),
+        )
+        audit.user_event(
+            person, az_action, target=prop.get("item_id"),
+            payload={"ok": res.get("ok"), "via": "agent", "proposal": pid},
+        )
+        if not res.get("ok"):
+            return self._json(res, 409)
+        return self._json(
+            {**res, "item": ov.detail(res.get("item_id") or ""), "stats": ov.stats()}
+        )
+
+    def _cancel_proposal(self, body: dict) -> None:
+        """放弃一条待确认动作。什么都没写，所以不记审计。"""
+        scope = self._session_scope()
+        if scope is None:
+            return self._json({"ok": False, "error": "未登录：请先在右上角登录身份。"}, 401)
+        pid = str(body.get("proposal_id") or "").strip()
+        ok = proposals_mod.cancel(pid, scope["person"]) if pid else False
+        return self._json({"ok": True, "cancelled": ok})
+
     # ---------------- 认证 ----------------
     def _login(self, body: dict) -> None:
         """登录：白名单身份 + 正确口令才签发 session。
@@ -2273,6 +2388,57 @@ class Handler(BaseHTTPRequestHandler):
             }
         )
 
+    def _converse(
+        self,
+        question: str,
+        thread: dict,
+        history: list,
+        body: dict,
+        atts: list,
+        on_step: Any = None,
+        should_stop: Any = None,
+    ) -> dict | None:
+        """先走对话层（core/agent.py），由模型自己决定查什么、要不要澄清。
+
+        返回 None 表示这条路没走通，调用方走回原来的问数链路：
+
+        - 没配模型：对话层的前提就是模型，规则链路照旧；
+        - 带了材料、又问的是「对得上吗 / 差多少」：那张逐期对照表只有原链路会画；
+        - 模型一次都没调通、也没查到任何东西：没有可交付的结果，不如交回去。
+
+        这里刻意不吞「已停止」：那是用户主动的操作，得让上层落一条「已停止生成」。
+        """
+        if not agent_mod.available():
+            return None
+        # 带了材料也走对话层（材料作为数据块进上下文，见 agent._materials_text）；
+        # 唯一例外是「对得上吗 / 差多少」这类对照问题 —— 那张逐期对照表只有原链路
+        # 会画，把它交给对话层，用户会得到一段话，看不出哪边是材料、哪边是库。
+        if atts and _wants_compare(question):
+            return None
+        try:
+            res = agent_mod.run(
+                question,
+                history=history,
+                model_ref=thread.get("model_ref"),
+                person_id=self._person(body),
+                expert_ids=_expert_ids(body),
+                on_step=on_step,
+                should_stop=should_stop,
+                attachments=atts,
+            )
+        except ask_mod.TurnCancelled:
+            raise
+        except Exception:  # noqa: BLE001 对话层是加分项，不能成为单点故障
+            traceback.print_exc()
+            return None
+        # 约会议现在也走对话层（工具面有 draft_meeting，能接着上一轮改）。
+        # 但**没解析出草稿就交回老链路**：那句「帮我约个会」在原链路里是确定性的
+        # 规则解析，而让模型用一段话回答它，最好的结果是它说办不到，最坏的是它
+        # 编一个会议安排。草稿没出来时，宁可用那条更笨但不会编的路。
+        if res is not None and meetplan_mod.wants(question) and not res.get("meet_draft"):
+            return None
+        return res
+
     def _ask(self, body: dict) -> None:
         try:
             thread, history, question, ctx, atts = self._prepare(body)
@@ -2301,22 +2467,26 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 result = _harness_fallback(question, result) or result
         else:
-            result = ask_mod.ask(
-                question,
-                history=history,
-                model_ref=thread.get("model_ref"),
-                expert_ids=_expert_ids(body),
-                person_id=self._person(body),
-                known_metrics=chat.known_metrics(
-                    thread["id"], owner=self._person(body)
-                ),
-                attachments=atts,
-            )
-            # 问数/知识库/资料库都没命中时，用 octop_harness 引擎（含插件工具）兜底。
-            # 只在装了 harness 且结果 refused 时才走，否则保持原结果不变。
-            fb = _harness_fallback(question, result)
-            if fb is not None:
-                result = fb
+            # 先走对话层：模型自己决定查指标、扫台账、翻记录，还是反问一句澄清。
+            # 它返回 None（没模型 / 没查通 / 带附件）时才落到原来的单向链路。
+            result = self._converse(question, thread, history, body, atts)
+            if result is None:
+                result = ask_mod.ask(
+                    question,
+                    history=history,
+                    model_ref=thread.get("model_ref"),
+                    expert_ids=_expert_ids(body),
+                    person_id=self._person(body),
+                    known_metrics=chat.known_metrics(
+                        thread["id"], owner=self._person(body)
+                    ),
+                    attachments=atts,
+                )
+                # 问数/知识库/资料库都没命中时，用 octop_harness 引擎（含插件工具）兜底。
+                # 只在装了 harness 且结果 refused 时才走，否则保持原结果不变。
+                fb = _harness_fallback(question, result)
+                if fb is not None:
+                    result = fb
         result["planner_info"] = llm.llm_info()
         # 本轮上下文的裁剪统计。前端在用量行里写出来，让「它怎么把刚才的忘了」
         # 有一个可核对的解释，而不是让人怀疑系统不稳定。
@@ -2390,21 +2560,32 @@ class Handler(BaseHTTPRequestHandler):
             push({"type": name, **data})
 
         try:
-            result = ask_mod.ask(
+            # 对话层优先（同 /api/ask）：模型自己决定查什么、要不要澄清。
+            result = self._converse(
                 question,
-                history=history,
-                model_ref=thread.get("model_ref"),
+                thread,
+                history,
+                body,
+                atts,
                 on_step=step,
-                expert_ids=_expert_ids(body),
-                person_id=self._person(body),
-                known_metrics=chat.known_metrics(thread["id"], owner=self._person(body)),
-                attachments=atts,
                 should_stop=lambda: cancel_requested(turn_id),
             )
-            # 问数/知识库/资料库都没命中时，用 octop_harness 引擎兜底（同 _ask）
-            fb = _harness_fallback(question, result)
-            if fb is not None:
-                result = fb
+            if result is None:
+                result = ask_mod.ask(
+                    question,
+                    history=history,
+                    model_ref=thread.get("model_ref"),
+                    on_step=step,
+                    expert_ids=_expert_ids(body),
+                    person_id=self._person(body),
+                    known_metrics=chat.known_metrics(thread["id"], owner=self._person(body)),
+                    attachments=atts,
+                    should_stop=lambda: cancel_requested(turn_id),
+                )
+                # 问数/知识库/资料库都没命中时，用 octop_harness 引擎兜底（同 _ask）
+                fb = _harness_fallback(question, result)
+                if fb is not None:
+                    result = fb
             result["planner_info"] = llm.llm_info()
             # 本轮上下文的裁剪统计。前端在用量行里写出来，让「它怎么把刚才的忘了」
             # 有一个可核对的解释，而不是让人怀疑系统不稳定。

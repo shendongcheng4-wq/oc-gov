@@ -1,13 +1,14 @@
-"""可召唤的专家团：角色卡 + 一段「不带数字」的定性解读。
+"""可召唤的专家团：角色卡 + 一段「怎么看」的解读。
 
 **专家不参与取数。** 数值、口径、出处仍然由 `core/metrics/ask.py` 走指标接口
 拼出来；专家只在这之后再补一段「怎么看」。这是刻意划的线：如果让专家自己去查数，
 同一场会里经济参谋说 8.9%、民生参谋说 9.1%，谁也说不清该信谁 —— 而数字只能有
 一个来源，就是指标接口。
 
-所以这里有一道硬闸：**解读里出现阿拉伯数字或百分号，整段丢弃并注明原因。**
-唯一的例外是指标名和记录名里本来就带的数字（「12345 群众诉求按期办结率」），
-校验前先把这几个片段剔掉，免得冤枉。
+所以这里有一道数字闸（`numgate.audit`）：**解读里的每个数都要能追到本轮清单** ——
+接口返回的现值 / 同比 / 环比 / 目标直接放行；由它们算出来的数必须把算式写进正文，
+等式成立才留下。追不到就整段丢弃并注明原因（不是「修正」）。指标名和记录名里本来
+就带的数字（「12345 群众诉求按期办结率」）先剔掉再校验，免得冤枉。
 
 召唤多个专家 = 同一个问题、同一组数字，各自给一段角度不同的看法。**不做合并总结**：
 合并必须再调一次模型，而那次调用不会产生任何新信息，只多一次编数字的机会。
@@ -40,6 +41,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "core"))
 
 import llmclient  # noqa: E402
+import numgate  # noqa: E402
 
 # 一次会诊最多召唤几位。这是**并发成本上限**（一位 = 一次模型调用、一份 token），
 # 与 EXPERTS 里有几位专家无关 —— 专家名单可以扩到十几个，但一次别全叫上。
@@ -160,11 +162,16 @@ _SYSTEM = """你是{name}（{brief}），在市政府常务会上旁听，被市
 你关注：{focus}。你的看问题方式：{angle}
 
 硬性要求：
-1. **不得出现任何阿拉伯数字或百分号**（不要写"8.9%""3 个百分点""前三季度"这类）。要表达程度就用「偏高/偏低/明显/略有/接近时序/落后于时序」。
-2. 只能基于下面给出的指标名称、方向信号和「可参考的记录」判断。记录里可能带具体数字，**你可以据此判断好坏，但一个字都不许复述那些数字**。不得引用没列出的指标。
-3. 可以点名记录（如「河道巡查那件事」），那是可查的；但不能把记录里的话改写成一个新的数字或新的时间。
-4. 三句话以内，直接给结论和风险提示，不要客套话、不要复述问题，不要用任何格式标记或引号包裹。
-5. 如果给定信息不足以判断，就写「信息不足，需要补充哪一类口径」。
+1. 只能用「可用数值」里列出的数，或由这些数算出来的数。**算出来的必须把算式原样写进正文**
+   （例如「1024.8 - 882.6 = 142.2」）；只给结果不给算式，这段解读会被整段丢弃。
+2. 除此之外不许出现任何数字。年份和期次照抄，不许改写成「7月」「前三季度」这类别的说法。
+   不得引用没列出的指标。
+3. 可以点名记录（如「河道巡查那件事」），但不能把记录里的话改写成新的数字或新的时间。
+4. 四句话以内，按这个顺序说：结论（好/坏/偏离目标）→ 依据（哪个数、跟什么比）→
+   一条能落地的动作（找哪个单位、看什么、什么时候）。不要客套、不要复述问题、不要格式标记。
+   清单里已经给了「上月水平（推算）」「去年同期水平（推算）」的，直接用那个数，
+   不要自己再加减 —— 方向算反过一次（环比回落被算成更低），这种错看不出来。
+5. 「可用数值」不足以判断时，直说缺哪一类口径，不要用「信息不足」四个字敷衍，也不要猜。
 """
 
 
@@ -607,26 +614,46 @@ def _refs_meta(refs: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return [{k: r.get(k) for k in REF_META_KEYS} for r in (refs or [])]
 
 
-def _allowed_numeric_tokens(
-    names: list[str], ref_titles: list[str] | None = None
-) -> list[str]:
-    """名字里自带的数字（如 12345、第 9 次常务会）不算"专家在编数字"。
+def _numbers_block(result: dict[str, Any]) -> str:
+    """把这一轮的数值摊给参谋看 —— 它现在可以引用，也可以算，但都要留痕。
 
-    只放行**标题**里的数字，不放行正文：指标名和记录名是专有名词，专家提到
-    「12345 那条」「第 9 次常务会」是在点名，不是在报数；而正文里的数字恰恰
-    是这道闸要拦的东西。两者混在一个白名单里，闸就形同虚设了。
+    以前这里只喂方向（「同比上升」），理由是怕专家报数。代价是它根本不知道
+    是 8% 还是 2%，只能输出「偏高、要盯住」这类正确但没用的话。
+
+    现在改成喂数 + 后置校验（`numgate`）：数字可以出现，但每一个都得追到
+    这份清单，或者由清单里的数按写出来的算式算得。清单本身来自指标接口，
+    所以「数值过模型」不等于「模型编数」。
     """
-    tokens: list[str] = []
-    for name in list(names) + list(ref_titles or []):
-        tokens.extend(re.findall(r"\d+", name or ""))
-    return sorted(set(tokens), key=len, reverse=True)
+    rows: list[str] = []
+    for item in result.get("numbers") or []:
+        label = str(item.get("label") or "").strip()
+        value = item.get("value")
+        if not label or value is None:
+            continue
+        unit = str(item.get("unit") or "").strip()
+        rows.append(f"- {label}：{value}{unit}")
 
+    if not rows:
+        # 退回 facts（compare/trend 这类路径没有 numbers 字段）
+        for fact in result.get("facts") or []:
+            label = str(fact.get("label") or "").strip()
+            value = str(fact.get("value") or "").strip()
+            if label and value:
+                rows.append(f"- {label}：{value}")
 
-def _has_forbidden_number(text: str, allowed: list[str]) -> bool:
-    probe = text
-    for token in allowed:
-        probe = probe.replace(token, "")
-    return bool(re.search(r"[0-9０-９%％]", probe))
+    note = str(result.get("target_note") or "").strip()
+    if note:
+        rows.append(f"- {note}")
+
+    head = "可用数值（唯一允许引用的数；要算新数必须把算式写出来）："
+    body = "\n".join(rows) if rows else "（本轮没有数值，只能谈方向）"
+    hint = (
+        "\n口径提示：如果问的是单月而指标按累计公布，可以用相邻两期累计相减，"
+        "把算式写进正文，例如「1024.8 - 882.6 = 142.2」。"
+        if result.get("prev_cumulative") is not None
+        else ""
+    )
+    return head + "\n" + body + hint
 
 
 def _signals(result: dict[str, Any]) -> list[str]:
@@ -709,7 +736,7 @@ def _out_of_scope(expert: dict[str, Any], codes: list[str]) -> bool:
 def _interpret_one(
     expert: dict[str, str],
     user_content: str,
-    allowed: list[str],
+    result: dict[str, Any],
     model_ref: str | None,
     refs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -758,12 +785,25 @@ def _interpret_one(
     view["model_ref"] = resp.get("model_ref")
     if not text:
         view["why"] = "模型没有给出内容。"
-    elif _has_forbidden_number(text, allowed):
-        # 不是「修正」，是丢弃：数字只要出现过，就没法判断它是不是编的
-        view["why"] = "解读里出现了数字，已丢弃（专家不报数，数值以指标接口为准）。"
     else:
-        view["ok"] = True
-        view["text"] = text[:260]
+        gate = numgate.audit(
+            text,
+            result,
+            extra_literals=[str(r.get("title") or "") for r in (refs or [])],
+        )
+        if not gate["ok"]:
+            # 不是「修正」，是丢弃：数字只要出现过，就没法判断它是不是编的。
+            # 但要把拦下了什么说出来，否则用户只会看到一句「信息不足」。
+            bad = "、".join(str(x) for x in gate["bad"][:3])
+            view["why"] = f"解读里的数字无法溯源（{bad}），已丢弃；数值以指标接口为准。"
+            # 原文留一份：用户问「为什么丢了」时能自己看，否则只剩一句「已丢弃」
+            view["discarded"] = text[:1200]
+        else:
+            view["ok"] = True
+            view["text"] = text[:400]
+            if gate["computed"]:
+                # 让界面能标出「这段里有推算」，并可展开看算式
+                view["computed"] = gate["computed"][:4]
     return view
 
 
@@ -834,11 +874,15 @@ def interpret(
             views.append(view)
             continue
         refs = list((refs_by_expert or {}).get(eid) or [])
-        # 白名单按人算：参谋各自读的记录不同，能点名的记录名也不同。
-        # 用全组共用一份的话，经济参谋会被允许说出民生记录标题里的数字。
-        allowed = _allowed_numeric_tokens(names, [str(r.get("title") or "") for r in refs])
-        user_content = "\n".join(base + [_refs_block(refs), "按你的角色说三句话以内。注意：不许出现任何数字。"])
-        view = _interpret_one(expert, user_content, allowed, model_ref, refs)
+        extra = (
+            ["同一份数值对每位参谋都一样，区别在你看问题的角度。"]
+            if len(ids) > 1
+            else []
+        )
+        user_content = "\n".join(
+            base + [_numbers_block(result)] + extra + [_refs_block(refs), "按你的角色说四句话以内。"]
+        )
+        view = _interpret_one(expert, user_content, result, model_ref, refs)
         emit("done", expert, i, view["ok"])
         views.append(view)
 

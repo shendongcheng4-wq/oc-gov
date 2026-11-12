@@ -58,6 +58,7 @@ import extdata as ext_mod  # noqa: E402
 import extract as mt_extract  # noqa: E402
 import ledger as mt_ledger  # noqa: E402
 import modelcfg  # noqa: E402
+import numgate  # noqa: E402
 import oversight as ov  # noqa: E402
 import pdfdoc  # noqa: E402
 import rag as rag_mod  # noqa: E402
@@ -812,10 +813,11 @@ def test_memory() -> None:
 
 
 def test_experts() -> None:
-    """专家团：只解读、不报数。
+    """专家团：能判断、能给动作，数值必须可溯源。
 
     这里重点验「数字闸」—— 它是专家团唯一能伤到数值可信度的地方，
     所以规则必须是纯函数、可单独断言，而不是藏在提示词里靠模型自觉。
+    闸的规则：清单里的数放行；清单外要算，就得把算式写出来，等式还得成立。
     """
     print("[8] 可召唤的专家团")
 
@@ -828,11 +830,35 @@ def test_experts() -> None:
     check("每位都有头像与关注面", all(e.get("avatar") and e.get("focus") for e in roster), str(roster)[:90])
     check("未知专家被忽略", ex.interpret({"question": "x", "metric_names": []}, ["ghost"]) == [], "居然产生了数据")
 
-    allowed = ex._allowed_numeric_tokens(["12345 群众诉求按期办结率"])
-    check("阿拉伯数字被判违规", ex._has_forbidden_number("增速上升 2 个百分点", allowed) is True, "")
-    check("百分号被判违规", ex._has_forbidden_number("增长约 5%", allowed) is True, "")
-    check("纯定性文字放行", ex._has_forbidden_number("增速偏高，投资偏弱", allowed) is False, "")
-    check("指标名里的 12345 不误判", ex._has_forbidden_number("12345 热线办理质量偏弱", allowed) is False, "")
+    # 数字闸：数值可以过模型，但每个数都要能追到来源（core/numgate.py）
+    payload = {
+        "question": "7月份的GDP是多少",
+        "facts": [{"label": "2026年1-7月", "value": "1024.8 亿元"}],
+        "numbers": [
+            {"label": "2026年1-7月", "value": "1024.8 亿元"},
+            {"label": "2026年1-6月累计", "value": "882.6 亿元"},
+        ],
+        "period_label": "2026年1-7月",
+    }
+    check("清单里的数放行", numgate.audit("累计 1024.8 亿元", payload)["ok"] is True, "")
+    check("清单外的数判违规", numgate.audit("增速上升 2 个百分点", payload)["ok"] is False, "")
+    check("纯定性文字放行", numgate.audit("增速偏高，投资偏弱", payload)["ok"] is True, "")
+    check(
+        "算式成立则放行推算值",
+        numgate.audit("1024.8 - 882.6 = 142.2 亿元", payload)["ok"] is True,
+        "",
+    )
+    check(
+        "算式不成立则整段判坏",
+        numgate.audit("1024.8 - 882.6 = 140 亿元", payload)["ok"] is False,
+        "",
+    )
+    check(
+        "指标名里的 12345 不误判",
+        numgate.audit("12345 热线办理质量偏弱", payload, extra_literals=["12345 群众诉求按期办结率"])["ok"]
+        is True,
+        "",
+    )
 
     # compare 型回答的数值落在 compare_rows、facts 是空列表。只读 facts 的话，
     # 多指标一问里专家看不到任何方向，只会回「信息不足」—— 召唤了等于没召唤。
@@ -972,9 +998,21 @@ def test_experts() -> None:
     )
 
     # 白名单只放行**标题**里的数字：记录名是专有名词，正文里的数字才是要拦的东西
-    allow = ex._allowed_numeric_tokens(["规模以上工业增加值增速"], ["市政府第14次常务会议"])
-    check("记录标题里的数字不误判", ex._has_forbidden_number("第 14 次常务会要求加强巡查", allow) is False, "")
-    check("记录正文里的数字照样拦", ex._has_forbidden_number("巡查覆盖 96%", allow) is True, "")
+    check(
+        "记录标题里的数字不误判",
+        numgate.audit(
+            "第 14 次常务会要求加强巡查",
+            {"facts": []},
+            extra_literals=["市政府第14次常务会议"],
+        )["ok"]
+        is True,
+        "",
+    )
+    check(
+        "记录正文里的数字照样拦",
+        numgate.audit("巡查覆盖 96%", {"facts": []})["ok"] is False,
+        "",
+    )
 
     # 端到端：记录要真的进 prompt，而不是只存在 refs 里当好听的话
     # （专家输出已改纯文本 chat_text —— 推理模型的 content 不会再被 JSON 模式吃掉）
@@ -1983,6 +2021,289 @@ def test_chitchat() -> None:
     check("寒暄不召唤参谋", "expert_views" not in r2, str(list(r2))[:60])
     check("跳过参谋要说明", any("参谋" in n for n in (r2.get("notes") or [])),
           str(r2.get("notes")))
+
+
+def test_agent() -> None:
+    """对话层与它的工具面（不需要模型的部分）。
+
+    模型循环本身要连模型，不能进冒烟测试（会变成「网络好不好」的测试）。
+    这里只验三件能断言的事：工具按代码取数是否走对；工具结果能不能被数字闸
+    正确放行/拦截；没模型时是不是老实退回原链路（返回 None）。
+    """
+    import agent as agent_mod
+    import ask as ask_mod
+    import numgate
+
+    schema_names = [t["function"]["name"] for t in agent_mod.tools_schema()]
+    check(
+        "工具面含查、澄清、写、建会草稿与公文草稿",
+        set(schema_names) == {"list_metrics", "query_metric", "scan_oversight",
+                              "search_knowledge", "clarify", "advance_item",
+                              "draft_meeting", "draft_document"},
+        str(schema_names),
+    )
+    # 写工具只允许「提议」。这条不能靠工具名断言（改个名就失效），真正的边界由
+    # 下面「调它之后台账事件数一条没变」那条行为断言钉住。两个 draft_* 是草稿，
+    # 也不写任何数据 —— 它们同样在下面用行为断言验。
+    check(
+        "写工具只有一个，且是提议式的",
+        [n for n in schema_names
+         if n not in {"list_metrics", "query_metric", "scan_oversight",
+                      "search_knowledge", "clarify", "draft_meeting",
+                      "draft_document"}] == ["advance_item"],
+        str(schema_names),
+    )
+
+    check("期次归一（中文年月）", agent_mod._norm_period("2026年7月") == "2026-07",
+          str(agent_mod._norm_period("2026年7月")))
+    check("期次归一（已是标准格式）", agent_mod._norm_period("2026-07") == "2026-07", "")
+
+    # 工具取数：按代码查，不再过模型规划
+    r = ask_mod.ask(
+        "规模以上工业增加值增速", rules_only=True,
+        codes=["GY_VA_GROWTH"], period="2026-07", want="value",
+    )
+    check("工具路径不走模型", r.get("planner") == "tool", str(r.get("planner")))
+    check("工具路径确实取到值", bool(r.get("facts")), str(r.get("facts"))[:60])
+    labels = [n.get("label") for n in (r.get("numbers") or [])]
+    check(
+        "推算值带月份标签",
+        any("2026年6月" in str(x) for x in labels),
+        str(labels),
+    )
+
+    # 工具路径不该被寒暄/会务抢走：agent 已经决定这是取数，得照办
+    r2 = ask_mod.ask(
+        "你有什么建议", rules_only=True, codes=["GY_VA_GROWTH"], period="2026-07"
+    )
+    check("工具路径不被寒暄接管", r2.get("intent") != "chitchat", str(r2.get("intent")))
+    check("工具路径返回指标卡", bool(r2.get("facts")), str(r2.get("facts"))[:60])
+
+    # 未知代码要直说，不能掉进知识库兜底
+    r3 = ask_mod.ask("x", rules_only=True, codes=["NOT_A_METRIC"])
+    check("未知代码明说", r3.get("refused") is True, str(r3.get("refused")))
+    check("未知代码不查知识库", "knowledge" not in r3, str(list(r3))[:60])
+
+    # 数字闸：正文里的数必须能追到这轮工具结果
+    _text, part = agent_mod._run_tool(
+        "query_metric", {"codes": ["GY_VA_GROWTH"], "period": "2026-07"},
+        question="7月工业增加值增速", person_id="mayor", today=date(2026, 11, 12),
+    )
+    payload = agent_mod._audit_payload([part])
+    good = (
+        "2026年7月规上工业增加值增速8%，比6月回落0.5个百分点（6月为8.5%），"
+        "比去年7月高1.6个百分点，年度目标6.5%，市统计局《本市统计月报》8月10日披露。"
+    )
+    check("正确引用全部放行", numgate.audit(good, payload)["ok"] is True,
+          str(numgate.audit(good, payload)["bad"]))
+    check(
+        "编造增速被拦",
+        numgate.audit("增速 9.9%，明显偏高。", payload)["ok"] is False,
+        "",
+    )
+    check(
+        "编造披露日被拦",
+        numgate.audit("8月11日披露。", payload)["ok"] is False,
+        "",
+    )
+    check(
+        "算式成立才放行",
+        numgate.audit("8% - 6.5% = 1.5 个百分点。", payload)["ok"] is True,
+        str(numgate.audit("8% - 6.5% = 1.5 个百分点。", payload)["bad"]),
+    )
+    # 截止日是对将来的时限，不是报已发生的数：建议里「12月31日前办完」必须能说出口，
+    # 否则整段建议会因为这个日期被判违规，退化成一句指标卡。
+    check(
+        "截止日不算报数",
+        numgate.audit("12月31日前完成验收。", payload)["ok"] is True,
+        str(numgate.audit("12月31日前完成验收。", payload)["bad"]),
+    )
+    # 整段过不了时不能一把全扔：逐句剔除，把点名单位、点明时限那些话留下来。
+    # 这是「问建议只会念数」的直接修复点，删了就会退回去。
+    _text_bad = "2026年7月规上工业增加值增速8%，比6月的8.5%回落0.5个百分点。剩下50天，要抓紧。"
+    salvaged = agent_mod._salvage(_text_bad, payload)
+    check(
+        "整段违规时逐句保留",
+        bool(salvaged) and "50" not in salvaged[0] and "8.5" in salvaged[0],
+        str(salvaged)[:80],
+    )
+
+    # 写工具只出提议、不执行：调它之后台账里的事件数必须一条没变，只多出一条
+    # 待确认记录。真正的写入在 /api/proposal/confirm，由人点确认后带 session 走
+    # 状态机（HTTP 那一段覆盖）。这是「能办事」和「模型不能自己办事」的分界线。
+    import proposals as proposals_mod
+
+    targets = [x for x in ov.list_items() if "催办" in (x.get("allowed_actions") or [])]
+    if targets:
+        target = targets[0]["id"]
+        before = len(ov.detail(target).get("events") or [])
+        _t, prop_part = agent_mod._run_tool(
+            "advance_item", {"item_id": target, "action": "催办", "text": "请尽快反馈进展"},
+            question="催一下这条", person_id="mayor", today=date(2026, 11, 12),
+        )
+        after = len(ov.detail(target).get("events") or [])
+        check("推进工具不直接写台账", before == after, f"{before} → {after}")
+        check(
+            "推进工具返回待确认提议",
+            prop_part.get("kind") == "proposal"
+            and bool((prop_part.get("proposal") or {}).get("id")),
+            str(prop_part)[:90],
+        )
+        pid = (prop_part.get("proposal") or {}).get("id")
+        got, why = proposals_mod.claim(pid, "not-me")
+        check("别人确认不了这条提议", got is None and bool(why), why)
+        got, why = proposals_mod.claim(pid, "mayor")
+        check("本人能占用这条提议", bool(got), why)
+        got2, _ = proposals_mod.claim(pid, "mayor")
+        check("提议只能确认一次（双击不会执行两遍）", got2 is None, str(got2)[:60])
+
+        # 状态机在生成草稿之前就先判：拿一件不能签收的事项去签收，必须当场被拒，
+        # 而且不能留下一条「点了会失败」的草稿 —— 那种卡比直接说清更糟。
+        wrong = [
+            x for x in ov.list_items()
+            if "签收" not in (x.get("allowed_actions") or [])
+        ]
+        if wrong:
+            _t2, bad = agent_mod._run_tool(
+                "advance_item", {"item_id": wrong[0]["id"], "action": "签收"},
+                question="签收这条", person_id="mayor", today=date(2026, 11, 12),
+            )
+            check(
+                "状态不对时不生成草稿",
+                bad.get("kind") == "proposal" and bad.get("error") == "bad_state"
+                and not bad.get("proposal"),
+                str(bad)[:90],
+            )
+
+    # 建会草稿：解析出可编辑草稿，且不写任何会议记录 —— 落库只在用户点「建会」时
+    # 走 /api/meetplan。这条和 advance_item 一样，是「模型能办、但不能自己办」。
+    before_meetings = len(mt_ledger.list_meetings())
+    _mt, meet_part = agent_mod._run_tool(
+        "draft_meeting",
+        {"text": "下周三下午三点开个会，研究老旧小区改造，市住建局参加"},
+        question="约个会", person_id="mayor", today=date(2026, 11, 12),
+    )
+    check(
+        "建会工具返回草稿",
+        meet_part.get("kind") == "meeting"
+        and bool((meet_part.get("payload") or {}).get("meet_draft")),
+        str(meet_part)[:90],
+    )
+    draft = (meet_part.get("payload") or {}).get("meet_draft") or {}
+    check("草稿解析出议题", bool(draft.get("title")), str(draft.get("title")))
+    check("草稿解析出时间", bool(draft.get("held_at")), str(draft.get("held_at")))
+    check(
+        "建会工具不写会议记录",
+        len(mt_ledger.list_meetings()) == before_meetings,
+        str(before_meetings),
+    )
+
+    # 公文草稿：装配 + 体例检查，出卡但不落盘、不编号、不发出
+    _dt, doc_part = agent_mod._run_tool(
+        "draft_document",
+        {"kind": "tongzhi", "subject": "做好今冬明春供热保障工作",
+         "items": ["11 月 15 日前完成锅炉管网检修", "建立 24 小时报修值班"]},
+        question="出个通知", person_id="mayor", today=date(2026, 11, 12),
+    )
+    dd = doc_part.get("payload") or {}
+    check(
+        "出文工具返回草稿",
+        doc_part.get("kind") == "document" and bool(dd.get("title")),
+        str(doc_part)[:90],
+    )
+    check("草稿带正文分段", len(dd.get("paras") or []) >= 2, str(len(dd.get("paras") or [])))
+    check(
+        "草稿不代编号",
+        "___" in str(dd.get("no") or "") or not dd.get("no"),
+        str(dd.get("no")),
+    )
+    check("草稿带体例分", dd.get("score") is not None, str(dd.get("score")))
+    check(
+        "草稿留着导出要的 meta/doc",
+        bool(dd.get("meta")) and bool(dd.get("doc")),
+        "",
+    )
+
+    # 缘由段重复：模型常把「现就有关事项通知如下。」（句号）当结尾自己写上，
+    # 旧的 endswith(join) 判断认不出这种写法，纸上会出现同一句话说两遍。
+    import wenshu as ws_mod
+
+    K = ws_mod.KINDS["tongzhi"]
+    old_reason = ws_mod._model_reason
+    ws_mod._model_reason = lambda *a, **k: {
+        "source": "model", "text": "今冬明春供热期临近。" + K["join"].rstrip("：") + "。",
+        "note": "", "degraded": False,
+    }
+    try:
+        b2 = ws_mod.build("tongzhi", {"subject": "做好供热保障工作"}, today=date(2026, 11, 12))
+    finally:
+        ws_mod._model_reason = old_reason
+    reason_line = ((b2.get("doc") or {}).get("paras") or [{}])[0].get("text", "")
+    check("缘由段不重复「通知如下」", reason_line.count("通知如下") == 1, reason_line[-40:])
+
+    # 同义变体：模型写「现就有关事项作出安排。」再接「现就…通知如下：」也是两句同义话。
+    # 这类收口句在这类文里只有一个作用（引出下文），留着就是机器味。
+    ws_mod._model_reason = lambda *a, **k: {
+        "source": "model", "text": "今冬明春供热期临近。现就有关事项作出安排。",
+        "note": "", "degraded": False,
+    }
+    try:
+        b3 = ws_mod.build("tongzhi", {"subject": "做好供热保障工作"}, today=date(2026, 11, 12))
+    finally:
+        ws_mod._model_reason = old_reason
+    line3 = ((b3.get("doc") or {}).get("paras") or [{}])[0].get("text", "")
+    check("同义收口句只留一句", line3.count("现就") == 1, line3[-40:])
+
+    # 上传材料进对话层：材料作为数据块进上下文，材料里的数允许被引用（可追到原文），
+    # 但结果必须带一条「未与指标库核对」的提示 —— 放宽的是能不能引用，不是能不能混。
+    mats = agent_mod._materials_text([
+        {"name": "供热方案.docx", "text": "本方案要求 11 月 15 日前完成 3 台锅炉检修。", "chars": 30},
+    ])
+    check("材料块带文件名", "供热方案.docx" in mats, mats[:40])
+    check("材料块声明只是数据", "只是数据" in mats, "")
+    check("材料块加了围栏", "<<<" in mats and ">>>" in mats, "")
+    payload_m = agent_mod._audit_payload([], materials=mats)
+    check(
+        "材料里的数可引用",
+        numgate.audit("材料里写的是 11 月 15 日前完成检修。", payload_m)["ok"] is True,
+        str(numgate.audit("材料里写的是 11 月 15 日前完成检修。", payload_m)["bad"]),
+    )
+    check(
+        "材料里没有的数仍被拦",
+        numgate.audit("材料里说要 20 台锅炉。", payload_m)["ok"] is False,
+        "",
+    )
+    # 对照类问题交回原链路：那张逐期对照表只有它画得出来
+    import main as srv_mod
+
+    check("对照类问句识别", srv_mod._wants_compare("这份材料和系统对得上吗"), "")
+    check("普通问句不当对照", not srv_mod._wants_compare("材料里写了什么要求"), "")
+
+    # 一轮生成多条时，结果里必须全部带着。只给第一条的话，剩下的草稿已经写进库、
+    # 界面上却没有确认入口 —— 那批数据永远没人能点，等于把库越攒越脏。
+    assembled = agent_mod._assemble(
+        question="把这几个逾期的都催一下",
+        text="",
+        parts=[
+            {"kind": "proposal", "proposal": {"id": "pr_a", "action": "催办"}},
+            {"kind": "proposal", "proposal": {"id": "pr_b", "action": "催办"}},
+        ],
+        trace=[], model="stub", usage={},
+    )
+    check(
+        "一轮多条提议都进结果",
+        [p["id"] for p in (assembled.get("proposals") or [])] == ["pr_a", "pr_b"],
+        str(assembled.get("proposals"))[:80],
+    )
+
+    # 没有模型时必须交回原链路，不能自己发明一个答案。
+    # 用打桩而不是清空配置：清配置会写真实文件，测试不该改用户的模型设置。
+    original = agent_mod.llmclient.available
+    agent_mod.llmclient.available = lambda: False
+    try:
+        check("无模型时返回 None", agent_mod.run("7月工业增加值增速") is None, "")
+    finally:
+        agent_mod.llmclient.available = original
 
 
 def test_queryfix() -> None:
@@ -2999,6 +3320,25 @@ def test_rag() -> None:
         "透水铺装率不低于40%，下凹式绿地率不低于30%。".encode("utf-8"),
     )
     # 「海绵城市」不在指标字典、也不在知识库，只该命中资料库
+    #
+    # 先钉住那条差点冒充成功的错命中：向量曾把「城市运行管理平台数据接入」判到
+    # 0.5509，刚好越过 MIN_VECTOR_SIM 0.55 —— 用户问海绵城市，得到另一件事的进展。
+    # 记录类现在要求字面锚点（knowledge._needs_lexical_anchor），这条会一直是空。
+    import knowledge as knowledge_mod
+    import people as people_mod
+
+    mis = [
+        h.get("title")
+        for h in knowledge_mod.search(
+            "海绵城市建设的径流控制率要求是多少", people_mod.meta("mayor")
+        )
+    ]
+    check(
+        "纯语义近邻不冒充另一条记录",
+        all("数据接入" not in (t or "") for t in mis),
+        str(mis)[:80],
+    )
+
     r = ask_mod.ask("海绵城市建设的径流控制率要求是多少")
     check("未命中指标时走资料库检索（intent=rag）", r.get("intent") == "rag", str(r.get("intent")))
     check("资料库答案非拒答", r.get("refused") is False, "")
@@ -3351,7 +3691,7 @@ def test_http(port: int | None = None) -> None:
         # max 是「一次最多叫几位」，必须和 core 里的截断同源；两处各写一个数字就会
         # 出现「能选 3 个但后端只收 3 个以外」或反过来的鬼故事。
         check("max 与截断常量同源", exs.get("max") == ex_api.MAX_PER_CALL, f"max={exs.get('max')} const={ex_api.MAX_PER_CALL}")
-        check("/api/experts 说明不报数", "不报数字" in (exs.get("rule") or ""), str(exs.get("rule")))
+        check("/api/experts 说明数值可溯源", "算式" in (exs.get("rule") or ""), str(exs.get("rule")))
     except urllib.error.HTTPError as e:
         check("/api/experts 可读", False, f"code={e.code}")
 
@@ -4910,6 +5250,7 @@ def main() -> int:
     test_saved()
     test_meetplan()
     test_chitchat()
+    test_agent()
     test_queryfix()
     test_attach_entry()
     test_book_parse()

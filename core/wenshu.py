@@ -453,8 +453,20 @@ def build(
             model = got
             if got.get("source") == "model" and got.get("text"):
                 reason = got["text"]
-                if not reason.endswith(K["join"]):
-                    reason = reason.rstrip("。；") + "。" + K["join"]
+                # 模型经常把「现就有关事项通知如下。」当结尾自己写上，而且用句号；
+                # 还会写成「现就…作出安排。」这种同义变体。只判 endswith(join) 两种
+                # 都漏：纸上会连着出现两句「现就…」，读起来像机器写的。
+                # 所以先比「已经说过」，再说就把那半句摘掉、统一收口成文种自己的 join。
+                stem = K["join"].rstrip("：:")
+                if reason.rstrip("。；：: ").endswith(stem):
+                    reason = reason.rstrip("。；：: ") + "："
+                else:
+                    body = reason.rstrip("。；")
+                    sents = re.split(r"(?<=[。；])", body)
+                    if sents and re.match(r"^(现就|现将)", sents[-1].strip()):
+                        sents = sents[:-1]
+                    head = "".join(sents).rstrip("。；")
+                    reason = (head + "。" if head else "") + K["join"]
     elif facts and not any(f["short"] in reason for f in facts):
         warnings.append("缘由段里没有出现勾选的事实，核对一下是不是漏引了。")
 
