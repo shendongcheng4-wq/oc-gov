@@ -57,6 +57,7 @@ if not os.environ.get("OCGOV_TEST_KEEP"):
 os.environ["OCGOV_DATA"] = str(TEST_DATA)
 
 import chat  # noqa: E402
+import directives as dr  # noqa: E402
 import docparse  # noqa: E402
 import extdata as ext_mod  # noqa: E402
 import extract as mt_extract  # noqa: E402
@@ -911,6 +912,31 @@ def test_experts() -> None:
         "",
     )
 
+    # 未来时限：建议里最该留下的就是「什么时候之前办完」。以前只认
+    # 「X月X日前 / X月底前」，写成「2026年11月上旬前」会把 2026 剩成裸数字，
+    # 整条建议跟着被丢 —— 建议越多越容易被自己的闸罚。
+    for t in ("2026年11月上旬前报一次", "11月中旬前完成", "2026年11月前完成", "2026年12月31日前完成"):
+        check(f"未来时限放行：{t}", numgate.audit(t, {"facts": []})["ok"], "")
+    check("已发生的年月仍要溯源", numgate.audit("2026年11月完成", {"facts": []})["ok"] is False, "")
+
+    # 逐句剔除：建议句通常不含数，不该跟着违规句一起丢
+    part = numgate.salvage(
+        "增速比目标高 2 个百分点。建议请统计局本月内按行业拆分数据。",
+        {"facts": []},
+        min_chars=10,
+    )
+    check("逐句剔除保留动作句", bool(part) and "建议" in part[0] and len(part[1]) == 1, str(part)[:80])
+    check(
+        "整段都违规时救不回来",
+        numgate.salvage("增速高 2 个百分点。压力 3.4。", {"facts": []}, min_chars=10) is None,
+        "",
+    )
+    check(
+        "单句不拆分（半句话不能当结论）",
+        numgate.salvage("增速高 2 个百分点。", {"facts": []}, min_chars=10) is None,
+        "",
+    )
+
 
     # compare 型回答的数值落在 compare_rows、facts 是空列表。只读 facts 的话，
     # 多指标一问里专家看不到任何方向，只会回「信息不足」—— 召唤了等于没召唤。
@@ -946,6 +972,25 @@ def test_experts() -> None:
         ex.llmclient.available = old_avail
     check("模型回了数字则整段丢弃", dirty["ok"] is False and not dirty["text"], str(dirty)[:90])
     check("丢弃时写明原因", "数字" in (dirty["why"] or ""), str(dirty.get("why")))
+
+    # 整段违规时先逐句救一次：动作句通常不含数，不该跟着一起丢
+    old_chat_s = ex.llmclient.chat_text
+    old_avail_s = ex.llmclient.available
+    ex.llmclient.available = lambda: True
+    ex.llmclient.chat_text = lambda *a, **k: {
+        "text": "增速比目标高 2 个百分点，压力仍在。建议请统计局本月内按行业拆分数据。",
+        "model": "stub",
+    }
+    try:
+        saved_view = ex.interpret(
+            {"question": "x", "metric_names": ["规模以上工业增加值增速"], "facts": []},
+            ["economy"],
+        )[0]
+    finally:
+        ex.llmclient.chat_text = old_chat_s
+        ex.llmclient.available = old_avail_s
+    check("整段违规时逐句救回动作句", saved_view["ok"] is True and "建议" in saved_view["text"], str(saved_view)[:100])
+    check("救回时注明删了几句", "删去" in (saved_view.get("note") or ""), str(saved_view.get("note")))
 
     # ---- 参谋的知识域：读得到自己那几块，读不到别人的 ----
     #
@@ -983,6 +1028,37 @@ def test_experts() -> None:
 
     idx_all = kb_mod.index(mayor)
     by_id = {e["id"]: e for e in roster}
+
+    # ---- 政策库绑定 ----
+    # 参谋读的不止系统记录：域里挂了分类库，就该去那个库里查原文。
+    # 这几条卡「挂上了 / 没乱挂」；下面 _expert_refs 那组卡「真的查了」。
+    check(
+        "生态参谋挂了生态环境政策库",
+        "生态环境政策" in ((by_id["eco"].get("domain") or {}).get("bases") or []),
+        str(by_id["eco"].get("domain"))[:80],
+    )
+    check(
+        "没挂库的参谋不自带政策库",
+        not ((by_id["investment"].get("domain") or {}).get("bases")),
+        str(by_id["investment"].get("domain"))[:80],
+    )
+    # 域里只有 bases（没 codes/units）表示「只读政策原文」，不是「读全域」。
+    # 早先空 codes+units 会落到「不限」，只挂库的参谋会悄悄读全台账，看不出来。
+    check(
+        "只挂库的域不读系统记录",
+        not kb_mod.in_domain(idx_all[0], {"bases": ["x"]}),
+        str(idx_all[0].get("kind")),
+    )
+    # 总参谋不绑域 = 不限，不是「什么都读不到」。这条以前只断言「没有 domain」，
+    # 没卡住实际行为；现在把它写明：全域每条都算落在他的范围里。
+    check(
+        "总参谋不绑域即读全域",
+        bool(idx_all) and all(kb_mod.in_domain(r, None) for r in idx_all),
+        str(len(idx_all)),
+    )
+    # 已排期、没有纪要的会：条目保留，但正文要有占位说明，不能是空串
+    check("空正文会议给占位说明", kb_mod._meeting_body({"text": ""}) == kb_mod._NO_MINUTES, "")
+    check("有纪要的会议不改正文", kb_mod._meeting_body({"text": "会议原文"}) == "会议原文", "")
 
     # 不属于关注面的参谋不发言。实测三位一起叫上、问工业加空气质量时，
     # 民生参谋会逐字复述经济与生态的观点 —— 同一段话印三遍，
@@ -1048,6 +1124,44 @@ def test_experts() -> None:
         not [r for r in (refs.get("eco") or []) if r.get("kind") == "metric"],
         str(refs.get("eco"))[:60],
     )
+
+    # ---- 挂了库，就得真的去库里查 ----
+    # 建一个和 expert.md 里同名的库（生态环境政策）、传一篇文档，生态参谋的
+    # 依据里必须出现这一篇；没挂库的招商参谋必须一条都没有。
+    # 只用库名不用库 id：库 id 换个数据目录就废了，专家卡里存的是名字。
+    tbase = rag_mod.create_base("生态环境政策", "参谋域测试，跑完即删")
+    try:
+        rag_mod.upload_document(
+            tbase["id"],
+            "入河排污口整治指引.md",
+            "# 入河排污口\n\n排查整治要建立问题台账、逐项销号，2027 年底前完成。".encode("utf-8"),
+        )
+        check("库名能解析成库 id", rag_mod.resolve_bases(["生态环境政策"]) == [tbase["id"]], "")
+        check("解析不到的库直接跳过", rag_mod.resolve_bases(["没有这个库"]) == [], "")
+        refs2 = ask_mod._expert_refs(
+            "入河排污口排查整治进展",
+            {"metric_names": ["空气质量优良天数比例"]},
+            "mayor",
+            ["eco", "investment"],
+        )
+        eco_docs = [r for r in (refs2.get("eco") or []) if r.get("kind") == "doc"]
+        check("生态参谋读得到挂上的政策库", bool(eco_docs), str([r.get("kind") for r in refs2.get("eco") or []])[:80])
+        check(
+            "政策原文带库与文档出处",
+            bool(eco_docs) and all((r.get("ref") or {}).get("kb_id") and (r.get("ref") or {}).get("id") for r in eco_docs),
+            str(eco_docs)[:80],
+        )
+        check(
+            "没挂库的参谋读不到政策原文",
+            all(r.get("kind") != "doc" for r in (refs2.get("investment") or [])),
+            str(refs2.get("investment"))[:80],
+        )
+        block = ex._refs_block(refs2.get("eco"))
+        check("prompt 里政策原文单独一段", "可参考的政策原文" in block, block[:60])
+        check("没有记录时仍明说本域无记录", "本域内没有相关记录" in ex._refs_block([]), "")
+    finally:
+        rag_mod.delete_base(tbase["id"])
+    check("库删掉后解析不到（不拿别的库顶上）", rag_mod.resolve_bases(["生态环境政策"]) == [], "")
 
     # 白名单只放行**标题**里的数字：记录名是专有名词，正文里的数字才是要拦的东西
     check(
@@ -1141,6 +1255,7 @@ def test_experts() -> None:
                 "skipped": False,
                 "text": "增速偏高，结构偏弱",
                 "why": "",
+                "note": "",
                 "refs": [
                     {
                         "kind": "metric",
@@ -1159,6 +1274,117 @@ def test_experts() -> None:
     check("落库丢掉模型细节", "model" not in kept[0] and "model_ref" not in kept[0], str(kept[0]))
     check("依据随解读一起落库", len(kept[0].get("refs") or []) == 1, str(kept[0].get("refs"))[:80])
     check("无解读时裁成空列表", ex.to_meta(None) == [] and ex.to_meta([]) == [], "")
+
+    # ---- 总参谋：单选时展开全组，并且最后收口 ----
+    #
+    # 这三件事必须同时成立，少一件「包含所有参谋角度」就是假的：
+    #   1) 展开：单选总参谋不再只叫它一个人
+    #   2) 放开上限：展开出来的 7 位不能被 MAX_PER_CALL=3 砍回去
+    #   3) 收口：总参谋排最后，且能看到别人说了什么 —— 否则它的「挑重点」
+    #      和分管参谋拿的是同一份数值，等于再猜一遍
+    all_ids = [e["id"] for e in ex.all_experts()]
+    exp = ex.expand_for_chief(["chief"])
+    check("单选总参谋展开成全组", len(exp) == len(all_ids) and set(exp) == set(all_ids), str(exp))
+    check("总参谋排在最后收口", exp[-1] == "chief", str(exp))
+    check("展开不产生重复", len(exp) == len(set(exp)), str(exp))
+    check(
+        "团模式不展开（否则团就变成全会）",
+        ex.expand_for_chief(["chief", "economy", "investment"]) == ["chief", "economy", "investment"],
+        "",
+    )
+    check("单选分管参谋不展开", ex.expand_for_chief(["economy"]) == ["economy"], "")
+    check("空名单展开仍是空", ex.expand_for_chief([]) == [] and ex.expand_for_chief(None) == [], "")
+    check(
+        "总参谋在场时上限放开",
+        ex.cap_for(["a", "b", "c", "d", "e", "f", "chief"]) == 7 and ex.cap_for(["a", "b", "c", "d"]) == 3,
+        "",
+    )
+
+    # 用「工业」这一问验证真实分工：只有经济运行在域内，其余五位不发言、也不调模型。
+    # 这样一次总参谋应答的模型开销是 2 次而不是 7 次 —— 域过滤不是省事的偷工，
+    # 它同时是成本控制和「同一段话印三遍」的防线。
+    chief_prompts: list[str] = []
+    old_t3 = ex.llmclient.chat_text
+    old_a3 = ex.llmclient.available
+    ex.llmclient.available = lambda: True
+
+    def _stub3(system, user="", **k):
+        chief_prompts.append(user)
+        return {"text": "结构偏弱，先看经济运行参谋", "model": "stub"}
+
+    ex.llmclient.chat_text = _stub3
+    try:
+        v_chief = ex.interpret(
+            {
+                "question": "工业增速怎么样",
+                "metric_names": ["规模以上工业增加值增速"],
+                "metric_codes": ["GY_VA_GROWTH"],
+                "facts": [],
+            },
+            ex.expand_for_chief(["chief"]),
+        )
+    finally:
+        ex.llmclient.chat_text = old_t3
+        ex.llmclient.available = old_a3
+
+    check("总参谋展开后仍是 7 段（含未发言）", len(v_chief) == len(all_ids), f"{len(v_chief)} 段")
+    check("收口那一段在末尾且是总参谋", v_chief[-1]["id"] == "chief", str(v_chief[-1])[:80])
+    check("域外参谋不调模型", len(chief_prompts) == 2, f"{len(chief_prompts)} 次调用")
+    last_prompt = chief_prompts[-1] if chief_prompts else ""
+    check("总参谋看得到别人的原话", "结构偏弱" in last_prompt or "看住" in last_prompt or "先看经济运行" in last_prompt, last_prompt[-220:])
+    check("总参谋知道谁没发言", "本轮没有发言的" in last_prompt, last_prompt[-220:])
+    check("收口要求写进了 prompt", "不要复述" in last_prompt, last_prompt[-160:])
+    check(
+        "总参谋不被「本域内没有记录」误导",
+        "总参谋不绑域" in last_prompt,
+        last_prompt[-200:],
+    )
+
+    # 团模式下总参谋同样收口（名单前 3 位本来就含它），但只带那两位，不额外展开
+    team_prompts: list[str] = []
+    old_t4 = ex.llmclient.chat_text
+    old_a4 = ex.llmclient.available
+    ex.llmclient.available = lambda: True
+
+    def _stub4(system, user="", **k):
+        team_prompts.append(user)
+        return {"text": "招商这块要盯签约转化", "model": "stub"}
+
+    ex.llmclient.chat_text = _stub4
+    try:
+        v_team = ex.interpret({"question": "项目推进", "metric_names": [], "facts": []},
+                              ["chief", "economy", "investment"])
+    finally:
+        ex.llmclient.chat_text = old_t4
+        ex.llmclient.available = old_a4
+    check("团模式仍是 3 段，不额外展开", len(v_team) == 3, f"{len(v_team)} 段")
+    check("团模式总参谋也排最后", v_team[-1]["id"] == "chief", str([v["id"] for v in v_team]))
+    check("团模式总参谋看得到同僚", "招商这块要盯签约转化" in (team_prompts[-1] if team_prompts else ""), "")
+
+    # 展开了却不放开上限，收口就只剩半张桌子 —— 这条钉住的是 cap 与 expand 的配合
+    check(
+        "7 个 id 不被 MAX_PER_CALL 砍回 3",
+        len(ex.interpret({"question": "x", "metric_names": [], "facts": []}, exp, cap=len(exp))) == len(exp),
+        "",
+    )
+
+    # 「模型这一轮没给结论」那条兜底 return 以前直接返回，参谋一个字都不给 ——
+    # 同一句问话，模型答顺了有七段解读、答秃了就一段都没有，看着像功能坏了。
+    # 两个出口（正常收口 + 兜底）都必须挂解读，这里按调用点数量钉住。
+    src_agent = (ROOT / "core" / "agent.py").read_text(encoding="utf-8")
+    check(
+        "参谋解读挂在两个出口上",
+        src_agent.count("_attach_experts(") == 3,  # 1 处定义 + 2 处调用
+        f"{src_agent.count('_attach_experts(')} 处",
+    )
+    import agent as agent_mod  # noqa: PLC0415 只在断言里用
+
+    probe = {"headline": "x"}
+    got = agent_mod._attach_experts(
+        probe, expert_ids=[], model_ref=None, on_step=None,
+        check=lambda: False, question="x", person_id="mayor",
+    )
+    check("没选参谋时不加空字段", "expert_views" not in got, str(got))
 
     # ---- 专家卡已是 Markdown 存储（experts/<id>/expert.md），不再是 data/experts.json ----
     #
@@ -1230,6 +1456,21 @@ def test_experts() -> None:
         # 面板只提交身份字段、不提交 domain 时，保留原 domain（这步走 _load 读回 prev）
         saved2 = ex.save_experts([{"id": "a", "name": "甲", "avatar": "甲", "brief": "b", "focus": "f2", "angle": "a2"}])
         check("save 缺 domain 不丢原值（此处本就无域，仅验不报错）", saved2[0]["id"] == "a", str(saved2))
+        # 带 bases 的域要能落盘再读回：库绑定丢了的表现是「参谋不再引政策原文」，
+        # 界面上和「库里没这篇」一模一样。
+        saved3 = ex.save_experts(
+            [
+                {
+                    "id": "a", "name": "甲", "avatar": "甲", "brief": "b", "focus": "f", "angle": "a",
+                    "domain": {"codes": [], "units": ["市生态环境局"], "bases": ["生态环境政策"]},
+                },
+                {"id": "b", "name": "乙", "avatar": "乙", "brief": "b", "focus": "f", "angle": "a"},
+            ]
+        )
+        dome = saved3[0].get("domain") or {}
+        check("域里的 bases 落盘不丢", dome.get("bases") == ["生态环境政策"], str(dome))
+        check("units 与 bases 并存", dome.get("units") == ["市生态环境局"], str(dome))
+        check("读回 MD 后 bases 仍在", ((ex.find("a") or {}).get("domain") or {}).get("bases") == ["生态环境政策"], "")
         # 删除 b：b 的目录应被移进 _removed/ 留底
         ex.save_experts([{"id": "a", "name": "甲", "avatar": "甲", "brief": "b", "focus": "f", "angle": "a"}])
         check("删除的专家进 _removed 留底", (ex.EXPERTS_DIR / "_removed" / "b" / "expert.md").is_file(), "")
@@ -1260,6 +1501,14 @@ def test_experts() -> None:
     check("旧数据不伪造检索", "const hasRefs = Array.isArray(v.refs);" in html, "")
     check("越界与故障分开显示", ".ev.skip{" in html and 'v.skipped ? "skip" : "off"' in html, "")
     check("依据随导出走", "- 依据：${rf}" in html, "")
+    # 逐句剔除过的解读必须在界面上说清楚，否则读者会把残缺的一段当成完整判断
+    check("逐句剔除的说明会显示", ".ev-note" in html and "v.note ?" in html, "")
+    check("导出带剔除说明", "注：${v.note}" in html, "")
+    # 政策库这条路：面板能勾、依据能点开原文。不写就是「功能在代码里、用户在界面上找不到」。
+    check("专家面板可勾政策库", 'data-exp-base=' in html and "政策库（决定读哪些上传原文）" in html, "")
+    check("面板显示域内条数", "域内可读" in html and "exp-kbline" in html, "")
+    check("面板能改指标代码与责任单位", 'data-exp-f="domain.codes"' in html and 'data-exp-f="domain.units"' in html, "")
+    check("政策原文依据可点开", "function openKbDoc(" in html and "KB_PENDING_DOC" in html and 'type === "doc"' in html, "")
     check("默认态不留「不召唤」占位", '>不召唤</b>' not in html and '"不召唤"' not in html, "")
     check("空态不占位（:empty 隐藏）", ".es-name:empty" in html and ".es-state:empty" in html, "")
     check("全组叫 AI秘书团", 'return "AI秘书团"' in html and 'item("__all", "团", "AI秘书团"' in html, "")
@@ -1285,7 +1534,38 @@ def test_experts() -> None:
     check("斜杠选中与下拉同一出口", "selectExpert(id);" in pick, pick[:80])
     check("斜杠可点名插件", 'startsWith("plugin:")' in pick, pick[:80])
     check("菜单项与下拉名单同源", "/api/experts" in html and "EXP.list.map((e) => ({" in html, "")
+    # 交办权（拟办 / 查指示）只开给 AI秘书团。前端必须把模式显式带给后端 ——
+    # 不带的话 _is_team 一律 False，团模式也会失去交办能力。
+    check("请求体带参谋模式标记",
+          "function currentExpertMode()" in html and "expert_mode: currentExpertMode()" in html, "")
+    # 模式串的写法变了就失效，所以按分支断言而不是整行文本。
+    mode_src = html.split("function currentExpertMode()")[1][:600]
+    check("团模式 = __all 而不是「选了多位」",
+          'EXP.cur === "__all"' in mode_src and '"team"' in mode_src, mode_src[:140])
+    # 总参谋单独选是第三种模式：后端要展开全组，但**不能**给它 team 身份 ——
+    # 那等于把刚收归秘书团的派活权顺手还回去。
+    check("总参谋单独成一个模式，不是 team",
+          'EXP.cur === "chief"' in mode_src and '"chief" : "single"' in mode_src, mode_src[:200])
     check("没匹配不许当问题发出去", 'return toast("没有这个参谋' in html, "")
+
+    # 总参谋把六位都叫上时是 7 段并排，结论被埋在里面。收口卡提前、其余折起来。
+    # 这里钉四件事，任何一条丢了都会退回「一屏卡片」：
+    #   1. 有折叠条这个控件；2. 收口卡被单独摘出来放到最前；
+    #   3. 其余卡**仍然渲染**（收缩的是显示，不是内容 —— 折叠成"只看收口"、
+    #      顺手不调用分管参谋，就等于让总参谋把同一份数值再猜一遍）；
+    #   4. 3 张以内不折（团模式铺得开，多一次点击纯属添堵）。
+    check("收口卡提前、其余折叠",
+          'data-evfold' in html and 'evCards.find((c) => c.id === "chief" && c.ok)' in html, "")
+    check("折叠只收显示，卡片一张不少",
+          "restCards.map((c) => c.html).join" in html, "")
+    check("三张以内不折叠", "chiefCard && evCards.length > 3" in html, "")
+    check("折叠条有绑定", 'querySelectorAll("[data-evfold]")' in html, "")
+    # 折叠条是界面元件，不是内容。跟着复制出去，粘到材料里就是一句「另 6 位参谋
+    # 的原始意见 · 展开」的残句，收件人不知道那 6 位说了什么。
+    check("复制回答时不带折叠条", ".fail-ops, .ev-fold" in html, "")
+    # 卡上不贴「收口」这类内部叫法：卡头写着「总参谋」、位置在最前，够认了。
+    # 反过来钉一句，是因为「加个标签说明一下」看起来总是更清楚，很容易被再加回来。
+    check("参谋卡不挂「收口」字标", 'content:"收口"' not in html, "")
 
 
 def test_meeting() -> None:
@@ -2452,12 +2732,15 @@ def test_agent() -> None:
     import ask as ask_mod
     import numgate
 
-    schema_names = [t["function"]["name"] for t in agent_mod.tools_schema()]
+    # 团模式（AI秘书团）是满配；单参谋少两条交办工具 —— 见下面的分工断言。
+    schema_names = [t["function"]["name"] for t in agent_mod.tools_schema(team=True)]
     # 腾讯会议那两个只在配了 Token 时出现（没配就不给模型一个必然失败的工具），
     # 所以断言按「基础工具集 ⊆ 实际」写，多出来的只允许是那两把只读工具。
+    DIRECTIVE_TOOLS = {"draft_directive", "scan_directives"}
     BASE_TOOLS = {"list_metrics", "query_metric", "scan_oversight",
                   "search_knowledge", "clarify", "advance_item",
-                  "draft_meeting", "draft_document", "compare_material"}
+                  "draft_meeting", "draft_document", "compare_material",
+                  "draft_directive", "scan_directives"}
     WEMEET_TOOLS = {"wemeet_meetings", "wemeet_transcript"}
     check(
         "工具面含查、澄清、写、草稿与材料对照",
@@ -2465,13 +2748,86 @@ def test_agent() -> None:
         str(schema_names),
     )
     # 写工具只允许「提议」。这条不能靠工具名断言（改个名就失效），真正的边界由
-    # 下面「调它之后台账事件数一条没变」那条行为断言钉住。三个 draft_*/compare_*
-    # 是草稿和只读对照，不写任何数据 —— 它们同样在下面用行为断言验。
+    # 下面「调它之后台账事件数一条没变」那条行为断言钉住。四个 draft_*、
+    # compare_* 与 scan_directives 都是草稿或只读，不写任何数据 —— 它们同样在
+    # 下面用行为断言验（draft_directive 只出卡，下发走 /api/directive 由人点）。
     check(
         "写工具只有一个，且是提议式的（腾讯会议的两把是只读）",
         [n for n in schema_names
          if n not in ((BASE_TOOLS - {"advance_item"}) | WEMEET_TOOLS)] == ["advance_item"],
         str(schema_names),
+    )
+
+    # ---------------- 交办只归 AI秘书团 ----------------
+    #
+    # 用户的原话：「这个功能只有秘书团才有，而不是所有参谋都有」。
+    # 三条口子都要堵：工具面（schema 里没有）、系统提示（不提这两个名字）、
+    # 执行分支（模型硬调也拒）。少堵一条，模型就会「顺手」替领导把活派下去。
+    single_names = [t["function"]["name"] for t in agent_mod.tools_schema()]
+    check(
+        "单参谋工具面不含交办两条",
+        single_names == [n for n in schema_names if n not in DIRECTIVE_TOOLS],
+        str(single_names),
+    )
+    check(
+        "tools_schema() 默认就不给交办（漏传 team 等于没权限）",
+        not (DIRECTIVE_TOOLS & set(single_names)),
+        str(single_names),
+    )
+    check(
+        "团模式才带交办两条",
+        DIRECTIVE_TOOLS <= set(schema_names),
+        str(schema_names),
+    )
+
+    team_prompt = agent_mod.SYSTEM.format(
+        today="2026-11-13",
+        directive_hint=agent_mod._DIRECTIVE_HINT,
+        directive_rule=agent_mod._DIRECTIVE_RULE,
+    )
+    solo_prompt = agent_mod.SYSTEM.format(today="2026-11-13", directive_hint="", directive_rule="")
+    check(
+        "团模式系统提示教它拟办与查指示",
+        "draft_directive" in team_prompt and "scan_directives" in team_prompt,
+        "",
+    )
+    check(
+        "单参谋系统提示一个字都不提这两个工具",
+        "draft_directive" not in solo_prompt and "scan_directives" not in solo_prompt,
+        "",
+    )
+    check(
+        "单参谋提示词不留空占位（不出现孤零零的 {} 或错行）",
+        "{" not in solo_prompt.replace("2026-11-13", "")
+        and "\n\n\n" not in solo_prompt,
+        repr(solo_prompt[solo_prompt.index("答不了就直说") - 40:][:80]),
+    )
+
+    # 模型硬调（schema 里没有，但上下文里见过这个工具名时它会照调）：必须当场拒，
+    # 而且不能回一个 kind=directive 的结构 —— 那会让界面画出一张拟办卡。
+    txt, part = agent_mod._run_tool(
+        "draft_directive",
+        {"text": "让住建局 11 月 20 日前把 46 个小区全部开工"},
+        question="让住建局 11 月 20 日前把 46 个小区全部开工",
+        person_id="mayor",
+        today=date(2026, 11, 13),
+        team=False,
+    )
+    check(
+        "单参谋硬调 draft_directive 被拒，且不出卡",
+        part.get("kind") == "error"
+        and part.get("reason") == "not_team"
+        and "AI秘书团" in txt,
+        f"{part} | {txt[:60]}",
+    )
+    txt2, part2 = agent_mod._run_tool(
+        "scan_directives", {"days": 7}, question="我交办的事办到哪了",
+        person_id="mayor", today=date(2026, 11, 13), team=False,
+    )
+    check(
+        "单参谋硬调 scan_directives 也被拒",
+        part2.get("kind") == "error" and part2.get("reason") == "not_team",
+        str(part2),
     )
 
     check("期次归一（中文年月）", agent_mod._norm_period("2026年7月") == "2026-07",
@@ -4177,6 +4533,36 @@ def test_write_policy() -> None:
 
     check("每个写路由都登记进闸门表", not missing, "漏登记：" + "、".join(missing))
 
+    # 交办权的开关：只认前端显式的 expert_mode，不从 experts 的长度反推。
+    # 团模式固定带 3 位参谋，跟「手动点了 3 位」在后端一模一样 —— 靠数量猜必然猜错，
+    # 猜错的后果是单参谋也拿到了往下派活的权限。
+    check("团模式标记认 team / __all", srv._is_team({"expert_mode": "team"})
+          and srv._is_team({"expert_mode": "__all"}), "")
+    check("单参谋与不选参谋都不是团模式",
+          not srv._is_team({"expert_mode": "single"})
+          and not srv._is_team({"expert_mode": "none"})
+          and not srv._is_team({}), "")
+    # 总参谋会展开全组（7 位），但它不是秘书团：拟办/派活只在团模式下开口。
+    # 这条如果漏了，改一次前端标记就能把上一轮收紧的权限还回去。
+    check("总参谋展开全组也不是团模式", not srv._is_team({"expert_mode": "chief"}), "")
+    check("给了 3 位参谋但没给模式，也不算团模式",
+          not srv._is_team({"experts": ["chief", "economy", "investment"]}), "")
+
+    # 展开发生在后端：前端只发 ["chief"]，7 位 id 由 _expert_ids 补出来。
+    # 顺序也钉住 —— 总参谋必须在最后，否则它是第七个角度而不是收口。
+    exp_ids = srv._expert_ids({"experts": ["chief"]})
+    check(
+        "接口把单选总参谋展开成全组",
+        len(exp_ids) == len(srv.expert_mod.all_experts()) and exp_ids[-1] == "chief",
+        str(exp_ids),
+    )
+    check(
+        "团模式那 3 位原样传，不展开",
+        srv._expert_ids({"experts": ["chief", "economy", "investment"]})
+        == ["chief", "economy", "investment"],
+        "",
+    )
+
     # 演示态的四条命脉必须是 PUBLIC：这些被收紧成「要登录」，页面打开就不能用，
     # 而这类回归不会有任何报错，只会让人以为「坏了」。
     demo = [("POST", "/api/ask"), ("POST", "/api/ask/stream"),
@@ -4374,6 +4760,21 @@ def test_http(port: int | None = None) -> None:
         # 出现「能选 3 个但后端只收 3 个以外」或反过来的鬼故事。
         check("max 与截断常量同源", exs.get("max") == ex_api.MAX_PER_CALL, f"max={exs.get('max')} const={ex_api.MAX_PER_CALL}")
         check("/api/experts 说明数值可溯源", "算式" in (exs.get("rule") or ""), str(exs.get("rule")))
+        # 域内条数 + 可绑库清单：面板靠它显示「这位参谋现在能读到什么」。
+        # 没有这两个字段，界面只能等参谋说「本域内无记录」再反推配错了。
+        kbmap = exs.get("knowledge") or {}
+        ids = [x.get("id") for x in roster]
+        check(
+            "/api/experts 带每位域内条数",
+            bool(kbmap) and all(isinstance((kbmap.get(eid) or {}).get("total"), int) for eid in ids),
+            str(list(kbmap))[:80],
+        )
+        check("/api/experts 带可绑分类库清单", isinstance(exs.get("bases"), list), str(exs.get("bases"))[:80])
+        check(
+            "总参谋读全域（条数不少于任一参谋）",
+            (kbmap.get("chief") or {}).get("total", -1) >= max((kbmap.get(eid) or {}).get("total", 0) for eid in ids),
+            str(kbmap.get("chief"))[:80],
+        )
     except urllib.error.HTTPError as e:
         check("/api/experts 可读", False, f"code={e.code}")
 
@@ -5163,6 +5564,264 @@ def test_oversight_flow() -> None:
     check("新建事项时限不能早于今天", bad.get("ok") is False and "早于今天" in str(bad.get("error")), str(bad)[:70])
 
 
+def test_directive() -> None:
+    """指示：受令 → 拟办 → 分办 → 回执。
+
+    这一层的三条硬约束必须都验到，否则「秘书团能向下派活」就只是多了几个按钮：
+    1. 拟办不许编（单位只能来自单位目录、时限只能来自原文，摘不出来就留空）；
+    2. 下发要么全成要么全不写（越权/缺项时台账里一条都不能多）；
+    3. 执行情况是台账派生的，另存一份迟早会分叉。
+    """
+    print("[11] 指示与拟办")
+
+    base = dr.today()
+
+    # ── 拟办：规则路径不编单位 ──
+    text = (
+        "请市住建局牵头，11月15日前完成46个小区改造开工，开工率100%；"
+        "市城管局负责新增泊位1200个，11月底前完成"
+    )
+    d = dr.draft(text, use_model=False)
+    check("拟办拆成两条", d.get("ok") is True and len(d.get("tasks") or []) == 2, str(d)[:120])
+    tasks = d.get("tasks") or []
+    check("第一条落在市住建局", tasks and tasks[0]["assignee"] == "市住建局", str(tasks[:1]))
+    check("第二条落在市城管局", len(tasks) > 1 and tasks[1]["assignee"] == "市城管局", str(tasks[1:2]))
+    check(
+        "时限按原文换算，不是编的",
+        tasks and tasks[0]["deadline"] == date(base.year, 11, 15).isoformat(),
+        str(tasks[:1]),
+    )
+    check(
+        "验收标准从原文里摘",
+        tasks and "开工率100%" in tasks[0]["standard"],
+        str(tasks[:1]),
+    )
+    check("拟办不落库", dr.get("ZS2099-001") is None and not any(
+        str(x.get("text")) == text for x in (dr._cfg().get("items") or [])
+    ), "")
+
+    vague = dr.draft("高度重视安全生产工作", use_model=False)
+    check("纯套话原文也给出草稿（不替人编）", vague.get("ok") is True, str(vague)[:80])
+    check(
+        "没单位/没时限/没验收都会标出来",
+        len([i for i in (vague.get("issues") or []) if "责任单位" in i or "时限" in i or "办结标准" in i]) >= 3,
+        str(vague.get("issues"))[:120],
+    )
+
+    # ── 下发：逐条硬校验 ──
+    def can_ok(units):
+        return True, ""
+
+    good = [
+        dict(
+            title="完成46个小区改造开工",
+            assignee="市住建局",
+            deadline=(base + timedelta(days=7)).isoformat(),
+            standard="46个小区全部进场施工，开工率达到100%",
+        )
+    ]
+    bad_unit = [dict(good[0], assignee="市规划局")]
+    bad_dead = [dict(good[0], deadline=(base - timedelta(days=1)).isoformat())]
+    bad_std = [dict(good[0], standard="加强监管")]
+
+    check("单位不在册被拒", dr.issue("测试", bad_unit, person="mayor", can_fn=can_ok).get("ok") is False, "")
+    check(
+        "时限早于今天被拒",
+        "早于今天" in str(dr.issue("测试", bad_dead, person="mayor", can_fn=can_ok).get("error")),
+        "",
+    )
+    check(
+        "空话验收标准被拒",
+        dr.issue("测试", bad_std, person="mayor", can_fn=can_ok).get("ok") is False,
+        "",
+    )
+
+    before_items = len(ov._ITEMS)
+    denied = dr.issue("测试", good, person="bureau", can_fn=lambda u: (False, "只管市生态环境局"))
+    check("越权下发被拒", denied.get("ok") is False and "不能交办" in str(denied.get("error")), str(denied)[:100])
+    check("越权时台账一条都没多", len(ov._ITEMS) == before_items, f"{before_items} → {len(ov._ITEMS)}")
+
+    res = dr.issue(
+        "请市住建局 7 天内完成 46 个小区改造开工，开工率 100%",
+        good,
+        person="mayor",
+        from_name="市长",
+        can_fn=can_ok,
+    )
+    check("市领导下发成功", res.get("ok") is True and bool(res.get("id")), str(res)[:100])
+    did = str(res.get("id"))
+    check("令号按年自增", did.startswith(f"ZS{base.year}-"), did)
+    item_id = (res.get("item_ids") or [""])[0]
+    one = ov.detail(item_id) or {}
+    check("台账里建出了事项", one.get("title") == "完成46个小区改造开工", str(one)[:80])
+    check("事项来源挂到令号", one.get("source") == "领导指示" and did in str(one.get("source_ref")), str(one.get("source_ref")))
+    check("事项责任单位落的是全称", one.get("assignee") == "市住建局", str(one.get("assignee")))
+
+    dup = dr.issue(
+        "请市住建局 7 天内完成 46 个小区改造开工，开工率 100%",
+        good,
+        person="mayor",
+        can_fn=can_ok,
+    )
+    check("同一句话 30 分钟内不重复建单", dup.get("ok") is False and dup.get("duplicate") == did, str(dup)[:100])
+
+    # ── 回执：全部从台账派生 ──
+    s = dr.summary(did, {"person": "mayor", "is_citywide": True, "units": ()})
+    check("详情能算出来", bool(s) and s.get("total") == 1 and s.get("closed") == 0, str(s)[:90])
+    check("未签收计入 unsigned", s.get("unsigned") == 1, str(s.get("unsigned")))
+    check("阶段由任务状态推出", s.get("phase") == "执行中", str(s.get("phase")))
+
+    ov.advance(item_id, "签收", "市住建局")
+    s2 = dr.summary(did, {"person": "mayor", "is_citywide": True, "units": ()})
+    check("签收后台账与回报一致", s2.get("signed") == 1 and s2.get("unsigned") == 0, str(s2.get("signed")))
+
+    # 可见性：局长看不见市长的口头交办；涉及本单位的看得见
+    check(
+        "非分管单位看不见这条令",
+        dr.summary(did, {"person": "bureau", "is_citywide": False, "units": ("市生态环境局",)}) is None,
+        "",
+    )
+    check(
+        "涉及本单位则可见",
+        dr.summary(did, {"person": "vmayor", "is_citywide": False, "units": ("市住建局",)}) is not None,
+        "",
+    )
+    check("列表按身份收窄", dr.list_all({"person": "bureau", "is_citywide": False, "units": ("市生态环境局",)}) == [], "")
+
+    seen = dr.scan({"person": "mayor", "is_citywide": True}, 30)
+    check("扫描能捞到未办结的令", any(x["id"] == did for x in seen.get("directives") or []), str(seen)[:90])
+
+    # 指示原文不可改：没有 update 接口，只有 issue 一条路
+    check("没有改原文的入口", not hasattr(dr, "update_text"), "")
+
+    # ── 模型一边说「没明确牵头」，一边把单位填上：那是它替领导定的，必须清空 ──
+    # 这条不能靠提示词自觉。领导没点谁办、系统替他点了，交办错了是要出事的，
+    # 所以清空这件事必须是一条能跑输的断言。
+    stub = {
+        "tasks": [{
+            "title": "排查燃气和消防隐患",
+            "assignee": "市应急管理局",
+            "deadline": "2026-02-15",
+            "standard": "隐患全部整改销号",
+        }],
+        "issues": ["未明确牵头单位，燃气与消防分属不同部门"],
+        "assumptions": [],
+        "model": "stub",
+    }
+    orig = dr._model_split
+    dr._model_split = lambda *a, **k: dict(stub)  # noqa: ARG005
+    try:
+        guess = dr.draft("高度重视安全生产，春节前把燃气和消防隐患整改到位")
+    finally:
+        dr._model_split = orig
+    check("模型猜的责任单位被清空", (guess.get("tasks") or [{}])[0].get("assignee") == "",
+          str(guess.get("tasks"))[:120])
+    check("清空这件事在卡上说了一次", sum("已清空" in x for x in guess.get("issues") or []) == 1,
+          str(guess.get("issues")))
+    check(
+        "同一处缺项不重复提示",
+        len([x for x in guess.get("issues") or [] if "责任单位" in x or "谁办" in x or "牵头" in x]) == 1,
+        str(guess.get("issues")),
+    )
+    check("原文点过名的单位不误清", dr.draft(
+        "请市住建局11月20日前完成46个小区改造开工，开工率100%", use_model=False
+    )["tasks"][0]["assignee"] == "市住建局", "")
+
+    # ── 对话里那句话和令之间必须是硬链接，不能拿原文比字符串 ──
+    # 领导在对话里说话 → 系统出卡 → 人点下发才建令。那一刻模型已经收工了，
+    # 「这句话派生了哪条令」只能靠 id 记下来：同一句话说两遍，原文一模一样，
+    # 只有 message_id 能分清哪张卡对应哪条令。
+    import chat
+    th = chat.create("指示来源测试", owner="mayor")
+    msg = chat.append(th["id"], "user", "请市住建局下周一到日期前完成小区改造开工，开工率100%")
+    dl = date.fromordinal(base.toordinal() + 7).isoformat()
+    issued = dr.issue(
+        "请市住建局完成46个小区改造开工，开工率100%",
+        [{"title": "完成46个小区改造开工", "assignee": "市住建局", "deadline": dl, "standard": "开工率100%"}],
+        person="mayor",
+        from_name="市长",
+        origin={"thread_id": th["id"], "message_id": msg["id"]},
+        can_fn=lambda u: (True, ""),
+    )
+    check("带来源下发成功", issued.get("ok") is True, str(issued)[:120])
+    rec = dr.get(str(issued.get("id"))) or {}
+    check("令记下了出生地", (rec.get("origin") or {}).get("message_id") == msg["id"], str(rec.get("origin")))
+    check("回写消息 meta 成功", chat.set_message_meta(th["id"], msg["id"], {"directive_id": issued.get("id")}) is True, "")
+    saved = chat.get(th["id"]) or {}
+    mt = ((saved.get("messages") or [{}])[0].get("meta") or {})
+    check("消息上能查到令号", mt.get("directive_id") == issued.get("id"), str(mt)[:90])
+    check("回写不动别的键", mt.get("directive_id") is not None and set(mt) == {"directive_id"}, str(mt)[:90])
+    chat.delete(th["id"])
+
+    # ── 交办句不许被知识库用一段台账摘录顶掉 ──
+    # 这不是文案问题。对话层这一轮要是没跑通（一次工具都没调），请求会回落到问数与
+    # 知识库；知识库只做检索，分不清「让住建局去干」和「住建局那件事办到哪了」。
+    # 于是领导说「让住建局 11 月 20 日前开工」，系统回「检索到 2 条记录」——
+    # **形式上完全正常，内容全错**，看的人不会起疑。这类错只能靠行为断言钉住。
+    orders = [
+        "让住建局11月20日前完成46个小区改造开工，开工率100%",
+        "请市城管局负责新增泊位1200个，11月底前完成",
+        "市大数据局牵头，11月20日前完成三部门数据接入",
+    ]
+    for q in orders:
+        check(f"认得出是交办句：{q[:12]}…", dr.looks_like_order(q) is True, q)
+    # 反向更要紧：误判会把「办到哪了」当成一句新交办，责任单位多签一次字
+    not_orders = [
+        "交办给住建局的事办到哪了",
+        "住建局民生实事落实情况",
+        "环保局那件事进展如何",
+        "9月工业增速多少",
+        "让住建局把隐患整改情况报一下",
+        "今天天气不错",
+        "",
+    ]
+    for q in not_orders:
+        check(f"问句不误判成交办：{q[:12] or '（空）'}", dr.looks_like_order(q) is False, q)
+
+    import ask as ask_mod
+    # 团模式（AI秘书团）：拦下来问「催办还是另立」—— 用户手上有交办权，只差选哪个。
+    r = ask_mod.ask(
+        "让住建局11月20日前完成46个小区改造开工，开工率100%", person_id="mayor", team=True
+    )
+    check("交办句不被答成台账摘录", "检索到" not in str(r.get("headline") or ""), str(r.get("headline"))[:90])
+    check("团模式：交办句的答复是在问催办还是另立", "催办" in str(r.get("headline") or ""), str(r.get("headline"))[:90])
+    check(
+        "交办句只列已有事项、不假装出卡（团模式）",
+        r.get("intent") == "directive" and not r.get("directive_draft"),
+        f"intent={r.get('intent')}",
+    )
+    # 单参谋：拦下来，但说的是「这活不归我派，去秘书团」。
+    # 仍然不能答成台账摘录 —— 那会让人以为活已经派下去了。
+    r1 = ask_mod.ask(
+        "让住建局11月20日前完成46个小区改造开工，开工率100%", person_id="mayor", team=False
+    )
+    check(
+        "单参谋：交办句也不被答成台账摘录",
+        "检索到" not in str(r1.get("headline") or ""),
+        str(r1.get("headline"))[:90],
+    )
+    check(
+        "单参谋：交办句指向 AI秘书团，不问催办还是另立",
+        "AI秘书团" in str(r1.get("headline") or "")
+        and "另立" not in str(r1.get("headline") or ""),
+        str(r1.get("headline"))[:90],
+    )
+    check(
+        "单参谋：交办句不出卡",
+        r1.get("intent") == "directive" and not r1.get("directive_draft"),
+        f"intent={r1.get('intent')}",
+    )
+    check(
+        "两种模式的 trace 都记了守卫",
+        any(x.get("tool") == "knowledge.order_guard" for x in (r.get("trace") or []))
+        and any(x.get("tool") == "knowledge.order_guard" for x in (r1.get("trace") or [])),
+        "",
+    )
+    # 反向：真问句必须还能走知识库，否则这一改就成了「所有事项问题都不答」
+    r2 = ask_mod.ask("住建局那件事办到哪了", person_id="mayor")
+    check("真问句仍走知识库", r2.get("intent") == "knowledge", f"intent={r2.get('intent')}")
+
+
 def test_briefdoc() -> None:
     """材料助手：装配出来的每个数字都要能追回出处，模型只能写「下一步」。
 
@@ -5923,6 +6582,7 @@ def main() -> int:
     test_meeting()
     test_wemeet()
     test_oversight_flow()
+    test_directive()
     test_schedule()
     test_briefdoc()
     test_proofread()

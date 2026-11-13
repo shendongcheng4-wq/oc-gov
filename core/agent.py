@@ -106,8 +106,9 @@ def _wemeet_tools() -> list[dict[str, Any]]:
             "function": {
                 "name": "wemeet_meetings",
                 "description": (
-                    "查我最近的腾讯会议（题目、时间、会议号、有没有转写或纪要）。只读。"
-                    "问「上周开了哪些会」「项目会开完没有」先调它。"
+                    "查我最近在**腾讯会议**里开过的线上会（题目、时间、会议号、有没有转写或纪要）。只读。"
+                    "只查线上会；系统内的会议记录（常务会、专题会）不在这里，"
+                    "问某个会定了什么要用 search_knowledge。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -123,7 +124,8 @@ def _wemeet_tools() -> list[dict[str, Any]]:
             "function": {
                 "name": "wemeet_transcript",
                 "description": (
-                    "取一场腾讯会议的录制转写或智能纪要（只读）。问「那次会定了什么」时用。"
+                    "取一场**腾讯会议**的录制转写或智能纪要（只读）。只对线上会有内容，"
+                    "查不到不代表系统里没有这场会 —— 系统内的会议记录用 search_knowledge。"
                     "先用 wemeet_meetings 找到是哪一场。取回来的原文只用于本次回答，"
                     "要落成会议台账得去会议助手点「落成会议原文」。"
                 ),
@@ -140,9 +142,19 @@ def _wemeet_tools() -> list[dict[str, Any]]:
     ]
 
 
-def tools_schema() -> list[dict[str, Any]]:
+# 只有「AI秘书团」能往下派活。这两条工具名单独列出来，是为了在执行分支里也能
+# 按同一个名单拦住硬调（schema 里没有、模型还是调了的情况）。
+_DIRECTIVE_TOOLS = ("draft_directive", "scan_directives")
+
+
+def tools_schema(*, team: bool = False) -> list[dict[str, Any]]:
+    """工具面。`team=True` 才带交办的两条（拟办、查指示办理情况）。
+
+    默认 False：调用方没说自己是团模式，就当它没有交办权。失手的方向是「少给」，
+    不是「多给」—— 少给最多办不成，多给是替领导把活派错了单位。
+    """
     codes = _codes()
-    return [
+    tools = [
         {
             "type": "function",
             "function": {
@@ -252,6 +264,60 @@ def tools_schema() -> list[dict[str, Any]]:
                         },
                     },
                     "required": ["item_id", "action"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "draft_directive",
+                "description": (
+                    "把领导一句话（或一份上级来文）拟办成可交办的指示：拆成 1-6 条，"
+                    "每条写清办什么、谁办、什么时候办完、办到什么程度算办完。"
+                    "**不会下发** —— 生成一张可编辑的拟办卡，用户点了「下发」才落成督办"
+                    "事项，所以不必先问「要不要下发」。领导说了几件事，就把原话整段传进来。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": (
+                                "指示原文，尽量照原话说，不要替领导改写或加码。"
+                                "一段里说了几件事就整段传，拆解由系统做。"
+                            ),
+                        },
+                        "source": {
+                            "type": "string",
+                            "description": "来源：市长口述 / 上级来文 / 会议议定。不填按市长口述。",
+                        },
+                        "source_ref": {
+                            "type": "string",
+                            "description": "来文文号，例如「常政办发〔2026〕12 号」。没有就不填。",
+                        },
+                    },
+                    "required": ["text"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "scan_directives",
+                "description": (
+                    "查领导自己下发的指示（令）办得怎么样：每条令拆了几件、几件签收、"
+                    "几件办结、有没有逾期、哪一件卡住。凡是问「我刚才那个指示」「我交办的"
+                    "事」「派下去的活办到哪了」「各单位什么进展」都用它。"
+                    "这是问**派下去的活**，不是问指标 —— 不要拿 query_metric 顶替。只读。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "days": {
+                            "type": "integer",
+                            "description": "回看多少天内下发的令，默认 7，范围 1-90",
+                        }
+                    },
                 },
             },
         },
@@ -401,6 +467,33 @@ def tools_schema() -> list[dict[str, Any]]:
         # **建会不在这里**：那是往外部系统写，必须人点（会议详情里的按钮）。
         *_wemeet_tools(),
     ]
+    if not team:
+        tools = [t for t in tools if t["function"]["name"] not in _DIRECTIVE_TOOLS]
+    return tools
+
+
+# 拟办 / 交办是「AI秘书团」的活，不是每个参谋都能往下派。
+#
+# 单参谋的职责是解读，不是替领导发文：发改参谋说「这数不对劲」在行，说「让住建局
+# 11 月 20 日前把 46 个小区全部开工」就越位了 —— 责任单位、时限、验收标准都是要
+# 签字的东西，不该由一个看数据的角色顺手定下来。
+#
+# 所以两段提示词和两条工具（draft_directive / scan_directives）都只在团模式下出现。
+# 给单参谋留着、指望它「自觉不用」是不行的：模型看到工具就会用，而且用得理直气壮。
+_DIRECTIVE_HINT = (
+    "   领导口述要往下派（「让住建局 11 月 15 日前把 46 个小区全部开工，城管局把泊位补上」）\n"
+    "   就用 draft_directive：原话整段传进去，系统拆条目、认单位、算时限，出一张拟办卡。\n"
+    "   **不要自己编责任单位**，也不要替领导加码——拆不出来的留空，卡片上会标红等人工补。\n"
+    "   下发是人的动作（点按钮 + 登录身份），你只负责拟。\n"
+)
+
+_DIRECTIVE_RULE = (
+    "\n8. **「指示」和「指标」是两回事，别拿指标顶指示。** 用户问「我刚才那个指示」「我交办\n"
+    "   的事」「各单位办到哪了」「那件事进展怎么样」，问的是他派下去的活 —— 先 scan_directives\n"
+    "   再答。不要用指标（办结率、按时率这类）或知识库里的一条记录来代替：那答的是另一个\n"
+    "   问题，用户会以为交办的事已经办完了。scan_directives 说查不到，就如实说这条还没下发\n"
+    "   或查不到，不要拿台账里不相干的事项凑。"
+)
 
 
 SYSTEM = """你是溧阳市政府工作台的问数助手，在常务会前给市长和分管领导查数、看台账、找依据。
@@ -410,7 +503,8 @@ SYSTEM = """你是溧阳市政府工作台的问数助手，在常务会前给�
 ## 怎么做事
 
 1. **先查再答。** 问数值就调 query_metric；不知道代码先调 list_metrics；问进度、催办、谁在办
-   就调 scan_oversight；问口径、问某个会定了什么就调 search_knowledge。
+   就调 scan_oversight；问口径、问某个会定了什么就调 search_knowledge（系统内的会议与
+   台账记录都在那里）。
 2. **不确定就问，别猜。** 拿不准指的是哪个指标、单月还是累计、哪一期，调 clarify 问一句。
    猜错一个指标比问一句的代价大得多 —— 用户拿到的是一个看着正常的错数。
 3. **答案里每个数都要有出处。** 只能用工具返回的数。要算新数（比如用相邻两期累计相减得单月），
@@ -436,7 +530,7 @@ SYSTEM = """你是溧阳市政府工作台的问数助手，在常务会前给�
    要发文就用 draft_document：说清文种、事由、分条事项；有台账或指标做依据时把编号
    放进 anchors，正文就会带出处。写完只出草稿，编号留给发文登记簿。
    越权会被当场拒（你只能催用户分管的单位），被拒就把原因说清楚，别自己找别的路。
-7. **答不了就直说。** 系统里没有的指标、没有的记录，明说没有，不要用常识补。
+{directive_hint}7. **答不了就直说。** 系统里没有的指标、没有的记录，明说没有，不要用常识补。{directive_rule}
 
 ## 说话方式
 
@@ -485,6 +579,7 @@ def _run_tool(
     person_id: str | None,
     today: date,
     materials: str = "",
+    team: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """执行一个工具，返回（喂给模型的文本，用于组装结果的结构）。
 
@@ -492,6 +587,15 @@ def _run_tool(
     能渲染的字段（facts / series / 出处）。把结构直接丢给模型会白烧 token，
     让界面去解析文本又等于把「怎么展示」交给模型措辞，两边都不稳。
     """
+    if name in _DIRECTIVE_TOOLS and not team:
+        # schema 里已经没有这两条了，但个别模型会把上下文里见过的工具名照样调过来。
+        # 静默忽略等于让模型以为「办了」，它接着会说「已生成拟办草稿」—— 所以明确拒。
+        return (
+            "交办是「AI秘书团」才能做的事，当前这轮没开这个权限。"
+            "不要生成拟办卡，也不要说已经拟好；需要往下派活时，告诉用户切到 AI 秘书团再办。",
+            {"kind": "error", "name": name, "reason": "not_team"},
+        )
+
     if name == "list_metrics":
         rows = md.list_metrics()
         text = "共 %d 个指标：\n" % len(rows) + "\n".join(
@@ -616,6 +720,57 @@ def _run_tool(
             f"**还没写入台账** —— 用户点「确认{action}」之后才生效。",
             {"kind": "proposal", "proposal": proposal, "item": one},
         )
+
+    if name == "draft_directive":
+        # 拟办拆解放 core/directives.py：单位、时限、验收标准的硬校验都在那边，
+        # 这里只负责把结果交给界面。模型自己拆也行，但拆出来的单位得能被系统认，
+        # 所以拆解也走同一套校验 —— 不然卡片好看，点下发全红。
+        import directives  # noqa: PLC0415
+
+        raw = str(args.get("text") or "").strip() or question
+        built = directives.draft(raw, base=today)
+        if not built.get("ok"):
+            return (
+                str(built.get("error") or "没拟出拟办事项。把要办的事再说具体一点。"),
+                {"kind": "directive", "error": "empty"},
+            )
+        lines = []
+        for t in built.get("tasks") or []:
+            lines.append(
+                f"{t['no']}. {t['title']}｜{t['assignee'] or '单位待定'}"
+                f"｜{t['deadline'] or '时限待定'}｜{t['standard'] or '验收标准待定'}"
+            )
+        text = "已生成拟办草稿（%d 条，还没下发）：\n" % len(built["tasks"]) + "\n".join(lines)
+        if built.get("issues"):
+            text += "\n要人补的：" + "；".join(built["issues"][:3])
+        return text, {"kind": "directive", "payload": built}
+
+    if name == "scan_directives":
+        import directives  # noqa: PLC0415
+
+        scope = directory.person_scope(str(person_id or ""))
+        window = max(1, min(int(args.get("days") or 7), 90))
+        res = directives.scan(scope, window)
+        rows = res.get("directives") or []
+        if not rows:
+            return (
+                f"最近 {window} 天没有还在办、且由你这个身份能看的指示。",
+                {"kind": "directive_scan", "rows": []},
+            )
+        bits = []
+        for d in rows:
+            bits.append(
+                f"{d['id']}（{d['from_name']}，{str(d['issued_at'])[:10]}）："
+                f"交办 {d['total']} 件，签收 {d['signed']}，办结 {d['closed']}，"
+                f"逾期 {d['overdue']}；现在{'、'.join(d['phase'])}"
+            )
+            for t in d["tasks"]:
+                if t["status"] != "已办结":
+                    bits.append(
+                        f"  · {t['title']}（{t['assignee']}）{t['status']}，"
+                        f"时限 {t['deadline']}，剩 {t['days_left']} 天，{t['risk']}"
+                    )
+        return "\n".join(bits), {"kind": "directive_scan", "rows": rows}
 
     if name == "draft_meeting":
         # 复用原链路的确定性解析（meetplan.parse），不自己抽要素：日期、单位这些
@@ -1015,6 +1170,26 @@ def _audit_payload(
                             "library_department", "library_report", "name"):
                     if row.get(key):
                         payload["notes"].append(str(row[key]))
+        elif part.get("kind") == "directive":
+            # 拟办草稿里的单位、时限、验收标准全部来自原文或引擎换算，是事实。
+            # 不放行的话，「拆成 2 条，11 月 15 日前完成」这句会被判成编造。
+            dd = part.get("payload") or {}
+            if dd.get("text"):
+                payload["notes"].append(str(dd["text"]))
+            for t in dd.get("tasks") or []:
+                for key in ("title", "assignee", "deadline", "standard"):
+                    if t.get(key):
+                        payload["notes"].append(str(t[key]))
+        elif part.get("kind") == "directive_scan":
+            # 令号、交办件数、签收数、剩余天数都是台账派生出来的数，模型复述不算编。
+            for d in part.get("rows") or []:
+                for key in ("id", "from_name", "issued_at", "phase"):
+                    if d.get(key):
+                        payload["notes"].append(str(d[key]))
+                for t in d.get("tasks") or []:
+                    for key in ("item_id", "title", "assignee", "deadline"):
+                        if t.get(key):
+                            payload["notes"].append(str(t[key]))
         elif part.get("kind") == "document":
             # 公文里的文号、日期、主送机关、分条事项都是代码装配出来的事实。
             # 不放行的话，模型复述「溧政办发〔2026〕___号」会被判成编造。
@@ -1159,6 +1334,26 @@ def _assemble(
     )
     if cmp_part:
         result["material_compare"] = cmp_part["rows"]
+    # 指示拟办草稿：界面据此画一张可编辑的卡。**卡片不进台账** —— 只有点了
+    # 「下发」才会走 /api/directive，用登录身份逐条过权限、逐条建督办事项。
+    dir_part = next(
+        (
+            p
+            for p in parts
+            if p.get("kind") == "directive" and (p.get("payload") or {}).get("tasks")
+        ),
+        None,
+    )
+    if dir_part:
+        result["directive_draft"] = dir_part["payload"]
+        # 拟办卡是这一轮的主产物，意图就记 directive。不覆盖的话，模型顺手查了
+        # 一次台账（kind=knowledge）就会把意图写成 knowledge，界面按「查记录」渲染，
+        # 卡片还在、样式不对。
+        result["intent"] = "directive"
+    # 令的执行情况：界面画一张紧凑的台账表，正文只是叙述。
+    scan_part = next((p for p in parts if p.get("kind") == "directive_scan"), None)
+    if scan_part and scan_part.get("rows"):
+        result["directive_rows"] = scan_part["rows"]
     result["agent"] = {
         "rounds": sum(1 for t in trace if t.get("tool") == "agent.llm"),
         "tools": [t.get("tool") for t in trace if str(t.get("tool", "")).startswith("tool.")],
@@ -1267,6 +1462,7 @@ def run(
     model_ref: str | None = None,
     person_id: str | None = None,
     expert_ids: list[str] | None = None,
+    team: bool = False,
     today: date | None = None,
     on_step: Any = None,
     should_stop: Any = None,
@@ -1297,7 +1493,23 @@ def run(
         for m in (history or [])
         if m.get("role") == "system" and m.get("content")
     ]
-    system_prompt = SYSTEM.format(today=today.isoformat())
+    system_prompt = SYSTEM.format(
+        today=today.isoformat(),
+        # 不是团模式：这两段留空，提示词里就不会出现 draft_directive / scan_directives。
+        # 否则模型看得到名字、调不到工具，会绕去 query_metric 硬凑一个答案。
+        directive_hint=_DIRECTIVE_HINT if team else "",
+        directive_rule=_DIRECTIVE_RULE if team else "",
+    )
+    # 腾讯会议工具只在装了 Token 时出现；没配还提它，模型会去调一个不存在的工具。
+    # 配了就补一段边界：它只查线上会，别把「腾讯会议里没有」当成「系统里没有」——
+    # 这条不写清时，问「某次会定了什么」会先查腾讯会议、查不到就直接收口。
+    if _wemeet() is not None:
+        system_prompt += (
+            "\n\n## 腾讯会议（只有线上会）\n"
+            "腾讯会议工具查的是线上会；系统内的会议记录与台账仍在 search_knowledge 里。"
+            "腾讯会议里查不到不等于系统里没有：先把 search_knowledge / scan_oversight "
+            "查完，再说没有。"
+        )
     if sys_notes:
         system_prompt += "\n\n## 跨会话记忆\n" + "\n".join(sys_notes)
 
@@ -1317,7 +1529,7 @@ def run(
     def check() -> bool:
         return bool(should_stop and should_stop())
 
-    schema = tools_schema()
+    schema = tools_schema(team=team)
     last_error = ""
     # 备用模型链：会话钉的那个可能没起（全局默认指向本地 8099 就是这样）。
     # 一次连接失败就换下一个可用模型，和规划器（`ask._plan_attempts`）同一套
@@ -1578,7 +1790,7 @@ def run(
             try:
                 text, part = _run_tool(
                     name, call["args"], question=question, person_id=person_id,
-                    today=today, materials=materials,
+                    today=today, materials=materials, team=team,
                 )
             except Exception as exc:  # noqa: BLE001 单个工具挂了不该终止整轮
                 text, part = f"工具执行失败：{type(exc).__name__}: {str(exc)[:120]}", {
@@ -1644,7 +1856,18 @@ def run(
             fallback["degraded"] = degraded
         for i, item in enumerate(fallback["trace"], 1):
             item["step"] = i
-        return fallback
+        # 兜底也要配参谋。这条路径以前直接 return，于是同一句问话，模型答顺了有
+        # 七段解读、答秃了就一段都没有 —— 看起来像功能坏了。正文本来就是接口原文，
+        # 参谋在这时反而有话可说。
+        return _attach_experts(
+            fallback,
+            expert_ids=expert_ids,
+            model_ref=model_ref,
+            on_step=on_step,
+            check=check,
+            question=question,
+            person_id=person_id,
+        )
     return None
 
 
@@ -1667,36 +1890,19 @@ def _tool_summary(part: dict[str, Any], text: str) -> str:
     return text[:80]
 
 
-_SENT_SPLIT = re.compile(r"(?<=[。！？；\n])")
-
-
 def _salvage(text: str, payload: dict[str, Any]) -> tuple[str, list[str]] | None:
     """整段过不了数字闸时，逐句重审一遍：只剔除违规的那几句。
+
+    判断与门槛都交给 `numgate.salvage`（参谋解读用的是同一个函数，只是门槛
+    不同）。这里保留这层薄壳，是因为调用方只关心「救回来的正文 + 丢了哪几句」，
+    不该知道切句规则。
 
     为什么要这一步：建议类答复里常带「还剩 50 天」「第 12 次常务会」这类数字，
     它们不是指标值，却足以让整段被判违规 —— 结果是前面点名单位、点明时限的
     内容全被丢掉，退化成一句指标卡，用户看到的就是「问建议只会念数」。
-
     逐句剔除保住的仍是同一条底线：留下来的每个数字都能溯源。
-    剩得太少（不足原文三分之一或不足 20 字）就不算救回来，交给上层回退，
-    免得拼出一段断头话。
     """
-    sentences = [s for s in _SENT_SPLIT.split(text) if s.strip()]
-    if len(sentences) < 2:
-        return None
-    kept: list[str] = []
-    dropped: list[str] = []
-    for sent in sentences:
-        if numgate.audit(sent, payload)["ok"]:
-            kept.append(sent)
-        else:
-            dropped.append(sent.strip())
-    if not dropped or not kept:
-        return None
-    out = "".join(kept).strip()
-    if len(out) < max(20, int(len(text) * 0.35)):
-        return None
-    return out, dropped
+    return numgate.salvage(text, payload, min_chars=20, min_ratio=0.35)
 
 
 def _finish(
@@ -1804,29 +2010,60 @@ def _finish(
         result.setdefault("agent", {})["rejected_text"] = original
 
     # 参谋解读放在最后：数值已经是成品，参谋只能补「怎么看」，改不了任何数。
-    if expert_ids and parts:
-        if check():
-            raise ask_mod.TurnCancelled()
-        try:
-            result["expert_views"] = experts_mod.interpret(
-                result,
-                expert_ids,
-                model_ref,
-                on_step=on_step,
-                refs_by_expert=ask_mod._expert_refs(  # noqa: SLF001 域检索只有一份实现
-                    question, result, person_id, expert_ids
-                ),
-            )
-        except Exception as exc:  # noqa: BLE001 参谋失败不影响答案
-            result["expert_views"] = [
-                {
-                    "id": eid,
-                    "name": eid,
-                    "ok": False,
-                    "why": f"解读失败：{type(exc).__name__}",
-                }
-                for eid in expert_ids
-            ]
+    if parts:
+        _attach_experts(
+            result,
+            expert_ids=expert_ids,
+            model_ref=model_ref,
+            on_step=on_step,
+            check=check,
+            question=question,
+            person_id=person_id,
+        )
+    return result
+
+
+def _attach_experts(
+    result: dict[str, Any],
+    *,
+    expert_ids: list[str] | None,
+    model_ref: str | None,
+    on_step: Any,
+    check: Any,
+    question: str,
+    person_id: str | None,
+) -> dict[str, Any]:
+    """给一份已经成形的答案配参谋解读。参谋失败不影响答案本身。
+
+    单独抽出来是因为它有**两个**调用点：正常收口（`_finish`）和「模型这一轮没给
+    结论、用工具原文兜底」那条 return。后者以前直接返回，于是同一句问话，模型
+    答顺了就有七段解读，答秃了就一段都没有 —— 用户看到的是「这个功能时灵时不灵」，
+    比干脆没有更让人不敢用。兜底时正文本来就是接口原文，参谋反而更有话可说。
+    """
+    if not expert_ids:
+        return result
+    if check():
+        raise ask_mod.TurnCancelled()
+    try:
+        result["expert_views"] = experts_mod.interpret(
+            result,
+            expert_ids,
+            model_ref,
+            on_step=on_step,
+            refs_by_expert=ask_mod._expert_refs(  # noqa: SLF001 域检索只有一份实现
+                question, result, person_id, expert_ids
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 参谋失败不影响答案
+        result["expert_views"] = [
+            {
+                "id": eid,
+                "name": eid,
+                "ok": False,
+                "why": f"解读失败：{type(exc).__name__}",
+            }
+            for eid in expert_ids
+        ]
     return result
 
 
@@ -1837,6 +2074,8 @@ def available() -> bool:
 def status() -> dict[str, Any]:
     return {
         "available": available(),
-        "tools": [t["function"]["name"] for t in tools_schema()],
+        # 列满配（团模式）的清单：这里说的是「这套系统能做什么」，
+        # 具体到某一轮给不给交办工具，由 tools_schema(team=...) 决定。
+        "tools": [t["function"]["name"] for t in tools_schema(team=True)],
         "max_rounds": MAX_ROUNDS,
     }

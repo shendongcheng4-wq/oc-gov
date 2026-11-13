@@ -83,12 +83,14 @@ import ask as ask_mod  # noqa: E402
 import agent as agent_mod  # noqa: E402
 import chat  # noqa: E402
 import docparse  # noqa: E402
+import directives as directives_mod  # noqa: E402
 import extract as meeting_extract  # noqa: E402
 import ledger as meetings  # noqa: E402
 import notice as meeting_notice  # noqa: E402
 import llm  # noqa: E402
 import llmclient  # noqa: E402
 import memory as memory_mod  # noqa: E402
+import mockdata as md  # noqa: E402
 import modelcfg  # noqa: E402
 import polish as polish_mod  # noqa: E402
 import oversight as ov  # noqa: E402
@@ -355,13 +357,30 @@ def _parts(path: str, prefix: str) -> list[str]:
 
 
 def _expert_ids(body: dict) -> list[str]:
-    """召唤了哪几位专家。传单个 `expert` 或数组 `experts` 都认，最多三位。"""
+    """召唤了哪几位专家。传单个 `expert` 或数组 `experts` 都认，最多三位。
+
+    单选总参谋时由 `expand_for_chief` 展开成全部分管参谋 + 总参谋（排最后）。
+    展开必须放在 [:3] **之后**：先展开再截断，7 个 id 会被这一步自己砍掉。
+    """
     raw = body.get("experts")
     if not isinstance(raw, list):
         single = str(body.get("expert") or "").strip()
         raw = [single] if single else []
-    ids = [str(x).strip() for x in raw if str(x).strip()]
-    return ids[:3]
+    ids = [str(x).strip() for x in raw if str(x).strip()][:3]
+    return expert_mod.expand_for_chief(ids)
+
+
+def _is_team(body: dict) -> bool:
+    """这一轮是不是「AI秘书团」（团模式）。
+
+    只看前端显式给的 `expert_mode`，不从 `experts` 的长度反推：团模式固定带前 3 位
+    参谋，跟「用户手动点了 3 位」在后端长得一模一样，靠数量猜必然猜错。
+
+    交办（拟办 / 查指示办理情况）只对团模式开放 —— 见 core/agent.py 的 _DIRECTIVE_TOOLS。
+    前端漏传就是 False，宁可少给权限。
+    """
+    mode = str(body.get("expert_mode") or "").strip().lower()
+    return mode in ("team", "__all", "all")
 
 
 _MAX_ATT_FILES = 5
@@ -429,6 +448,9 @@ WRITE_POLICY: tuple[tuple[str, str, str | None], ...] = (
     # 「这条提议动的是哪条事项」再过一次 —— 和 /api/oversight/[id]/action 同构。
     ("POST", r"/api/proposal/confirm", authz.GATE_SESSION),
     ("POST", r"/api/proposal/cancel", authz.GATE_SESSION),
+    # 指示下发：一次落成「一条令 + N 条督办事项」。粗闸门只要求登录，
+    # 逐条的行级判定在 handler 里做 —— 一条不过就整批不办，不留半份交办。
+    ("POST", r"/api/directive", authz.GATE_SESSION),
 
     # ── 会议：市级动作，只有市领导 ──
     ("POST", r"/api/meetings", authz.MEETING_COMMIT),
@@ -614,6 +636,57 @@ def _kb_doc_entries(q: str = "", limit: int = 0) -> list[dict[str, Any]]:
     return out
 
 
+def _experts_payload(person_id: str | None) -> dict[str, Any]:
+    """每位参谋「域内能读到几条」+ 分类库绑定情况。
+
+    这个数一直只有跑测试的人知道：界面上只能看到参谋说「本域内无记录」，
+    分不清是库里真没有、还是域配错了、还是库名对不上。把三件事拆开报出来：
+    记录条数（按类型）、挂上的库和文档数、绑了但库里找不到的库名。
+
+    现算不缓存：台账/会议/上传库随时在变，缓存一份就会出现「面板说 5 条、
+    参谋说本域无记录」。这点数据量（几十条）重建索引是微秒级。
+    """
+    person = people.meta(person_id)
+    idx = knowledge_mod.index(person)
+    bases = rag_mod.list_bases()
+    by_name = {b["name"]: b for b in bases}
+    by_id = {b["id"]: b for b in bases}
+    out: dict[str, Any] = {}
+    for e in expert_mod.all_experts():
+        dom = e.get("domain") or None
+        rows = [r for r in idx if knowledge_mod.in_domain(r, dom)] if dom else idx
+        counts = {k: 0 for k in ("metric", "oversight", "meeting", "decision")}
+        for r in rows:
+            if r.get("kind") in counts:
+                counts[r["kind"]] += 1
+        bound: list[str] = []
+        missing: list[str] = []
+        docs = 0
+        for name in (dom or {}).get("bases") or []:
+            base = by_name.get(name) or by_id.get(name)
+            if base is None:
+                missing.append(name)
+                continue
+            bound.append(base["name"])
+            docs += int(base.get("doc_count") or 0)
+        out[e["id"]] = {
+            "total": len(rows),
+            "counts": counts,
+            "docs": docs,
+            "bases": bound,
+            "missing": missing,
+        }
+    return out
+
+
+def _bases_brief() -> list[dict[str, Any]]:
+    """面板里可勾的分类库清单。只给渲染要用的三个字段，不传正文。"""
+    return [
+        {"id": b["id"], "name": b["name"], "doc_count": b["doc_count"]}
+        for b in rag_mod.list_bases()
+    ]
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "OcGovWorkbench/0.2"
     protocol_version = "HTTP/1.1"
@@ -776,6 +849,23 @@ class Handler(BaseHTTPRequestHandler):
         units = set(scope.get("units") or ())
         return scope.get("person"), (units or None)
 
+    def _directive_scope(self) -> dict[str, object]:
+        """指示可见性的输入。
+
+        有 session → 用 session 里的角色与分管单位（可信）；没有 → 按演示全量，
+        和台账/会议读口同口径。指示原文比台账更敏感，所以登录后是**收窄**的：
+        局长只看得见动到本单位的令，看不见市长所有口头交办。
+        """
+        scope = self._session_scope()
+        if scope is not None:
+            return scope
+        return {
+            "person": self._person(),
+            "role": directory.ROLE_LEADER,
+            "units": (),
+            "is_citywide": True,
+        }
+
     def _serve_file(self, path: Path, content_type: str) -> None:
         if not path.exists():
             self.send_error(404)
@@ -925,6 +1015,10 @@ class Handler(BaseHTTPRequestHandler):
                         "experts": expert_mod.all_experts(),
                         "max": expert_mod.MAX_PER_CALL,
                         "model_ready": expert_mod.llmclient.available(),
+                        # 域内条数 + 库绑定：面板据此显示「这位参谋现在能读到什么」，
+                        # 不用再靠「本域内无记录」这句话猜是库空还是域配错了。
+                        "knowledge": _experts_payload(self._person()),
+                        "bases": _bases_brief(),
                         "rule": "专家可以引用给定数值，也可以写算式推算（如 1024.8 - 882.6 = 142.2）；"
                         "出现清单外、或等式不成立的数字会被整段丢弃。"
                         "记录正文里的数字仍不许复述。",
@@ -964,6 +1058,27 @@ class Handler(BaseHTTPRequestHandler):
                 if one is None:
                     return self._json({"ok": False, "error": "item_not_found", "item_id": parts[0]}, 404)
                 return self._json({"ok": True, "item": one})
+
+            # ---- 指示（受令 → 拟办 → 分办 → 回执）----
+            # 可见性在 directives._visible 里按身份收窄：非分管的令连标题都不会
+            # 出现在列表里，而不是"能看列表、点开 403"。未登录时按演示全量 ——
+            # 和台账、会议那几处读口的既有口径一致，不搞第二套规矩。
+            if path == "/api/directive":
+                return self._json(
+                    {
+                        "ok": True,
+                        "items": directives_mod.list_all(self._directive_scope()),
+                        "units": directives_mod.units(),
+                    }
+                )
+            dparts = _parts(path, "/api/directive/")
+            if len(dparts) == 1:
+                one = directives_mod.summary(dparts[0], self._directive_scope())
+                if one is None:
+                    return self._json(
+                        {"ok": False, "error": "directive_not_found", "id": dparts[0]}, 404
+                    )
+                return self._json({"ok": True, "directive": one})
 
             # ---- AI 日程 ----
             # 全部由已有时间派生（督办时限/状态、会议时间、披露日），这里不生成任何新事实。
@@ -1405,8 +1520,36 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"ok": False, "error": "experts_required"}, 400)
                 if len(items) > 20:
                     return self._json({"ok": False, "error": "too_many"}, 400)
+                # 指标代码写错（少一个字母、写成指标名）要当场拒，不能静默存进去：
+                # 存进去之后这位参谋域内永远少一份口径，界面上只是「没读到」。
+                unknown: set[str] = set()
+                for e in items:
+                    dom = e.get("domain") if isinstance(e, dict) else None
+                    if not isinstance(dom, dict):
+                        continue
+                    codes = dom.get("codes") if isinstance(dom.get("codes"), list) else []
+                    for c in codes:
+                        if str(c).strip() and str(c).strip() not in md.METRICS:
+                            unknown.add(str(c).strip())
+                if unknown:
+                    return self._json(
+                        {
+                            "ok": False,
+                            "error": "未知指标代码：" + "、".join(sorted(unknown)),
+                            "unknown_codes": sorted(unknown),
+                        },
+                        400,
+                    )
                 saved = expert_mod.save_experts(items)
-                return self._json({"ok": True, "experts": saved})
+                return self._json(
+                    {
+                        "ok": True,
+                        "experts": saved,
+                        # 保存后立刻把新映射的条数带回去，面板不用再拉一次
+                        "knowledge": _experts_payload(self._person()),
+                        "bases": _bases_brief(),
+                    }
+                )
 
             if path == "/api/models":
                 provider = modelcfg.upsert_provider(body)
@@ -1586,6 +1729,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._confirm_proposal(body)
             if path == "/api/proposal/cancel":
                 return self._cancel_proposal(body)
+
+            # ---- 指示下发：一条令 + N 条督办事项，要么全成要么全不写 ----
+            if path == "/api/directive":
+                return self._issue_directive(body)
 
             # ---- AI 日程：今日简报 ----
             # 模型只写一句重点和几条理由；事项、时间全部由服务端重算，前端传什么都不作数。
@@ -2128,6 +2275,78 @@ class Handler(BaseHTTPRequestHandler):
         ok = proposals_mod.cancel(pid, scope["person"]) if pid else False
         return self._json({"ok": True, "cancelled": ok})
 
+    # ---------------- 指示：受令 → 拟办 → 分办 ----------------
+    def _issue_directive(self, body: dict) -> None:
+        """把一张拟办卡落成「令 + N 条督办事项」。
+
+        三道关，顺序不能换：
+
+        1. **登录 + 角色**：建档（交办）本来就是市级动作，未登录一律 401，局长 403。
+        2. **逐条行级判定**：交给谁就要能管谁。常务副市长把事项派给教育局要被拒，
+           而不是「整批建完再说」。一条不过就整批不办 —— 半份交办比不办更糟。
+        3. **落库**：`directives.issue` 内部先全量校验再写，写台账失败会回滚已建条目。
+
+        传进来的 tasks 是前端卡片上改过的，所以**不能信**：单位、时限、验收标准
+        在 issue 里重校一遍，与页面上建档走同一套规则。
+        """
+        scope, allowed, why = self._require(authz.OVERSIGHT_CREATE, {"units": ()})
+        if not allowed:
+            audit.user_event(
+                scope.get("person") if scope else None, "access.denied",
+                target="directive.issue", payload={"reason": why},
+            )
+            return self._json({"ok": False, "error": why}, 401 if scope is None else 403)
+
+        text = str(body.get("text") or "").strip()
+        tasks = body.get("tasks")
+        if not text:
+            return self._json({"ok": False, "error": "指示原文不能为空。"}, 400)
+        if not isinstance(tasks, list) or not tasks:
+            return self._json({"ok": False, "error": "至少要有一条交办事项。"}, 400)
+
+        person = scope["person"]
+        # 出生地：哪次对话的哪条消息。前端从卡片上带过来，只有前端知道自己在
+        # 哪条气泡里点了按钮。拿不到就是空 —— 老消息、或从别的入口进来的下发，
+        # 都允许没有来源，不能因为缺它就拒掉一次合法交办。
+        origin = {
+            "thread_id": str(body.get("thread_id") or "").strip(),
+            "message_id": str(body.get("message_id") or "").strip(),
+        }
+        res = directives_mod.issue(
+            text,
+            tasks,
+            person=person,
+            from_name=str((people.find(person) or {}).get("name") or person),
+            source=str(body.get("source") or "市长口述"),
+            source_ref=str(body.get("source_ref") or ""),
+            origin=origin,
+            can_fn=lambda units: authz.can(scope, authz.OVERSIGHT_CREATE, {"units": units}),
+        )
+        audit.user_event(
+            person, authz.OVERSIGHT_CREATE, target=res.get("id"),
+            payload={
+                "ok": res.get("ok"),
+                "via": "directive",
+                "items": res.get("item_ids") or [],
+                "tasks": len(tasks),
+                "denied": None if res.get("ok") else res.get("error"),
+            },
+        )
+        if not res.get("ok"):
+            return self._json(res, 403 if "不能交办" in str(res.get("error") or "") else 400)
+        # 把令号钉回那条消息上。钉不上（消息被删、线程换了手机）不算失败 ——
+        # 令已经建好了，回放时退回按原文匹配也就是了，不能因为回写没成功就报错。
+        if origin["thread_id"] and origin["message_id"]:
+            try:
+                chat.set_message_meta(
+                    origin["thread_id"],
+                    origin["message_id"],
+                    {"directive_id": res.get("id"), "directive_items": res.get("item_ids") or []},
+                )
+            except Exception:  # noqa: BLE001 回写是锦上添花，坏了不能影响已经落库的令
+                pass
+        return self._json({**res, "stats": ov.stats()})
+
     # ---------------- 认证 ----------------
     def _login(self, body: dict) -> None:
         """登录：白名单身份 + 正确口令才签发 session。
@@ -2636,6 +2855,11 @@ class Handler(BaseHTTPRequestHandler):
                 # 建会草稿要跟着落库：回放时要能重新画出那张卡（含当时的假设与缺项），
                 # 只留一句 headline 的话，用户回看时不知道自己当时确认了什么
                 "meet_draft": meetplan_mod.to_meta(result.get("meet_draft")),
+                # 指示拟办卡要跟着落库：回放时得能重新画出那张卡（含当时的拆解、
+                # 标红的缺项）。不存的话刷新之后卡没了，正文字还写着「点下发才进台账」。
+                # 已经下发过的，卡片回放会从 /api/directive 拿到令号，不靠这里。
+                "directive_draft": result.get("directive_draft") or None,
+                "directive_rows": result.get("directive_rows") or [],
                 # 待确认动作与公文草稿也要跟着落库。不落的话，刷新之后卡片凭空消失，
                 # 而正文里还留着「点『确认催办』才生效」——按钮没了，指示还在，
                 # 这就是界面在说谎。回放时按「已失效」渲染，不假装还能点。
@@ -2733,6 +2957,7 @@ class Handler(BaseHTTPRequestHandler):
                 model_ref=thread.get("model_ref"),
                 person_id=self._person(body),
                 expert_ids=_expert_ids(body),
+                team=_is_team(body),
                 on_step=on_step,
                 should_stop=should_stop,
                 attachments=atts,
@@ -2770,6 +2995,7 @@ class Handler(BaseHTTPRequestHandler):
                     history=history,
                     model_ref=thread.get("model_ref"),
                     expert_ids=_expert_ids(body),
+                    team=_is_team(body),
                     person_id=self._person(body),
                     known_metrics=chat.known_metrics(
                         thread["id"], owner=self._person(body)
@@ -2787,6 +3013,7 @@ class Handler(BaseHTTPRequestHandler):
                     history=history,
                     model_ref=thread.get("model_ref"),
                     expert_ids=_expert_ids(body),
+                    team=_is_team(body),
                     person_id=self._person(body),
                     known_metrics=chat.known_metrics(
                         thread["id"], owner=self._person(body)
@@ -2888,6 +3115,7 @@ class Handler(BaseHTTPRequestHandler):
                     model_ref=thread.get("model_ref"),
                     on_step=step,
                     expert_ids=_expert_ids(body),
+                    team=_is_team(body),
                     person_id=self._person(body),
                     known_metrics=chat.known_metrics(thread["id"], owner=self._person(body)),
                     attachments=atts,

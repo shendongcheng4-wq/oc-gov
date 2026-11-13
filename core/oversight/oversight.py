@@ -422,6 +422,27 @@ def create_item(
         return {"ok": True, "item_id": item_id, "status": item.status}
 
 
+def remove_item(item_id: str, actor: str = "") -> bool:
+    """撤掉一条**刚建、还没被任何人动过**的事项。只给回滚用。
+
+    为什么需要：一次下发要把一条指示拆成几条事项，几条必须同进同退。第 3 条
+    建失败而前 2 条留在台账里，责任单位就会收到半份交办 —— 那比一条没有更糟。
+
+    为什么加守卫：这个函数不对外暴露（不在 WRITE_POLICY 里），但将来有人手滑
+    接到接口上，就能把已经签收、已经办结的记录抹掉，事件流也跟着没了。
+    所以只允许删「状态还是待签收、事件只有一条创建」的条目。
+    """
+    with _LOCK:
+        item = _ITEMS.get(item_id)
+        if item is None:
+            return False
+        if item.status != PENDING or len(item.events) > 1:
+            return False
+        _ITEMS.pop(item_id, None)
+        _save()
+    return True
+
+
 def get(item_id: str) -> Item | None:
     return _ITEMS.get(item_id)
 

@@ -530,6 +530,92 @@ def _wants_matter(question: str) -> bool:
     return any(w in str(question or "") for w in _MATTER_WORDS)
 
 
+def _order_guard(
+    question: str, kb: dict[str, Any], trace: list[dict[str, Any]], *, team: bool = False
+) -> dict[str, Any] | None:
+    """交办句不许被知识库用一段台账摘录顶掉。
+
+    这条兜底本来是给「这个指标口径怎么定」「上次那个会定了什么」用的。但它分不清
+    「让住建局 11 月 20 日前把 46 个小区全部开工」和「住建局那件事办到哪了」——
+    前者要的是一张能下发的拟办卡，只要台账里恰好有一条相近事项，就会被答成
+    「检索到 2 条记录」。**形式上完全正常，内容全错**，看的人不会起疑。
+
+    这里不改写、不假装拟办：把「库里已有」和「人该做哪个选择」摆出来。
+    真要拟办，走对话层的 draft_directive —— 那条路会做单位、时限、验收标准的硬校验，
+    知识库这条路没有那套校验，替它出一张卡等于绕过校验。
+
+    `team` 是「AI秘书团」才有的交办权。**不是团模式也照样拦**：不拦就会被答成台账
+    摘录，用户以为活已经派下去了。区别只在最后那句 —— 团模式问「催办还是另立」，
+    单参谋模式说「这活不归我派，去秘书团」。
+
+    返回 None 表示不适用（不是交办句，或库里没有相近事项），调用方照原样返回。
+    """
+    try:
+        import directives  # noqa: PLC0415
+    except Exception:  # noqa: BLE001  这条路坏了不该影响问答
+        return None
+    try:
+        if not directives.looks_like_order(question):
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    hits = [h for h in (kb.get("knowledge") or []) if h.get("kind") == "oversight"]
+    if not hits:
+        return None
+
+    head = hits[0]
+    more = f"（同类共 {len(hits)} 条）" if len(hits) > 1 else ""
+    merged = list(trace)
+    merged.append(
+        {
+            "step": len(merged) + 1,
+            "tool": "knowledge.order_guard",
+            "call": "交办句不按台账摘录回答",
+            "status": "ok",
+            "summary": (
+                f"命中 {len(hits)} 条相近事项，改为确认催办/另立"
+                if team
+                else f"命中 {len(hits)} 条相近事项，本轮无交办权"
+            ),
+        }
+    )
+    for step in kb.get("trace") or []:
+        merged.append({**step, "step": len(merged) + 1})
+
+    if team:
+        headline = (
+            f"这句是交办，不是查台账。台账里已有相近事项〔{head['id']}〕{head['title']}{more}，"
+            "先定是催办这一条，还是另立一条新的。"
+        )
+        detail = (
+            "没有直接给拟办卡：同一件事再立一条，责任单位会收到两份交办、签两次字。"
+            f"要催办，说「催办 {head['id']}」；要另立，说明和它哪里不同。"
+        )
+        tail = "交办句不走知识库检索：上面列的是台账里已有的事项，不是对这句话的答复。"
+    else:
+        # 单参谋不给交办权。但也不能让它被答成一段台账摘录 —— 那样用户会以为活已经
+        # 派下去了。所以照样拦下，只是把「这里办不了」和「去哪办」说清楚。
+        headline = (
+            f"这句是交办，不是查台账。台账里已有相近事项〔{head['id']}〕{head['title']}{more}，"
+            "但这轮没开交办权限 —— 拟办要选「AI秘书团」。"
+        )
+        detail = (
+            "分工上，单参谋只做解读和建议，不替领导往下派活：责任单位、时限、验收标准"
+            "都是要签字的，不由看数据的角色定。"
+            f"要拟办，把这句话在 AI秘书团 里再说一遍；要催办已有的，说「催办 {head['id']}」。"
+        )
+        tail = "上面列的是台账里已有的事项，不是对这句话的答复；也没生成拟办卡。"
+
+    return {
+        **kb,
+        "intent": "directive",
+        "headline": headline,
+        "detail": detail,
+        "notes": list(kb.get("notes") or []) + [tail],
+        "trace": merged,
+    }
+
+
 def _codes_from_result(result: dict[str, Any]) -> list[str]:
     """从 sources 的接口路径反推本轮用了哪些指标。
 
@@ -544,6 +630,58 @@ def _codes_from_result(result: dict[str, Any]) -> list[str]:
             if code in md.METRICS and code not in codes:
                 codes.append(code)
     return codes
+
+
+DOC_REFS = 2
+
+
+def _doc_ref(hit: dict[str, Any]) -> dict[str, Any]:
+    """把 rag 命中的一段原文转成和 knowledge 条目同构的依据。
+
+    形状必须一致：前端依据行、`experts.to_meta` 的落库裁剪、`numgate` 的白名单
+    都按 knowledge 条目写的。为「政策原文」再走一套渲染，等于多一条迟早分叉
+    的路径 —— 而这条路径出错时的表现是「依据点了没反应」，没人会想到是形状问题。
+    """
+    kb_id = str(hit.get("kb_id") or "")
+    doc_id = str(hit.get("doc_id") or "")
+    kb_name = str(hit.get("kb_name") or "")
+    doc_name = str(hit.get("doc_name") or "")
+    return {
+        "kind": "doc",
+        "kind_label": "政策原文",
+        "id": f"{kb_id}:{doc_id}",
+        "title": doc_name,
+        "text": str(hit.get("text") or ""),
+        "quote": "",
+        "unit": kb_name,
+        "ref": {"type": "doc", "id": doc_id, "kb_id": kb_id},
+        "source": {
+            "department": kb_name,
+            "report": doc_name,
+            "period": "",
+            "note": f"第 {int(hit.get('ordinal') or 0) + 1} 段",
+        },
+        "when": None,
+    }
+
+
+def _domain_docs(domain: dict[str, Any] | None, terms: str) -> list[dict[str, Any]]:
+    """这位参谋挂的分类库里、和本轮问题最相关的几段原文。
+
+    库名解析不到（改名/删库）就返回空，**不拿别的库顶上**：让经济参谋读
+    生态环境政策，比让他没有政策依据糟得多。
+
+    夹在 `_expert_refs` 里而不是 `experts.py` 里，是因为 `experts` 明确不碰
+    检索（见模块注释）。这里只做「拿到什么给什么」，范围仍由调用方决定。
+    """
+    bases = (domain or {}).get("bases") or []
+    if not bases:
+        return []
+    ids = rag_mod.resolve_bases(bases)
+    if not ids:
+        return []
+    hits = rag_mod.search(ids, terms, k=DOC_REFS, char_budget=1200)
+    return [_doc_ref(h) for h in hits]
 
 
 def _expert_refs(
@@ -563,10 +701,17 @@ def _expert_refs(
     光靠问句在口径条目上一个二字组都命中不了；加上指标名，至少能稳定命中
     《XX 口径》那一条，参谋才不至于两手空空。
 
+    两类依据共用 `REF_LIMIT` 的预算：挂库的参谋先取最多 2 段政策原文，剩下的
+    名额给系统记录（台账/会议）。不分开预算的话，每个域都变成 4+2 条，
+    参考段会比原来长一半，把指标信号挤到 prompt 的边缘。
+
     检索不到就返回空列表，由 `experts._refs_block` 如实写「本域内无记录」。
     这里不兜底去全域找 —— 让经济参谋拿河道巡查的记录来发挥，比让它闭嘴糟得多。
     """
-    ids = [str(x) for x in (expert_ids or [])][: experts_mod.MAX_PER_CALL]
+    raw = [str(x) for x in (expert_ids or [])]
+    # 检索的预算要和解读同步：解读放了 7 位、检索只给 3 位，后 4 位就会以
+    # 「本域内暂无记录」的身份发言 —— 那不是没记录，是没去查。
+    ids = raw[: experts_mod.cap_for(raw)]
     if not ids:
         return {}
     person = people_mod.meta(person_id)
@@ -577,9 +722,11 @@ def _expert_refs(
         expert = experts_mod.find(eid)
         if expert is None:
             continue
-        domain = expert.get("domain")
+        domain = expert.get("domain") or None
         scoped = [e for e in entries if knowledge_mod.in_domain(e, domain)]
-        out[eid] = knowledge_mod.search_in(scoped, terms, experts_mod.REF_LIMIT)
+        docs = _domain_docs(domain, terms)
+        slots = max(1, experts_mod.REF_LIMIT - len(docs)) if docs else experts_mod.REF_LIMIT
+        out[eid] = knowledge_mod.search_in(scoped, terms, slots) + docs
     return out
 
 
@@ -603,6 +750,7 @@ def ask(
     model_ref: str | None = None,
     on_step: Any = None,
     expert_ids: list[str] | None = None,
+    team: bool = False,
     person_id: str | None = None,
     known_metrics: list[str] | None = None,
     should_stop: Any = None,
@@ -646,6 +794,7 @@ def ask(
                 codes=codes,
                 period=period,
                 want=want,
+                team=team,
             )
             # 降级信息要跟着答案一起走：落库、回放、界面上都得看得见。
             # 只在实时那一条路径上提示的话，刷新一下就好像什么都没发生过。
@@ -764,6 +913,7 @@ def _ask_impl(
     codes: list[str] | None = None,
     period: str | None = None,
     want: str | None = None,
+    team: bool = False,
 ) -> dict[str, Any]:
     """`out` 是给调用方传回附加信息的口子（目前只放 degraded）。
 
@@ -1056,6 +1206,9 @@ def _ask_impl(
         person = people_mod.meta(person_id)
         kb = knowledge_mod.answer(question, person)
         if not kb["refused"]:
+            guarded = _order_guard(question, kb, trace, team=team)
+            if guarded is not None:
+                return guarded
             kb["trace"] = trace + kb["trace"]
             for i, step in enumerate(kb["trace"], 1):
                 step["step"] = i
@@ -1077,6 +1230,10 @@ def _ask_impl(
         if not kb["refused"] and any(
             h["kind"] in ("oversight", "decision", "meeting") for h in kb["knowledge"]
         ):
+            # 指标命中了不代表问的是一件事：交办句即使撞上指标名，也不能被台账顶掉。
+            guarded = _order_guard(question, kb, trace, team=team)
+            if guarded is not None:
+                return guarded
             trace.append(
                 {
                     "step": len(trace) + 1,

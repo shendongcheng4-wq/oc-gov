@@ -408,6 +408,37 @@ def drop_last(thread_id: str) -> dict[str, Any] | None:
     return removed or None
 
 
+def set_message_meta(thread_id: str, message_id: str, patch: dict[str, Any]) -> bool:
+    """给已经落库的一条消息补字段（合并，不覆盖已有键）。
+
+    干什么用的：领导在对话里说一句话，系统出一张拟办卡，人点「下发」之后才建出
+    令。那一刻模型已经收工了，但**「这句话派生了哪条令」必须记在这条消息上** ——
+    否则回放时只能拿原文去比字符串，同一句话说两遍就分不清哪张卡对应哪条令。
+    所以下发成功后回写一个 `directive_id`，让消息和令之间是硬链接。
+    """
+    found = {"ok": False}
+
+    def _do(cfg: dict[str, Any]) -> dict[str, Any]:
+        thread = _find(cfg, thread_id)
+        if thread is None:
+            return cfg
+        for m in thread.get("messages") or []:
+            if m.get("id") != message_id:
+                continue
+            meta = m.get("meta")
+            if not isinstance(meta, dict):
+                meta = {}
+            meta.update(patch or {})
+            m["meta"] = meta
+            thread["updated_at"] = _now()
+            found["ok"] = True
+            break
+        return cfg
+
+    store.update(FILE, _do, _empty())
+    return found["ok"]
+
+
 def set_model_ref(thread_id: str, model_ref: str | None) -> None:
     def _do(cfg: dict[str, Any]) -> dict[str, Any]:
         thread = _find(cfg, thread_id)

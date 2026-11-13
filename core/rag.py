@@ -326,6 +326,27 @@ def create_base(name: str, description: str = "") -> dict[str, Any]:
     return base
 
 
+def resolve_bases(names_or_ids: list[str] | tuple[str, ...] | None) -> list[str]:
+    """把「库名或库 id」解析成现存库 id：保序、去重、解析不到的直接跳过。
+
+    专家卡里的 `domain.bases` 存的是**库名**（人要能读懂、能在面板里勾），
+    而 `search()` 要的是库 id。这层换算只写一份：库被改名或删掉之后，
+    各调用方的行为必须一致 —— 跳过，不抛异常，也不拿别的库顶上。
+    """
+    wanted = [str(x).strip() for x in (names_or_ids or []) if str(x or "").strip()]
+    if not wanted:
+        return []
+    bases = _state()["bases"]
+    by_id = {b["id"]: b["id"] for b in bases}
+    by_name = {b["name"]: b["id"] for b in bases}
+    out: list[str] = []
+    for key in wanted:
+        bid = by_id.get(key) or by_name.get(key)
+        if bid and bid not in out:
+            out.append(bid)
+    return out
+
+
 def get_base(kb_id: str) -> dict[str, Any] | None:
     for b in _state()["bases"]:
         if b["id"] == kb_id:

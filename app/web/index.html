@@ -689,6 +689,8 @@ html.ask-fold .ask-rail{display:flex}
 .ev-head span{font-size:10px;color:var(--faint)}
 .ev p{margin:0;font-size:12px;line-height:1.72;color:var(--ink-2)}
 .ev-refs{margin-top:4px;font-size:10.5px;line-height:1.65;color:var(--faint)}
+/* 逐句救回来时的一句说明：删了哪几句、为什么。不写的话读者不知道这段是残缺的 */
+.ev-note{margin-top:4px;font-size:10px;line-height:1.6;color:var(--faint)}
 .ev-ref.link{color:var(--brand);cursor:pointer}
 .ev-ref.link:hover{text-decoration:underline}
 .ev.off{background:var(--surface-2);border-style:dashed}
@@ -698,6 +700,18 @@ html.ask-fold .ask-rail{display:flex}
 .ev.skip{background:var(--surface-2);border-style:solid}
 .ev.skip p{color:var(--muted);font-size:11.5px}
 .ev.off .ev-head i{background:var(--chip-bg)}
+/* 总参谋是收口的那一位，不是第七个角度：给一条底色，展开成 7 张时能和分管参谋
+   分得开。**不写字标** —— 卡头本来就写着「总参谋」，再加一个「收口」是把系统内部的
+   叫法摆到市长面前；而且默认只露这一张时，它是不是综合的那一环，看名字和位置就够了。 */
+.ev.chief{background:linear-gradient(180deg,#f5f8ff,#eef3fd);border-color:var(--brand)}
+/* 沉默也算信息：说出「几位没发言」，比让人对着几张「不归我管」猜是不是凑数好 */
+.ev-sum{font-size:10.5px;color:var(--faint);padding:0 2px}
+/* 折起来的那几段：一行灰字交代「还有几个人说过话、几个没说话」，点开才铺卡。
+   和调用链路那条折叠条同一套手感，位置也挨着结论。 */
+.ev-fold{font-size:10.5px;color:var(--muted);cursor:pointer;user-select:none;padding:1px 2px}
+.ev-fold:hover{color:var(--brand)}
+.ev-rest{display:flex;flex-direction:column;gap:6px}
+.ev-rest[hidden]{display:none}
 
 /* ---------- 建会草稿卡 ----------
    白纸上要能一眼分出「这段是系统算的」和「这段是我要按下去的按钮」，
@@ -716,6 +730,27 @@ html.ask-fold .ask-rail{display:flex}
 .mp-meta{margin-top:4px;font-size:11.5px;color:var(--ink-2)}
 .mp-note{margin-top:4px;font-size:10.5px;color:var(--muted);line-height:1.7}
 .mp-grid{margin-top:8px;display:grid;grid-template-columns:1fr;gap:7px 9px}
+/* 指示拟办卡：原文一行、下面几条可改的交办。五列固定宽 —— 标题和验收标准
+   吃剩余空间，单位和时限给够看得全，窄栏里也不会挤成一坨。 */
+.dir-quote{margin-top:5px;padding-left:8px;border-left:2px solid var(--brand);
+  font-size:11.5px;color:var(--ink-2);line-height:1.7}
+/* 每条交办两列排：标题和验收标准各占一行，单位与时限并排。
+   对话栏只有 300 上下，五列并排会把「市住建局」挤成「市住…」，宁可多占一行。 */
+.dir-tasks{margin-top:8px;display:grid;gap:2px}
+.dir-row{display:grid;grid-template-columns:1fr 1fr;gap:4px 6px;padding:7px 0 0;
+  margin-top:6px;border-top:1px dashed var(--line)}
+.dir-row .n{grid-column:1/-1;font-size:9.5px;color:var(--faint);margin-bottom:-1px}
+.dir-row .t,.dir-row .s{grid-column:1/-1}
+.dir-row input{font-family:inherit;font-size:11.5px;color:var(--ink);padding:4px 6px;
+  border:1px solid var(--line);border-radius:6px;background:var(--surface);min-width:0;width:100%}
+.dir-row input:focus{outline:none;border-color:var(--brand)}
+.dir-row input:disabled{background:transparent;border-color:transparent;color:var(--ink-2)}
+.dir-row.bad input{border-color:var(--danger-line);background:var(--danger-bg)}
+.dir-row input.need{border-color:var(--danger-line);background:var(--danger-bg)}
+.dir-probs{margin-top:6px;font-size:10.5px;color:var(--warn-ink);line-height:1.75}
+.dir-ids{margin-top:7px;display:flex;flex-wrap:wrap;gap:5px}
+.dir-ids span{font-size:10px;padding:1px 6px;border-radius:8px;background:var(--surface);
+  border:1px solid var(--line);color:var(--ink-2)}
 /* 单列，不按视口做响应式：对话栏宽度是固定的窄栏，视口再宽它也宽不了。
    两列会把 datetime-local 挤到看不清，而这里每个字段都要人核对一遍。 */
 .mp-f{display:flex;flex-direction:column;gap:3px;font-size:10.5px;color:var(--faint);min-width:0}
@@ -1307,6 +1342,16 @@ html.embedded .drawer{top:0;height:100%}
 .exp-field input,.exp-field textarea{font-size:12px;color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:6px 8px;background:var(--surface);font-family:inherit;outline:none;resize:vertical}
 .exp-field input:focus,.exp-field textarea:focus{border-color:var(--brand)}
 .exp-field textarea{min-height:52px;line-height:1.5}
+/* 域内条数：一行灰字，数字加粗。这一行是「域配对了没有」的唯一可见证据 */
+.exp-kbline{font-size:10.5px;color:var(--muted);line-height:1.55}
+.exp-kbline b{color:var(--brand);font-weight:600}
+.exp-kbline em{color:var(--warn,#b26a00);font-style:normal}
+/* 分类库多选：一排可勾的小块，库名 + 篇数 */
+.exp-bases{display:flex;flex-wrap:wrap;gap:6px;padding:2px 0}
+.exp-base{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:4px 7px;cursor:pointer;background:var(--surface)}
+.exp-base input{margin:0}
+.exp-base i{font-style:normal;color:var(--faint);font-size:10px}
+.exp-base:has(input:checked){border-color:var(--brand);background:var(--surface-2)}
 .exp-add{grid-column:1/-1;display:flex;align-items:center;justify-content:center;gap:6px;padding:10px;border:1px dashed var(--line);border-radius:11px;background:transparent;color:var(--muted);cursor:pointer;font-size:12px;font-family:inherit}
 .exp-add:hover{color:var(--brand);border-color:var(--brand)}
 .exp-empty{grid-column:1/-1}
@@ -3721,6 +3766,182 @@ async function confirmProposal(card) {
   }
 }
 
+/* 指示拟办卡：领导一句话 → 拆成 N 条交办 → 点「下发」才进台账。
+   卡上四列都能改：拟办本来就是人定的，模型只负责把话拆开、把单位认全。
+   下发接口会把这几列重校一遍（单位在册、时限不早于今天、验收标准可验证），
+   所以在这里改坏了也进不了台账，只会被拒并说明原因。 */
+let DIR_UNITS = null;
+let DIR_ISSUED = null;
+function dirMeta() {
+  if (DIR_UNITS && DIR_ISSUED) return Promise.resolve({ units: DIR_UNITS, issued: DIR_ISSUED });
+  return fetch("/api/directive", { headers: authHeaders({ "X-Person-Id": PID.get() }) })
+    .then((r) => r.json())
+    .then((d) => { DIR_UNITS = d.units || []; DIR_ISSUED = d.items || []; })
+    .catch(() => { DIR_UNITS = DIR_UNITS || []; DIR_ISSUED = DIR_ISSUED || []; })
+    .then(() => ({ units: DIR_UNITS, issued: DIR_ISSUED }));
+}
+function fillDirUnits() {
+  dirMeta().then(({ units, issued }) => {
+    document.querySelectorAll("datalist[data-dir-units]").forEach((dl) => {
+      if (dl.childElementCount === units.length) return;
+      dl.innerHTML = units.map((u) => `<option value="${esc(u)}"></option>`).join("");
+    });
+    // 兜底：这条链接做出来之前下发的卡，消息上没有 directive_id，只能拿原文比一次。
+    // 新下发的都靠 id 认（dirBlock 里渲染时就是 locked），走不到这里。
+    // 这条路的弱点很明确：同一句话说了两遍就分不清，所以只留给老数据。
+    document.querySelectorAll("[data-dir]:not([data-done])").forEach((card) => {
+      const quote = card.querySelector(".dir-quote");
+      const text = quote ? quote.textContent.trim() : "";
+      // 老卡的原文可能不止一条令，按最新的一条标（列表本身按时间倒序）
+      const hit = issued.find((x) => String(x.text || "").trim() === text);
+      if (!hit) return;
+      card.dataset.done = "1";
+      const tag = card.querySelector(".mp-tag");
+      if (tag) {
+        tag.className = "mp-tag ok";
+        tag.textContent = `已下发 ${hit.id}`;
+      }
+      card.querySelectorAll(".dir-row input").forEach((i) => { i.disabled = true; });
+      const go = card.querySelector("[data-dirgo]");
+      if (go) go.remove();
+      const hint = card.querySelector(".mp-acts .hint");
+      if (hint) hint.textContent = "这条已经进台账，不用再下发一次";
+    });
+  });
+}
+
+function dirBlock(r, ref) {
+  const d = r && r.directive_draft;
+  const tasks = (d && d.tasks) || [];
+  if (!tasks.length) return "";
+  const hist = !!(r && r.__history);
+  const mid = (ref && ref.messageId) || "";
+  const tid = (ref && ref.threadId) || "";
+  // 已下发：草稿 → 令 的链接钉在这条消息上（下发成功后后端回写 meta.directive_id）。
+  // 有它就按 id 认，不拿原文去猜 —— 同一句话问两遍时，只有 id 分得清哪张卡
+  // 对应哪条令。也正因为有它，这条消息才算「领导说过的话」和「令」的接线点。
+  const did = (r && r.directive_id) || "";
+  const items = (r && r.directive_items) || [];
+  const locked = !!did;
+  // 空字段留红框：这是**唯一**能一眼看出「哪儿要你补」的地方。原文没写谁办、
+  // 没写时限，模型按规矩留空，空着就必须显眼 —— 不标的话「没下发」和「没填完」
+  // 在卡上一模一样，用户点下发才被后端打回来。
+  const need = (v) => ((v && String(v).trim()) ? "" : " need");
+  const ro = locked ? " disabled" : "";
+  const rows = tasks.map((t, i) => `
+    <div class="dir-row">
+      <span class="n">第 ${i + 1} 条</span>
+      <input class="t${need(t.title)}" data-dirf="title" value="${esc(t.title || "")}" title="${esc(t.title || "")}" placeholder="办什么"${ro}>
+      <input class="${need(t.assignee).trim()}" data-dirf="assignee" list="dir-units" value="${esc(t.assignee || "")}" placeholder="责任单位"${ro}>
+      <input class="${need(t.deadline).trim()}" data-dirf="deadline" value="${esc(t.deadline || "")}" placeholder="YYYY-MM-DD"${ro}>
+      <input class="s${need(t.standard)}" data-dirf="standard" value="${esc(t.standard || "")}" title="${esc(t.standard || "")}" placeholder="办到什么程度算办完"${ro}>
+    </div>`).join("");
+  const probs = (d.issues || []).length
+    ? `<div class="dir-probs">${d.issues.map((x) => `· ${esc(x)}`).join("<br>")}</div>`
+    : "";
+  const quote = `<div class="dir-quote">${esc(d.text || "")}</div>`;
+  if (locked) {
+    const ids = items.map((x) => `<span>${esc(String(x))}</span>`).join("");
+    return `<div class="mp-card done" data-dir="1" data-mid="${esc(mid)}" data-tid="${esc(tid)}" data-done="1">
+      <div class="mp-head"><b>拟办：${tasks.length} 条交办</b><span class="mp-tag ok">已下发 ${esc(did)}</span></div>
+      ${quote}
+      <div class="dir-tasks">${rows}</div>
+      ${ids ? `<div class="dir-ids">${ids}</div>` : ""}
+      <div class="mp-acts"><span class="hint">这条令就是从这句话派生的。要追执行情况，直接问「${esc(did)} 办到哪了」。</span></div>
+    </div>`;
+  }
+  setTimeout(fillDirUnits, 0);
+  return `<div class="mp-card" data-dir="1" data-mid="${esc(mid)}" data-tid="${esc(tid)}">
+    <div class="mp-head"><b>拟办：${tasks.length} 条交办</b><span class="mp-tag">未下发</span></div>
+    ${quote}
+    <div class="dir-tasks">${rows}</div>
+    ${probs}
+    <datalist id="dir-units" data-dir-units></datalist>
+    <div class="mp-acts">
+      <button class="mini" data-dirgo>下发到台账</button>
+      <button class="mini ghost" data-dirdrop>放弃</button>
+      <span class="hint">${hist
+        ? "当时的草稿，没下发就还能补发；已经下发过的，系统会挡下来"
+        : "点了才建事项，责任单位才看得到"}</span>
+    </div>
+  </div>`;
+}
+
+async function issueDirective(card) {
+  const pick = (row, k) => {
+    const el = row.querySelector(`[data-dirf="${k}"]`);
+    return el ? String(el.value || "").trim() : "";
+  };
+  const tasks = [...card.querySelectorAll(".dir-row")].map((row) => ({
+    title: pick(row, "title"),
+    assignee: pick(row, "assignee"),
+    deadline: pick(row, "deadline"),
+    standard: pick(row, "standard"),
+  }));
+  const quote = card.querySelector(".dir-quote");
+  const btn = card.querySelector("[data-dirgo]");
+  btn.disabled = true;
+  btn.textContent = "下发中…";
+  try {
+    const r = await fetch("/api/directive", {
+      method: "POST",
+      headers: authHeaders({ "X-Person-Id": PID.get() }),
+      body: JSON.stringify({
+        text: quote ? quote.textContent.trim() : "",
+        source: "市长口述",
+        // 这张卡挂在哪条消息上，只有前端知道。带上它，令才知道自己是从哪句话
+        // 派生的 —— 回放时按 id 认，不再拿原文比字符串。
+        thread_id: card.dataset.tid || "",
+        message_id: card.dataset.mid || "",
+        tasks,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || "下发失败");
+    card.className = "mp-card done";
+    card.dataset.done = "1";
+    card.innerHTML = `
+      <div class="mp-head"><b>已下发 ${esc(d.id)}</b><span class="mp-tag ok">已进台账</span></div>
+      <div class="mp-note">${(d.item_ids || []).length} 条交办已建档，责任单位现在能在台账里看到并签收。逾期会进督办预警，不用另外设提醒。</div>
+      <div class="dir-ids">${(d.item_ids || []).map((x) => `<span>${esc(x)}</span>`).join("")}</div>`;
+    toast(`已下发 ${d.id}`);
+    if (window.refreshOversight) window.refreshOversight();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "下发到台账";
+    toast("没下发：" + e.message);
+    if (!card.querySelector(".mp-warn")) {
+      const why = document.createElement("div");
+      why.className = "mp-warn";
+      why.textContent = "没下发：" + e.message;
+      card.appendChild(why);
+    }
+  }
+}
+
+/* 令的执行情况：问「上次那个指示怎么样了」时挂在答案下面。
+   数字全部来自台账派生（签收/办结/逾期），这里只负责摆整齐。 */
+function dirRowsBlock(r) {
+  const rows = (r && r.directive_rows) || [];
+  if (!rows.length) return "";
+  const body = rows.map((d) => {
+    const chips = (d.tasks || []).map((t) => {
+      const cls = t.risk === "逾期" ? "d-diff" : (t.status === "已办结" ? "d-same" : "");
+      return `<span class="${cls}">${esc(t.title)}｜${esc(t.assignee)}｜${esc(t.status)}</span>`;
+    }).join("");
+    return `<div style="margin-top:7px">
+      <div class="mp-meta"><b>${esc(d.id)}</b> · ${esc(d.from_name || "")} · ${esc(String(d.issued_at || "").slice(0, 10))}
+        · 交办 ${d.total}／签收 ${d.signed}／办结 ${d.closed}／逾期 ${d.overdue}</div>
+      <div class="dir-ids">${chips}</div>
+    </div>`;
+  }).join("");
+  return `<div class="mp-card" data-dirpair="1">
+    <div class="mp-head"><b>指示执行情况</b><span class="mp-tag">台账实时</span></div>
+    ${body}
+  </div>`;
+}
+
+
 async function commitMeet(card) {
   const pick = (k) => {
     const el = card.querySelector(`[data-mpf="${k}"]`);
@@ -3937,24 +4158,66 @@ function aiBubble(r, ref) {
   //   refs 是空数组     → 查了，本域内确实没有；此时参谋只凭方向信号说话
   //   refs 不存在       → 改版前落库的老消息，那时候根本没接知识库，什么都不显示
   // 把后两者混成一句「暂无记录」，等于给旧数据编了一个它没做过的检索。
-  const evs = (r.expert_views || []).map((v) => {
+  const evList = r.expert_views || [];
+  const evCards = evList.map((v) => {
     const hasRefs = Array.isArray(v.refs);
     const refItems = (v.refs || []).map((x) => {
-      const jump = x.ref && (x.ref.type === "oversight" || x.ref.type === "meeting");
-      const key = jump ? `${x.ref.type}:${x.ref.id}` : "";
-      return `<span class="ev-ref${jump ? " link" : ""}"${jump ? ` data-kbref="${esc(key)}"` : ""}>${esc(x.kind_label || "记录")}「${esc(x.title || "")}」</span>`;
+      const ref = x.ref || {};
+      let key = "";
+      if (ref.type === "doc" && ref.kb_id) {
+        // 政策原文跳知识库的文档阅读视图，和台账/会议走同一个委托入口
+        key = `doc:${ref.kb_id}:${ref.id}`;
+      } else if (ref.type === "oversight" || ref.type === "meeting") {
+        key = `${ref.type}:${ref.id}`;
+      }
+      const titleAttr = ref.type === "doc" ? ` data-kbtitle="${esc(x.title || "")}"` : "";
+      return `<span class="ev-ref${key ? " link" : ""}"${key ? ` data-kbref="${esc(key)}"${titleAttr}` : ""}>${esc(x.kind_label || "记录")}「${esc(x.title || "")}」</span>`;
     }).join("");
     const refLine = !hasRefs
       ? ""
       : `<div class="ev-refs">依据：${refItems || "本域内暂无记录，只按方向信号判断"}</div>`;
-    return `
-    <div class="ev ${v.ok ? "" : v.skipped ? "skip" : "off"}">
+    return {
+      id: v.id,
+      ok: !!v.ok,
+      skipped: !!v.skipped,
+      html: `
+    <div class="ev ${v.ok ? "" : v.skipped ? "skip" : "off"}${v.id === "chief" ? " chief" : ""}">
       <div class="ev-head"><i>${esc(v.avatar)}</i><b>${esc(v.name)}</b><span>${esc(v.focus)}</span></div>
       <p>${esc(v.ok ? v.text : v.why || "未给出解读")}</p>
+      ${v.note ? `<div class="ev-note">${esc(v.note)}</div>` : ""}
       ${refLine}
-    </div>`;
-  }).join("");
-  const evBlock = evs ? `<div class="ev-wrap">${evs}</div>` : "";
+    </div>`,
+    };
+  });
+  // 7 段并排，结论反而被埋了。收口卡提到最前，其余收在一次点击之后：
+  // 先看结论，要追「他凭什么这么说」再展开。
+  //
+  // 注意折叠的只是**显示**，分管参谋照样要调 —— 收口那段话的依据就是他们的原话，
+  // 不调他们就等于让总参谋把同一份数值再猜一遍，那正是这一轮要修的问题。省下的
+  // 只是屏幕高度，不是模型调用。
+  //
+  // 门槛用「超过 3 张」：团模式本来就 3 张，铺开看得过来，不必多一次点击。
+  const chiefCard = evCards.find((c) => c.id === "chief" && c.ok);
+  const restCards = evCards.filter((c) => c !== chiefCard);
+  const nSkip = evCards.filter((c) => c.skipped).length;
+  const nSpoke = evCards.length - nSkip;
+  let evBody;
+  if (chiefCard && evCards.length > 3) {
+    const label = `另 ${restCards.length} 位参谋的原始意见（${nSpoke - 1} 位发言${
+      nSkip ? `，${nSkip} 位未涉其域` : ""
+    }）`;
+    evBody = `${chiefCard.html}
+      <div class="ev-fold" data-evfold data-label="${esc(label)}">${esc(label)} · 展开</div>
+      <div class="ev-rest" hidden>${restCards.map((c) => c.html).join("")}</div>`;
+  } else {
+    // 沉默也是信息。铺开时把汇总放顶上，写明「几位没发言」，等于告诉市长：
+    // 这件事只压在一个板块上，不是系统在凑数。
+    const evSum = evCards.length > 1 && nSkip
+      ? `<div class="ev-sum">本轮 ${nSpoke} 位作出解读，${nSkip} 位未涉其域</div>`
+      : "";
+    evBody = `${evSum}${evCards.map((c) => c.html).join("")}`;
+  }
+  const evBlock = evCards.length ? `<div class="ev-wrap">${evBody}</div>` : "";
 
   const traceItems = (r.trace || []).map((t) => `
     <div class="t"><b>${t.step}. ${esc(t.tool)}</b> · <code>${esc(t.status)}</code><br>${esc(t.summary)}</div>`).join("");
@@ -4037,6 +4300,8 @@ function aiBubble(r, ref) {
       ${chartBlock}
       ${meetBlock(r.meet_draft, ref)}
       ${propBlocks(r, ref)}
+      ${dirBlock(r, ref)}
+      ${dirRowsBlock(r)}
       ${docBlock(r.doc_draft, ref)}
       ${kbBlock(r.knowledge)}
       ${ragBlock(r.rag)}
@@ -4138,7 +4403,7 @@ function degText(d) {
    专家不取数：数值仍由后端按指标接口拼，专家只在答案之上补一段「怎么看」，
    而且那段被要求不含任何数字 —— 含数字整段丢弃（规则在 core/experts.py）。
    所以这里选了谁，只影响"多几段解读"，不影响数字从哪来。 */
-const EXP = { list: [], cur: null, max: 3, ready: false };
+const EXP = { list: [], cur: null, max: 3, ready: false, kb: {}, bases: [] };
 // cur：null = 没选人（什么都不显示）；"__all" = 参谋团；否则是某位专家的 id。
 // 一次只可能有一位「对话中」—— 专家是对话角色，不是一排筛选项。
 
@@ -4167,9 +4432,15 @@ async function loadExperts() {
     }
     EXP.max = (d && d.max) || 6;
     EXP.ready = !!(d && d.model_ready);
+    // 域内条数 + 可绑的分类库：专家面板要显示「这位参谋现在能读到什么」，
+    // 否则改完域只能靠问一句「本域内无记录」来猜配没配对。
+    EXP.kb = (d && d.knowledge) || {};
+    EXP.bases = (d && Array.isArray(d.bases)) ? d.bases : [];
   } catch {
     EXP.list = EXP_FIX.slice();
     EXP.max = 6;
+    EXP.kb = {};
+    EXP.bases = [];
   }
   // 名单变了而当前这位不在了（后端删了角色），退回没人，别留个空名字
   if (EXP.cur && EXP.cur !== "__all" && !EXP.list.some((e) => e.id === EXP.cur)) EXP.cur = null;
@@ -4182,6 +4453,17 @@ function currentExperts() {
   if (!EXP.cur) return [];
   if (EXP.cur === "__all") return EXP.list.slice(0, EXP.max).map((e) => e.id);
   return [EXP.cur];
+}
+
+/* 模式标记。后端靠它决定给不给交办（拟办 / 查指示）的两条工具 ——
+   团模式固定带前 3 位参谋，跟「手动选了 3 位」在后端长得一样的，
+   所以不能靠 experts 的长度反推，必须显式说。
+   "chief" 是第三种：单选总参谋时后端会展开成全部分管参谋 + 它自己收口。
+   它**不是** team —— 总参谋不接派活，交办权仍然只在秘书团。 */
+function currentExpertMode() {
+  if (!EXP.cur) return "none";
+  if (EXP.cur === "__all") return "team";
+  return EXP.cur === "chief" ? "chief" : "single";
 }
 
 function renderExpertSelect() {
@@ -4213,7 +4495,7 @@ function renderExpertSelect() {
     bar.title = EXP.cur === "__all"
       ? "当前：AI秘书团 · 点开可更换，或选「不使用参谋」取消"
       : cur
-        ? `当前参谋：${cur.name} · 点开可更换，或选「不使用参谋」取消`
+        ? `当前参谋：${cur.name} · 只解读不派活；要拟办交办请切到 AI秘书团 · 点开可更换`
         : "点开选择参谋；不选就是直接问数";
   }
 
@@ -4239,7 +4521,7 @@ function renderExpertSelect() {
     // 参谋团：名单多于 1 位就出现。一次会诊最多叫 max 位（与后端 MAX_PER_CALL 同源），
     // 点下去会把前 max 位一起叫上，文案里写清楚，别让用户以为叫了全组却只回了几个。
     (EXP.list.length > 1
-      ? item("__all", "团", "AI秘书团", hintOf("__all", `一次最多 ${EXP.max} 位参谋一起看，并邀请政府办公室协助`), EXP.cur === "__all", "sep", "邀请政府办公室进一步协助")
+      ? item("__all", "团", "AI秘书团", hintOf("__all", `一次最多 ${EXP.max} 位参谋一起看，并邀请政府办公室协助；拟办、往下派活只有秘书团能做`), EXP.cur === "__all", "sep", "邀请政府办公室进一步协助")
       : "");
 }
 
@@ -4287,7 +4569,7 @@ function slashItems() {
   }));
   // 参谋团跟下拉保持同一条闸：名单多于 1 位就列，一次最多叫 max 位
   if (EXP.list.length > 1) {
-    all.push({ id: "__all", avatar: "团", name: "AI秘书团", hint: `一次最多 ${EXP.max} 位参谋一起看，并邀请政府办公室协助`, kind: "expert" });
+    all.push({ id: "__all", avatar: "团", name: "AI秘书团", hint: `一次最多 ${EXP.max} 位参谋一起看，并邀请政府办公室协助；拟办、往下派活只有秘书团能做`, kind: "expert" });
   }
   // 已经叫了人才多一条「不使用参谋」：选中它 = 回到空白。下拉第一行是同一个出口，
   // 两条入口不能只修一条 —— 用户从斜杠进来时也会遇到「不想用却退不出去」。
@@ -4723,6 +5005,7 @@ async function ask(question, opts = {}) {
         question,
         thread_id: THREAD,
         experts: currentExperts(),
+        expert_mode: currentExpertMode(),
         // 参考材料。后端只把它当 planner 的背景，不进指标取值 ——
         // 界面和导出都据此标注「参考了哪些附件」
         attachments: atts,
@@ -4857,7 +5140,10 @@ function copyBubble(el) {
   const body = holder && holder.querySelector(".ai-body");
   if (!body) return;
   const clone = body.cloneNode(true);
-  clone.querySelectorAll(".trace, .trace-fold, .ai-usage, .fail-ops").forEach((n) => n.remove());
+  // 折叠条也是界面元件：复制出来一句「另 6 位参谋的原始意见 · 展开」，粘到汇报
+  // 材料里等于一句没人看得懂的残句。折着的卡片本来就不进 innerText（hidden），
+  // 展开过的照原样带上 —— 所见即所得。
+  clone.querySelectorAll(".trace, .trace-fold, .ai-usage, .fail-ops, .ev-fold").forEach((n) => n.remove());
   const text = (clone.innerText || "").trim();
   if (!text) return;
   copyText(text).then(
@@ -5005,8 +5291,14 @@ function answerMd(r, question, stamp) {
   const evs = r.expert_views || [];
   if (evs.length) {
     L.push("**专家解读**", "");
+    // 导出件会进汇报材料。缺了这行，收件人看到 6 位里只有 2 位有内容，
+    // 会以为另外 4 位是漏了，进而怀疑整段解读不完整。
+    const evSkip = evs.filter((v) => v.skipped).length;
+    if (evSkip) L.push(`> 本轮 ${evs.length - evSkip} 位作出解读，${evSkip} 位未涉其域。`, "");
     evs.forEach((v) => {
       L.push(`- **${v.name || ""}**（${v.focus || ""}）：${v.ok ? v.text : (v.why || "未给出解读")}`);
+      // 逐句剔除过的要留痕：导出的稿子里不能把一段残缺的解读当成完整的
+      if (v.note) L.push(`  - 注：${v.note}`);
       // 依据要跟着导出走：材料一旦离开这个页面，"他凭什么这么说"就再也查不到了，
       // 而这份 Markdown 是要拿去写汇报的，比屏幕上的一次性阅读更需要出处。
       const rf = (v.refs || []).map((x) => `${x.kind_label || "记录"}「${x.title || ""}」`).join("、");
@@ -5200,7 +5492,7 @@ function renderUsageFoot() {
   el.title = THREAD_TOKENS ? "本会话所有轮次的模型用量合计（含失败调用）" : "";
 }
 
-const INTENT_CN = { value: "取值", trend: "走势", breakdown: "分解", compare: "对比", definition: "口径", knowledge: "依据", meet: "约会议", rag: "资料", harness: "插件" };
+const INTENT_CN = { value: "取值", trend: "走势", breakdown: "分解", compare: "对比", definition: "口径", knowledge: "依据", meet: "约会议", rag: "资料", harness: "插件", directive: "交办" };
 function intentLabel(i) { return INTENT_CN[i] || i || "—"; }
 
 /* 后端给的错误码 → 人话。原样抛 "empty_question" 等于没解释。 */
@@ -5303,6 +5595,14 @@ function historyView(m, threadId) {
     // 回看时几乎必然过期），公文草稿仍然可导出——导的是当时那一份。
     proposals: meta.proposals || [],
     doc_draft: meta.doc_draft || null,
+    // 拟办卡与执行情况同理：刷新后卡没了，正文字还写着「点下发才进台账」，
+    // 用户会以为系统把那句话吞了。回放时卡变只读，不给下发按钮。
+    directive_draft: meta.directive_draft || null,
+    directive_rows: meta.directive_rows || [],
+    // 这句话派生出的令。有它，回放的卡直接显示「已下发 ZS…」；
+    // 没有（在这条链接做出来之前发的）才退回按原文匹配。
+    directive_id: meta.directive_id || "",
+    directive_items: meta.directive_items || [],
     __history: true,
     planner: meta.planner,
     // 降级提示要跟着回放：刷新后答案还在、提示没了，等于让人以为这就是模型给的
@@ -5936,6 +6236,22 @@ function renderExpertsModal() {
   const list = EXPERTS_DRAFT;
 
   const cards = list.map((e, i) => {
+    const dom = e.domain || {};
+    const kc = (EXP.kb || {})[e.id] || null;
+    const bound = Array.isArray(dom.bases) ? dom.bases : [];
+    const cnt = (kc && kc.counts) || {};
+    // 域内条数：口径/督办/会议分开写。合成一个总数看不出「配了域但一条记录都没有」，
+    // 而那正是最需要发现的一种错配。
+    const kbLine = kc
+      ? `域内可读 <b>${kc.total}</b> 条（口径 ${cnt.metric || 0} · 督办 ${cnt.oversight || 0} · 会议 ${(cnt.meeting || 0) + (cnt.decision || 0)}）` +
+        (kc.docs ? ` · 政策原文 <b>${kc.docs}</b> 篇` : "")
+      : "域内条数保存后显示";
+    // 绑了但库里找不到的库名要显式报出来：不然只是「参谋突然不引政策了」，
+    // 看不出是库被改名/删掉了。
+    const missing = (kc && kc.missing) || [];
+    const baseList = (EXP.bases || []).length
+      ? (EXP.bases || []).map((b) => `<label class="exp-base"><input type="checkbox" data-exp-base="${esc(b.name)}"${bound.includes(b.name) ? " checked" : ""}><span>${esc(b.name)}</span><i>${b.doc_count} 篇</i></label>`).join("")
+      : `<span class="hint" style="margin:0">还没有上传分类库（知识库 → 上传入库）</span>`;
     return `<div class="exp-card" data-exp-i="${i}">
       <div class="exp-card-top">
         <div class="who">
@@ -5947,6 +6263,7 @@ function renderExpertsModal() {
         </div>
         <button class="exp-del" data-exp-del="${i}" title="删除">✕</button>
       </div>
+      <div class="exp-kbline">${kbLine}${missing.length ? ` · <em>库「${esc(missing.join("、"))}」已不存在</em>` : ""}</div>
       <div class="exp-fields">
         <div class="exp-field">
           <label>名字</label>
@@ -5968,6 +6285,18 @@ function renderExpertsModal() {
           <label>看问题方式（angle）</label>
           <textarea data-exp-f="angle">${esc(e.angle || "")}</textarea>
         </div>
+        <div class="exp-field">
+          <label>指标代码（决定读哪些口径，逗号分隔）</label>
+          <input data-exp-f="domain.codes" value="${esc((dom.codes || []).join(", "))}" placeholder="GY_VA_GROWTH, GDP_TOTAL">
+        </div>
+        <div class="exp-field">
+          <label>责任单位（决定读哪些督办/会议，逗号分隔）</label>
+          <input data-exp-f="domain.units" value="${esc((dom.units || []).join(", "))}" placeholder="市统计局, 市财政局">
+        </div>
+        <div class="exp-field">
+          <label>政策库（决定读哪些上传原文）</label>
+          <div class="exp-bases">${baseList}</div>
+        </div>
       </div>
     </div>`;
   }).join("");
@@ -5982,12 +6311,38 @@ function renderExpertsModal() {
       <button class="mini primary" id="expSave">保存</button>
     </div>`;
 
-  // 编辑即回写草稿
+  // 编辑即回写草稿。domain 是嵌套字段（codes/units/bases），不能直接
+  // `draft[field] = value` —— 那样会写出一个叫 "domain.codes" 的键，
+  // 保存时 domain 还是旧的，面板上改了却一点没生效。
+  const applyExpField = (i, field, value) => {
+    const e = EXPERTS_DRAFT[i];
+    if (!e) return;
+    if (field.startsWith("domain.")) {
+      const key = field.slice("domain.".length);
+      const dom = e.domain || (e.domain = { codes: [], units: [], bases: [] });
+      dom[key] = String(value).split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+      return;
+    }
+    e[field] = value;
+  };
   document.querySelectorAll("[data-exp-f]").forEach((inp) => {
     inp.oninput = () => {
       const i = Number(inp.closest("[data-exp-i]").dataset.expI);
-      const field = inp.dataset.expF;
-      if (EXPERTS_DRAFT[i]) EXPERTS_DRAFT[i][field] = inp.value;
+      applyExpField(i, inp.dataset.expF, inp.value);
+    };
+  });
+  // 分类库是多选，单独接：勾/取消只改 domain.bases，不动另外两个字段
+  document.querySelectorAll("[data-exp-base]").forEach((box) => {
+    box.onchange = () => {
+      const i = Number(box.closest("[data-exp-i]").dataset.expI);
+      const e = EXPERTS_DRAFT[i];
+      if (!e) return;
+      const dom = e.domain || (e.domain = { codes: [], units: [], bases: [] });
+      const list = Array.isArray(dom.bases) ? dom.bases.slice() : [];
+      const name = box.dataset.expBase;
+      dom.bases = box.checked
+        ? (list.includes(name) ? list : list.concat(name))
+        : list.filter((x) => x !== name);
     };
   });
 
@@ -6008,13 +6363,25 @@ function renderExpertsModal() {
 
   // 保存
   $("#expSave").onclick = async () => {
-    // 从当前 DOM 再收集一次，确保最新
+    // 从当前 DOM 再收集一次，确保最新（domain.* 走同一套嵌套赋值）
     document.querySelectorAll(".exp-card").forEach((card) => {
       const i = Number(card.dataset.expI);
       card.querySelectorAll("[data-exp-f]").forEach((inp) => {
-        EXPERTS_DRAFT[i][inp.dataset.expF] = inp.value;
+        applyExpField(i, inp.dataset.expF, inp.value);
       });
     });
+    // 本来有域、被清成全空 → 拦下来。后端对「domain 全空」的处理是**删域**，
+    // 而删域的后果是这位参谋退回「什么都读」（in_domain(None) 直通全域），
+    // 界面上完全看不出来，只会觉得他忽然开始乱引用别人的事。
+    for (const e of EXPERTS_DRAFT) {
+      const before = ((EXP.list.find((x) => x.id === e.id) || {}).domain) || {};
+      const after = e.domain || {};
+      const n = (x) => (x.codes || []).length + (x.units || []).length + (x.bases || []).length;
+      if (n(before) > 0 && n(after) === 0) {
+        toast(`「${e.name || e.id}」的知识域被清空了：至少留一个指标代码、责任单位或政策库`);
+        return;
+      }
+    }
     try {
       const d = await (await fetch("/api/experts", {
         method: "POST", headers: authHeaders(),
@@ -6022,6 +6389,8 @@ function renderExpertsModal() {
       })).json();
       if (!d.ok) throw new Error(d.error || "保存失败");
       EXP.list = d.experts || EXPERTS_DRAFT;
+      EXP.kb = d.knowledge || EXP.kb;
+      EXP.bases = d.bases || EXP.bases;
       EXPERTS_DRAFT = JSON.parse(JSON.stringify(EXP.list));
       // 当前选中角色被删了就退回
       if (EXP.cur && EXP.cur !== "__all" && !EXP.list.some((x) => x.id === EXP.cur)) EXP.cur = null;
@@ -6269,6 +6638,21 @@ function bindFold(scope) {
       const t = el.nextElementSibling;
       const open = t.classList.toggle("open");
       el.textContent = open ? "收起调用链路" : "展开调用链路";
+    };
+  });
+  // 参谋解读的折叠条。不写死文案：展开前那句里带着「几位发言、几位未涉其域」，
+  // 展开后这些信息已经变成看得见的卡片，再留着就是重复。
+  (scope.querySelectorAll ? scope.querySelectorAll("[data-evfold]") : []).forEach((el) => {
+    el.onclick = () => {
+      const t = el.nextElementSibling;
+      const label = el.dataset.label || "";
+      if (t.hasAttribute("hidden")) {
+        t.removeAttribute("hidden");
+        el.textContent = "收起参谋原始意见";
+      } else {
+        t.setAttribute("hidden", "");
+        el.textContent = `${label} · 展开`;
+      }
     };
   });
 }
@@ -10315,6 +10699,16 @@ const KB_KINDS = [
 const KB = { items: [], counts: {}, kind: "", q: "", sel: "", pane: "", timer: 0, searching: false };
 const kbKey = (it) => `${it.kind}|${it.id}`;
 
+/* 从参谋依据点开一篇政策原文：先记下来，等 loadKb 拉完目录再画阅读视图。
+   不记的话，openKbModal 里那次异步 loadKb 回来会把「正在打开的文档」顶成
+   清单第一项 —— 表现是点了没反应，其实被顶掉了。 */
+let KB_PENDING_DOC = null;
+function openKbDoc(kbId, docId, title) {
+  if (!kbId || !docId) return;
+  KB_PENDING_DOC = { kind: "doc", id: docId, title: title || "政策原文", ref: { type: "rag", kb_id: kbId } };
+  openKbModal();
+}
+
 function openKbModal() {
   $("#kbModal").classList.add("on");
   // 每次打开都回到清单：上次停在上传面板是上一次的事
@@ -10350,6 +10744,13 @@ async function loadKb(opts = {}) {
   KB.searching = !!(d.query || "").trim();
   renderKbChips();
   renderKbList();
+  // 从参谋依据点进来的那一篇：目录已经拉回来了，这边直接落到阅读视图
+  if (KB_PENDING_DOC) {
+    const it = KB_PENDING_DOC;
+    KB_PENDING_DOC = null;
+    renderDocPreview(it);
+    return;
+  }
   // 上传/建库/删库之后只刷新目录和计数，右边要留在上传面板上：
   // 每建一个库就被踢回某篇原文，会让人以为自己点错了。
   if (opts.keepMain || KB.pane === "upload") return;
@@ -10741,6 +11142,14 @@ function kbHl(text, q) {
 }
 
 /* ---------- 事件 ---------- */
+// 拟办卡的空字段补上就撤红框。不等到下发才判断 —— 边填边消，用户才知道自己补对了。
+document.addEventListener("input", (e) => {
+  const el = e.target;
+  if (el && el.matches && el.matches("[data-dirf]") && String(el.value || "").trim()) {
+    el.classList.remove("need");
+  }
+});
+
 document.addEventListener("click", (e) => {
   // 点别处先收起身份菜单（菜单项自己也在 document 上，收起不影响下面的读取）
   if (!e.target.closest("#idMenu") && !e.target.closest("#avatar")) $("#idMenu").hidden = true;
@@ -10867,6 +11276,18 @@ document.addEventListener("click", (e) => {
     }).catch(() => {});
     return;
   }
+  // 指示拟办卡：下发/放弃。排在别的委托前面 —— 卡在答案气泡里，别被外层接走。
+  const dirGo = e.target.closest("[data-dirgo]");
+  if (dirGo) return issueDirective(dirGo.closest("[data-dir]"));
+  const dirDrop = e.target.closest("[data-dirdrop]");
+  if (dirDrop) {
+    const card = dirDrop.closest("[data-dir]");
+    const gone = document.createElement("div");
+    gone.className = "mp-dropped";
+    gone.textContent = "已放弃这张拟办，什么都没有写入。";
+    card.replaceWith(gone);
+    return;
+  }
   // 建会草稿卡的按钮同理：卡在答案气泡里，别让别的委托接走
   const mpGo = e.target.closest("[data-mpgo]");
   if (mpGo) return commitMeet(mpGo.closest("[data-mp]"));
@@ -10986,6 +11407,8 @@ document.addEventListener("click", (e) => {
     // 单独调它会出现「点了没反应」——页面上什么都没变，其实数据已经取回来了
     if (type === "oversight") return openOversight(id);
     if (type === "meeting") return openMeetModal(id);
+    // 参谋依据里的政策原文：key 是 doc:<库 id>:<文档 id>，rest 两段都要
+    if (type === "doc") return openKbDoc(rest[0], rest[1], kbref.dataset.kbtitle || "");
     return;
   }
 

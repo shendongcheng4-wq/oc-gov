@@ -308,13 +308,30 @@ def _oversight_entries(person: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+_NO_MINUTES = "（已排期，纪要未出；本条只有会议名称与参会单位）"
+
+
+def _meeting_body(full: dict[str, Any]) -> str:
+    """会议条目的正文。
+
+    已排期、纪要还没出的会也要成条：会议名、主持、参会单位都是真信息，
+    参谋说「下周有这个会」用得上。但正文不能是空串 —— 空的原文摘录进了
+    参谋依据就是一行「（市生态环境局）：」，模型会以为自己看到了什么，
+    用户也分不清是「还没写」还是「没读到」。
+    """
+    text = str(full.get("text") or "").strip()
+    if text or (full.get("items") or []):
+        return text
+    return _NO_MINUTES
+
+
 def _meeting_entries(person: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
     for brief in ledger.list_meetings():
         full = ledger.get(brief["id"]) or {}
         if not schedule.meeting_visible(full, person):
             continue
-        text = str(full.get("text") or "")
+        text = _meeting_body(full)
         rows.append(
             {
                 "kind": "meeting",
@@ -447,15 +464,19 @@ def in_domain(entry: dict[str, Any], domain: dict[str, Any] | None) -> bool:
     两个域各引一半，又回到「同一场会两个说法」的老问题上。
     事项/会议条目按**责任单位**归属，因为它们本来就不按指标分类。
 
-    域为空表示不限，但这只是给外部调用留的兜底 —— `EXPERTS` 里每位都必须写
-    domain，参谋团没有「全域参谋」这种角色。
+    `domain` 传 None 表示不限，但这只是给外部调用留的兜底 —— `EXPERTS` 里
+    每位都必须写 domain，参谋团没有「全域参谋」这种角色。
+
+    **只挂了分类库（bases）的域，一条系统记录都不读**：这种域的意思是
+    「只读政策原文」。早先空 codes+units 会落到「不限」，结果是给一位
+    只挂库的参谋悄悄放开了全域记录 —— 比读不到更糟，且完全看不出来。
     """
     if not domain:
         return True
     codes = set(domain.get("codes") or ())
     units = set(domain.get("units") or ())
     if not codes and not units:
-        return True
+        return False
     if entry.get("kind") == "metric":
         return entry.get("id") in codes
     # 事项和会议都可能挂多个单位：督办有协办，会议有参会方。只看主办单位的话，
