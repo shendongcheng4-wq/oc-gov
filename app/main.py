@@ -90,6 +90,7 @@ import notice as meeting_notice  # noqa: E402
 import llm  # noqa: E402
 import llmclient  # noqa: E402
 import memory as memory_mod  # noqa: E402
+import materials as materials_mod  # noqa: E402
 import mockdata as md  # noqa: E402
 import modelcfg  # noqa: E402
 import polish as polish_mod  # noqa: E402
@@ -149,10 +150,10 @@ def _harness_fallback(question: str, result: dict, atts: list | None = None) -> 
     保持原拒答结果不变。HarnessAgent 是异步的，这里用 asyncio.run 在请求线程
     里起一个独立事件循环跑（ThreadingHTTPServer 每请求一线程，互不干扰）。
 
-    **带了上传材料就不走这条。** HarnessAgent 那条路没有 compare_material、
-    也拿不到材料正文（`harness.ask` 只收一个问题字符串），它给出的答案会和用户
-    手里那份文件无关，甚至相反 —— 而用户看到的是一个正常回答，以为系统读过文件。
-    宁可保留「没查到」这句实话。要它也能对照，得先把材料接进 harness，那是另一件事。
+    **带了材料就不走这条**（含本会话早前挂着的、标了 `archived` 的那几份）。
+    HarnessAgent 那条路没有 compare_material、也拿不到材料正文（`harness.ask`
+    只收一个问题字符串），它给出的答案会和用户手里那份文件无关，甚至相反 ——
+    而用户看到的是一个正常回答，以为系统读过文件。宁可保留「没查到」这句实话。要它也能对照，得先把材料接进 harness，那是另一件事。
     """
     if atts:
         return None
@@ -302,6 +303,139 @@ def turn_close(turn_id: str) -> None:
             turn["ts"] = time.time()
 
 
+# ── 阶段流水（落库，供回放） ──────────────────────────────────────────────
+#
+# 阶段提示以前只活在 socket 里：前端 `stage()` 写一行字，下一行把它顶掉，刷新之后
+# 一个字都不剩。用户能看到的只有答案，「这一轮到底做了什么」全靠回忆 —— 而事后
+# 被问起的偏偏是后者（这份答案是查了指标还是查了台账？参谋到底发没发言？）。
+#
+# 所以每条阶段事件顺手收一条流水，随 done 一起落进 `meta.steps`。四条规矩：
+#
+# - **只收用户看得懂的阶段**（plan / experts / rewrite / tool），不收 start/done：
+#   那两个是传输层的事（连上了、算完了），对读历史的人没有信息量。
+# - **存事件，不存文案**。文案在 `_step_extra` 里都只挑字段，中文由前端
+#   `stepText()` 一处生成 —— 后端也拼一份的话，实时和回放看到的措辞迟早不一样，
+#   而「同一轮在两种视图里说法不同」比缺这个功能更糟。
+# - **`t` 是相对这一轮开始的毫秒偏移**，`ms` 由 phase=end 补齐。绝对时间戳对回放
+#   没用（看不出先后间隔），偏移才看得出「解析花了 1 秒、参谋花了 6 秒」。
+# - **不进模型上下文**：`chat.context()` 只回灌 content，这份 meta 只有界面读。
+#
+# 体积：一轮最多 _STEP_MAX 条，每条几十字节，几 KB 封顶。
+_STEP_KINDS = ("plan", "experts", "rewrite", "tool")
+_STEP_MAX = 40          # 一轮最多记这么多条；再多说明有循环在刷，不该撑进会话文件
+_STEP_NAMES = 4         # plan 事件里的指标名只留前几个，其余前端写「等 N 个」
+
+
+def _step_extra(kind: str, ev: dict) -> dict:
+    """挑该阶段要回放的那几个字段。
+
+    白名单而不是整包塞进去：事件里还带着完整降级对象、期次明细这类东西，
+    几十条累计下来体积翻倍，而界面上一个都不显示。
+    """
+    if kind == "plan":
+        x: dict = {
+            "planner": str(ev.get("planner") or ""),
+            "intent": str(ev.get("intent") or ""),
+            "names": [str(n) for n in (ev.get("names") or [])[:_STEP_NAMES] if n],
+        }
+        # 降级只留 kind（rules / fallback），前端据此写「规则解析」「备用模型」
+        dg = ev.get("degraded")
+        if isinstance(dg, dict) and dg.get("kind"):
+            x["dg"] = str(dg["kind"])
+        return x
+    if kind == "experts":
+        x = {"name": str(ev.get("name") or "")}
+        if ev.get("index") is not None:
+            x["index"] = int(ev.get("index") or 0)
+            x["total"] = int(ev.get("total") or 0)
+        return x
+    if kind == "tool":
+        return {"name": str(ev.get("name") or "")}
+    return {}
+
+
+class StepLog:
+    """把一轮的阶段事件收成可落库的流水。只在单轮内使用，不加锁。
+
+    start / end 按 `(kind, name)` 配对：同一个工具连查两次是两条，不是一条被
+    覆盖 —— 用户点开「处理过程」看到的应该是「查了两次」，而不是「查了一次」。
+    """
+
+    def __init__(self) -> None:
+        self._t0 = time.monotonic()
+        self.items: list[dict] = []
+        self._open: dict[tuple[str, str], int] = {}
+
+    def _ms(self) -> int:
+        return int((time.monotonic() - self._t0) * 1000)
+
+    def close_open(self, *, cut: bool = False) -> None:
+        """把还开着的步骤收尾。
+
+        两种场景都要收：正常出结果时兜底（某个工具抛异常没发 end、事件丢了），
+        以及用户点停止。`cut` 让前端写「已中断」而不是「进行中」—— 一轮已经结束
+        了还挂着一行「进行中」，回看的人会以为系统卡在那儿。
+        """
+        now = self._ms()
+        for idx in self._open.values():
+            item = self.items[idx]
+            item["ms"] = max(0, now - int(item["t"]))
+            if cut:
+                item["cut"] = True
+        self._open.clear()
+
+    def feed(self, ev: dict) -> None:
+        kind = str(ev.get("type") or "")
+        if kind not in _STEP_KINDS or len(self.items) >= _STEP_MAX:
+            return
+        now = self._ms()
+        key = (kind, str(ev.get("name") or ""))
+        phase = ev.get("phase")
+        if phase == "start":
+            self._open[key] = len(self.items)
+            self.items.append({"k": kind, "t": now, "x": _step_extra(kind, ev)})
+        elif phase == "end":
+            idx = self._open.pop(key, None)
+            if idx is None:
+                # 没有配对的 start（事件丢了、或者这一条本来就是别的路径发的）。
+                # 照样记下来：丢掉等于让回放少一步，而丢的那步恰好可能是有问题的那步。
+                item = {"k": kind, "t": now, "ms": 0, "x": _step_extra(kind, ev)}
+            else:
+                item = self.items[idx]
+                item["ms"] = max(0, now - int(item["t"]))
+                item["x"].update(_step_extra(kind, ev))
+            if "ok" in ev:
+                # ok 放条目顶层：前端判颜色只认这一个字段，不去 x 里翻
+                item["ok"] = bool(ev.get("ok"))
+            if idx is None:
+                self.items.append(item)
+        else:
+            # plan 这类一次性事件没有 phase。
+            #
+            # plan 到达 = 「意图已解析」，顺手把还开着的 rewrite 收掉：改写成功那条
+            # 路上后端不发 end（没有第二个事件可发，直接往下走命中结果），不收的
+            # 话回放里会永远挂着一行「进行中」—— 而它明明已经成功结束了。
+            if kind == "plan":
+                idx = self._open.pop(("rewrite", ""), None)
+                if idx is not None:
+                    item = self.items[idx]
+                    item["ms"] = max(0, now - int(item["t"]))
+                    item["ok"] = True
+            item = {"k": kind, "t": now, "x": _step_extra(kind, ev)}
+            if "ok" in ev:
+                item["ok"] = bool(ev.get("ok"))
+            self.items.append(item)
+
+
+def _step_pusher(log: StepLog):
+    """把 StepLog 包成 core 层要的 `on_step(name, data)` 回调。
+
+    core 那边发的是 `(name, data)` 两个参数，SSE 这边发的是 `{"type": name, **data}`
+    一个包 —— 两种形状之间的转换只写这一处，非流式那条路也能收同一份流水。
+    """
+    return lambda name, data=None: log.feed({"type": name, **(data or {})})
+
+
 def _wemeet_display(payload: object, fallback: str) -> str:
     """给人看的结果文本：有业务对象就格式化它，没有才退回原串。
 
@@ -421,7 +555,8 @@ WRITE_POLICY: tuple[tuple[str, str, str | None], ...] = (
     # ── 演示态放行（PUBLIC）──
     ("POST", r"/api/auth/login", None),          # 登录自己当然不能要求先登录
     ("POST", r"/api/auth/logout", None),         # 幂等，且过期 sid 也要能退
-    ("POST", r"/api/attachments/parse", None),   # 纯解析，不落盘
+    ("POST", r"/api/attachments/parse", None),   # 解析并入库，返回材料 id
+    ("POST", r"/api/materials", None),           # 纯文本材料入库（按 owner 隔离）
     ("POST", r"/api/ask", None),
     ("POST", r"/api/ask/stream", None),
     ("POST", r"/api/ask/cancel", None),          # handler 内按 turn 归属自查
@@ -434,6 +569,7 @@ WRITE_POLICY: tuple[tuple[str, str, str | None], ...] = (
     ("POST", r"/api/wenshu/docx", None),        # 只生成字节流
     ("POST", r"/api/wenshu/review", None),      # 只读：体例检查
     ("POST", r"/api/threads", None),
+    ("POST", r"/api/threads/[^/]+/pick", None),  # 换一版答案：只改 picks，不删消息
     ("POST", r"/api/workspace/(watch|follow|layout|feed-seen)", None),
     ("POST", r"/api/saved", None),
     ("POST", r"/api/notify/read", None),
@@ -499,15 +635,52 @@ def _match_policy(method: str, path: str) -> tuple[bool, str | None]:
     return False, None
 
 
-def _attachments(body: dict) -> list[dict]:
+def _att_meta(a: dict) -> dict:
+    """落库用的材料清单项。
+
+    带 id 是有用的：刷新之后会话里那一行「参考 N 份材料」还在，点开能看到
+    是哪几份、还能不能追问；更重要的是前端的芯片要靠 id 重建 —— 只留名字的话，
+    同一份文件改了两个数再传，两个芯片长得一模一样，用户分不出在说哪一份。
+    `archived` 也留着：回看历史时能看出「这轮用的是早前传的那份」。
+    """
+    out = {
+        "name": a.get("name"),
+        "chars": a.get("chars"),
+        "truncated": a.get("truncated"),
+    }
+    if a.get("id"):
+        out["id"] = a["id"]
+    if a.get("archived"):
+        out["archived"] = True
+    return out
+
+
+def _drop_materials(body: dict) -> list[str]:
+    """本轮要摘掉的材料 id（用户点了芯片上的 ✕）。
+
+    只是从会话清单上摘掉，材料本身留在库里 —— 别的会话可能还在用，而且用户
+    后悔了（切回来再点一次那份材料）不该需要重新上传一遍。
+    """
+    raw = body.get("drop_materials")
+    if not isinstance(raw, list):
+        return []
+    return [str(x).strip() for x in raw[:20] if str(x).strip()]
+
+
+def _attachments(body: dict, owner: str | None = None) -> list[dict]:
     """校验并裁剪前端送来的参考材料。
 
     前端已经按同样的额度截过一遍，这里仍然要再截一次：`/api/ask/stream` 是
     公开接口，curl 直接塞一个 200MB 的字符串进来，前端那层挡不住。
 
-    只留 name/text/chars/truncated。text 会进 planner 的 prompt，但**不进**
-    会话记录（落库只写清单）—— 否则一份一万多字的材料会被每一轮上下文重复
-    带一遍，几十轮之后光历史就能把 prompt 预算吃干净。
+    **每份材料都进材料库、带一个 id 出去**（`core/materials.py`）。这是这一版
+    最大的行为变化：以前材料只活一轮，追问「表里第 7 行」时后端手里已经没有了。
+    现在正文落盘一次，会话记 id，之后按 `archived` 标记每轮带上。
+
+    进来时有两种形状：
+    - 带 `id`：前端已经存过了（上传时存 / 或这份是本会话早前传的），只按 id 取正文，
+      请求体里那三万字的 text 就不必再传一遍；
+    - 只有 `text`：老的调用方式（curl、离线脚本、旧前端），就地存一份换 id。
     """
     raw = body.get("attachments")
     if not isinstance(raw, list):
@@ -517,7 +690,9 @@ def _attachments(body: dict) -> list[dict]:
     for item in raw[:_MAX_ATT_FILES]:
         if not isinstance(item, dict):
             continue
-        text = item.get("text")
+        mid = str(item.get("id") or "").strip()
+        stored = materials_mod.get(mid, owner=owner) if mid else None
+        text = (stored or {}).get("text") or item.get("text")
         if not isinstance(text, str) or not text.strip():
             continue
         room = _MAX_ATT_TOTAL - total
@@ -527,15 +702,25 @@ def _attachments(body: dict) -> list[dict]:
         cut = len(text) > cap
         text = text[:cap]
         total += len(text)
-        name = str(item.get("name") or "未命名").strip()[:120] or "未命名"
-        out.append(
-            {
-                "name": name,
-                "text": text,
-                "chars": len(text),
-                "truncated": bool(cut or item.get("truncated")),
-            }
-        )
+        name = str(item.get("name") or (stored or {}).get("name") or "未命名").strip()[:120]
+        name = name or "未命名"
+        rec = {
+            "name": name,
+            "text": text,
+            "chars": len(text),
+            "truncated": bool(cut or item.get("truncated") or (stored or {}).get("truncated")),
+        }
+        if stored:
+            rec["id"] = stored["id"]
+            rec["kind"] = stored.get("kind") or ""
+        else:
+            saved = materials_mod.save(
+                owner, name, text, kind=str(item.get("kind") or ""), truncated=rec["truncated"]
+            )
+            if saved.get("id"):
+                rec["id"] = saved["id"]
+                rec["kind"] = saved.get("kind") or ""
+        out.append(rec)
     return out
 
 
@@ -937,12 +1122,21 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 )
                 continue
+            text = str(out["text"] or "")
+            saved = materials_mod.save(
+                self._person(body), name, text, kind=str(out.get("kind") or ""),
+                truncated=bool(out.get("truncated")),
+            )
             items.append(
                 {
                     "name": name,
                     "ok": True,
+                    # 解析完就地入库：Office 文件离开原始字节就再也解析不出这份
+                    # 正文了，解析是唯一能存住它的时刻。前端拿着这个 id 之后
+                    # 每轮只发 id，不再把一万多字重复塞进请求体。
+                    "id": saved.get("id") or "",
                     "kind": out.get("kind") or "",
-                    "text": out["text"],
+                    "text": text,
                     "chars": out["chars"],
                     "truncated": out["truncated"],
                     "sheets": out.get("sheets") or [],
@@ -954,6 +1148,29 @@ class Handler(BaseHTTPRequestHandler):
                 }
             )
         self._json({"ok": True, "items": items})
+
+    def _materials_save(self, body: dict) -> None:
+        """把纯文本材料存进材料库，返回 id。
+
+        为什么要单独一个接口：txt / md / csv 是前端直接读的（要按 GBK 试解码，
+        服务端拿不到原始字节的解码意图），读完如果要等「发送」时才上传，那
+        用户删掉这份芯片、或者刷新页面，材料就没了 —— 上传那一刻入库，
+        芯片上才有一个稳定的身份。
+        """
+        name = str(body.get("name") or "未命名").strip()[:120] or "未命名"
+        text = body.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return self._json({"ok": False, "error": "材料是空的"}, 400)
+        if len(text) > _MAX_ATT_EACH:
+            text = text[: _MAX_ATT_EACH]
+        saved = materials_mod.save(
+            self._person(body), name, text, kind=str(body.get("kind") or "")
+        )
+        if not saved.get("id"):
+            return self._json({"ok": False, "error": "落盘失败"}, 500)
+        self._json(
+            {"ok": True, "id": saved["id"], "chars": saved.get("chars") or len(text)}
+        )
 
     # ---------------- GET ----------------
     def do_GET(self) -> None:
@@ -1348,8 +1565,22 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"ok": False, "error": "thread_not_found"}, 404)
                 # 回放时补「这张草稿卡已经建过会」——否则刷新后又变成可点按钮
                 meetplan_mod.annotate(thread["id"], thread.get("messages") or [])
+                # 本会话挂着的材料（元数据，不含正文）。前端靠它重建输入框上那一排
+                # 芯片 —— 刷新之后芯片凭空消失，用户就以为材料白传了，然后重传一遍。
+                mats = materials_mod.describe(
+                    thread.get("material_ids") or [], owner=self._person()
+                )
                 return self._json(
-                    {"ok": True, "thread": thread, "usage": chat.usage_total(thread)}
+                    {
+                        "ok": True,
+                        # 只回屏幕上该显示的那些：每条问句 + 它当前选中的那一版答案。
+                        # 同一问的其它几版仍在库里（切回去就还在），但一起发过去的话，
+                        # 界面要么把同一问画两遍，要么自己再实现一遍"选哪版"——
+                        # 两份选择逻辑必然走偏。多于两版时消息上带 alts={n,i}。
+                        "thread": {**thread, "messages": chat.visible(thread)},
+                        "usage": chat.usage_total(thread),
+                        "materials": mats,
+                    }
                 )
 
             # ---- 会议助手 ----
@@ -1432,6 +1663,9 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/attachments/parse":
                 return self._parse_attachments(body)
+
+            if path == "/api/materials":
+                return self._materials_save(body)
 
             if path == "/api/ask":
                 return self._ask(body)
@@ -1618,6 +1852,21 @@ class Handler(BaseHTTPRequestHandler):
                     owner=self._person(body),
                 )
                 return self._json({"ok": True, "thread": thread})
+
+            # ---- 会话：换一版答案 ----
+            # 同一问可以留几版（重答 / 重试都往后加一版），这里切换显示哪一版。
+            # 只换"用哪一版"，一条消息都不删 —— 用户看过的那版随时能切回来，
+            # 这是他敢去点「换一版」的前提。只允许最后一轮（core/chat.pick_answer）。
+            parts = _parts(path, "/api/threads/")
+            if len(parts) == 2 and parts[1] == "pick":
+                got = chat.pick_answer(
+                    parts[0], str(body.get("message_id") or ""), owner=self._person(body)
+                )
+                if not got:
+                    # 中间轮不给换（换了之后后面几轮就是照着另一版说的，整段历史
+                    # 自相矛盾），不是答案、不是这个人的会话，一律到这里。
+                    return self._json({"ok": False, "error": "answer_not_switchable"}, 404)
+                return self._json({"ok": True, **got})
 
             # ---- 个人工作台：关注列表整份替换 ----
             # 校验全在 core/people.set_watch 里，这里只把中文原因映射成 400。
@@ -2698,20 +2947,26 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(out)
 
     # ---------------- 问数 ----------------
-    def _prepare(self, body: dict) -> tuple[dict, list, str, dict, list]:
-        """建/取会话、取历史、落用户消息。返回 (thread, history, question, ctx, atts)。
+    def _prepare(self, body: dict) -> tuple[dict, list, str, dict, list, str | None]:
+        """建/取会话、取历史、落用户消息。
+
+        返回 `(thread, history, question, ctx, atts, reply_to)`。
 
         `ctx` 是本轮上下文的裁剪统计（总几轮、带了几轮、裁掉几轮）。它会一路
         传到回答的 meta 里 —— 界面必须把「哪几轮已经不在上下文」说出来。
-        `atts` 是本轮随问题带上来的参考材料（已裁剪），只喂 planner，不落库正文。
+        `atts` 是本轮随问题带上来的参考材料 + 本会话此前挂着的那几份（后者标
+        `archived`）。正文一律从材料库按 id 取，会话记录里只留 id 和清单。
+        `reply_to` 是这一版答案要挂到哪条问句上：新问句就是刚落的这条，重答
+        则是原来那条 —— 答案落库时带上它，同一问的几版才认得出来是一家。
         """
         question = str(body.get("question") or "").strip()
         if not question:
             raise ValueError("empty_question")
-        atts = _attachments(body)
+        owner = self._person(body)
+        atts = _attachments(body, owner=owner)
 
         thread = chat.ensure(
-            body.get("thread_id"), model_ref=body.get("model_ref"), owner=self._person(body)
+            body.get("thread_id"), model_ref=body.get("model_ref"), owner=owner
         )
 
         # 会话粘性：新会话先钉住当前默认模型，后续轮次沿用（对应 octop 的
@@ -2732,14 +2987,43 @@ class Handler(BaseHTTPRequestHandler):
         window = (conn or {}).get("context_window")
         system_text = llm.system_prompt_text()
 
+        # ── 材料：本轮新传的记进会话，往轮留下的跟着这一轮一起带上 ──
+        #
+        # 以前材料只活一轮：前端每轮把正文塞进请求体，落库只留文件名。用户传了
+        # 月报问「三季度累计」，答完；再问「表里第 7 行怎么算的」，这一轮手里
+        # 什么都没有，只能拒答。现在正文在材料库（core/materials.py）里按 id 取。
+        #
+        # 往轮材料标 `archived`：它要进模型上下文（不然追问翻不到原文），但它
+        # **不是本轮用户新给的材料** —— 不标出来，外部数据对照（extdata）会把
+        # 同一份表每轮重对一遍，问「固投」也给你贴一张工业增加值的对照表。
+        fresh = [a["id"] for a in atts if a.get("id")]
+        drops = _drop_materials(body)
+        # 只在真的变了才写：`chat.attach_materials` 是一次「读整份 chats.json →
+        # 改 → 整份写回」，每轮白跑一遍等于把会话文件多写一倍。绝大多数轮次
+        # 既没新材料也没摘除，直接读现成的清单。
+        if fresh or drops:
+            kept_ids = chat.attach_materials(thread["id"], add=fresh, drop=drops)
+        else:
+            kept_ids = [str(x) for x in (thread.get("material_ids") or [])]
+        if kept_ids:
+            materials_mod.touch(kept_ids, owner=owner)
+        fresh_set = set(fresh)
+        older = materials_mod.get_many(
+            [x for x in kept_ids if x not in fresh_set], owner=owner
+        )
+        for item in older:
+            item["archived"] = True
+        atts = atts + older
+
         # 材料要按窗口再裁一遍：_attachments 那层「合计 3 万字」是请求体安全线，
         # 跟模型是谁无关。8k 的内网模型上，3 万字中文约 1.9 万 token，一份就能
         # 把窗口撑爆，而失败会被当成普通模型故障最终退回规则解析 —— 用户只看到
         # 答案突然变糙，不知道是自己传的文件太大。裁完的占用要从历史里扣，
-        # 两者抢的是同一个窗口。
+        # 两者抢的是同一个窗口。顺序也有意义：本轮新传的排在前面，预算不够时
+        # 先保住这一轮的材料，往轮的先被裁掉。
         atts, att_tokens = chat.clip_materials(atts, window)
 
-        def _read_history() -> list[dict[str, str]]:
+        def _read_history(drop_tail: int = 0) -> list[dict[str, str]]:
             # 出参是同一个 dict，重取前先清空，否则上一次的 dropped/tokens 会残留
             ctx.clear()
             return chat.context(
@@ -2748,38 +3032,38 @@ class Handler(BaseHTTPRequestHandler):
                 window=window,
                 system_text=system_text,
                 reserved=att_tokens,
+                drop_tail=drop_tail,
             )
 
-        history = _read_history()
-
-        # 重试：可能停在两种状态上，都要认成"同一轮重来"而不是新的一问：
-        #   1) 上一轮失败：只落了 user 消息，最后一条就是这次的问题；
-        #   2) 上一轮被用户停掉：最后一条是「已停止生成」占位，它前面才是这次的问题。
-        # 不这么判的话，重试按钮会污染会话记录（同一条问题连问两遍）。
-        msgs = thread.get("messages") or []
-        last = msgs[-1] if msgs else None
-        prev = msgs[-2] if len(msgs) >= 2 else None
+        # ── 重答 / 重试：同一问再要一版，而不是把上一版删掉 ──
+        #
+        # 两种入口共用一条路，因为要判断的是同一件事：「这次问的还是不是上一轮
+        # 那句话」。分开写两套的话，「停止后重试」那条迟早和「换一版」走偏。
+        #
+        # 落库时挂到**同一条**问句上（reply_to）：这一问下面于是有了两版答案，
+        # 会话里仍然只有一条问句 —— 问句不重复记，也没有任何东西被删掉。以前
+        # 这里调 `chat.drop_last()` 删上一条，删掉的是「这一轮试过什么」的记录，
+        # 而用户想比较的正是上一版和这一版。
+        #
+        # 判断必须在取历史**之前**做：要把这一轮从上下文里摘掉（模型看到自己
+        # 上一版的答案会顺着它复述，连数字一起），而取历史又必须赶在落新问句
+        # 之前（否则同一句话在 history 和 question 里各出现一次）。
+        redo = bool(body.get("retry") or body.get("regen"))
+        turn = chat.last_turn(thread) if redo else None
         same_q = lambda m: (m.get("content") or "").strip() == question if m else False
-        is_retry = bool(body.get("retry")) and last is not None and (
-            (last.get("role") == "user" and same_q(last))
-            or (
-                last.get("role") == "assistant"
-                and (last.get("meta") or {}).get("cancelled")
-                and prev is not None
-                and prev.get("role") == "user"
-                and same_q(prev)
-            )
-        )
-        if is_retry:
-            if last.get("role") == "assistant":
-                # 「已停止」占位让位给这次真正的答案
-                chat.drop_last(thread["id"])
-                # 重取一次：上一条已经撤了，统计要跟着变，否则会多算一整轮
-                history = _read_history()
-            if history and history[-1].get("role") == "user":
-                history = history[:-1]
+        redoing = bool(turn and same_q(turn.get("user")))
+        # 这一轮在上下文里占几条：问句一条；上一轮已经有答案（也就是正在重答）
+        # 再加一条。固定写 2 会在"上一轮失败、只落了问句"时多摘一条 —— 把
+        # **再上一轮**的问句摘成孤儿，模型会看到一句没有回答的提问。
+        drop = (1 + (1 if (turn or {}).get("pick") else 0)) if redoing else 0
+        history = _read_history(drop_tail=drop)
+
+        if redoing:
+            reply_to = str((turn["user"] or {}).get("id") or "") or None
         else:
-            chat.append(thread["id"], "user", question)
+            # 新的一问（也可能是不带 retry 的普通提问）。append 的返回值里带 id，
+            # 这一版答案后面靠它挂上去。
+            reply_to = (chat.append(thread["id"], "user", question) or {}).get("id")
 
         # 跨会话记忆：新会话（或隔了很久）开问时，把长期关注背景拼在历史前面，
         # 让模型规划查询时知道领导平时盯哪些指标/维度/主题。只含名称不含数值，
@@ -2789,9 +3073,11 @@ class Handler(BaseHTTPRequestHandler):
         if mem_bg:
             history = mem_bg + history
 
-        return thread, history, question, ctx, atts
+        return thread, history, question, ctx, atts, reply_to
 
-    def _persist_answer(self, thread_id: str, result: dict) -> dict | None:
+    def _persist_answer(
+        self, thread_id: str, result: dict, reply_to: str | None = None
+    ) -> dict | None:
         """落一轮回答。
 
         meta 里存 sources/notes/facts 是为了**历史消息能重新渲染成同样的样式**；
@@ -2800,6 +3086,10 @@ class Handler(BaseHTTPRequestHandler):
 
         唯一的例外是 usage：它不在 trace 里另存，而是单独算一份放 meta。trace
         可以不看，账不能不算 —— 不存的话，这一轮花掉多少 token 就永久丢了。
+
+        `reply_to` 是这一版答案挂在哪条问句上。重答时它不是刚刚落的那条问句，
+        而是原来那条 —— 同一问下于是有了两版答案，界面上给「‹ 2/3 ›」切换。
+        不传就由 chat.append 自己取最近一条 user，老调用方不受影响。
         """
         info = result.get("planner_info") or {}
         # 专家解读要跟着落库，否则回看历史时那段凭空消失 —— 现在专家是「对话中」
@@ -2824,6 +3114,9 @@ class Handler(BaseHTTPRequestHandler):
                 "model": info.get("model"),
                 "metric_codes": result.get("metric_codes") or [],
                 "metric_names": result.get("metric_names") or [],
+                # 期次要落：会话标题靠「期次 + 指标名」区分（core/chat.derive_title），
+                # 只留指标名的话，十个会话问同一个指标，标题全长一样
+                "period_label": result.get("period_label"),
                 "sources": result.get("sources") or [],
                 "notes": result.get("notes") or [],
                 "facts": result.get("facts") or [],
@@ -2881,14 +3174,23 @@ class Handler(BaseHTTPRequestHandler):
                 # 附件清单（只有名字和字数，正文不进历史）：回看时说得清
                 # "这条结论当时参考了什么"，而不用把一万字材料存两遍
                 "attachments": result.get("attachments") or [],
+                # 沿用了本会话早前的材料（这一轮没有新传）。不落库的话，回看时
+                # 「这轮没附件，怎么答得出表里第 7 行」就永远解释不清
+                "materials_reused": result.get("materials_reused") or 0,
                 # 材料值 × 库值的对照（B 档）。必须落库：用户拿材料来核对的
                 # 那次，往往就是他最想回头再看一眼的一次
                 "material_compare": result.get("material_compare") or [],
                 # 外部数据整合结果同理：这是「拿自己的表来核系统」的那一轮，
                 # 刷新后对照表消失，等于让他重新传一次文件
                 "external": result.get("external") or {},
+                # 阶段流水（见 StepLog）：这一轮做过的每一步、各花多久。以前它只
+                # 活在 socket 里，刷新即失 —— 而回看时最想知道的常常正是「它到底
+                # 查了没有」，不是「它说了什么」。只存事件字段不存文案，中文由前端
+                # stepText() 生成，实时和回放共用一份措辞。
+                "steps": result.get("steps") or [],
                 "usage": result.get("usage") or {},
             },
+            reply_to=reply_to,
         )
 
     def _ask_polish(self, body: dict) -> None:
@@ -2977,9 +3279,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def _ask(self, body: dict) -> None:
         try:
-            thread, history, question, ctx, atts = self._prepare(body)
+            thread, history, question, ctx, atts, reply_to = self._prepare(body)
         except ValueError as exc:
             return self._json({"ok": False, "error": str(exc)}, 400)
+
+        # 非流式这条路也要收阶段流水：界面上虽然看不到过程，但落库的 meta.steps
+        # 必须和流式一致 —— 同一轮会话，换个入口问就少了「处理过程」，回看起来
+        # 像是这一轮系统没做任何事。核心链路一个参数就够（见 _step_pusher）。
+        log = StepLog()
 
         # 「/插件名 参数」：显式调用插件，优先于问数/知识库/资料库链路。
         # known_metrics 带 owner：跨会话记忆按身份取（昨天问过的指标今天接着问），
@@ -3001,12 +3308,13 @@ class Handler(BaseHTTPRequestHandler):
                         thread["id"], owner=self._person(body)
                     ),
                     attachments=atts,
+                    on_step=_step_pusher(log),
                 )
                 result = _harness_fallback(question, result, atts) or result
         else:
             # 先走对话层：模型自己决定查指标、扫台账、翻记录，还是反问一句澄清。
             # 它返回 None（没模型 / 没查通 / 带附件）时才落到原来的单向链路。
-            result = self._converse(question, thread, history, body, atts)
+            result = self._converse(question, thread, history, body, atts, on_step=_step_pusher(log))
             if result is None:
                 result = ask_mod.ask(
                     question,
@@ -3019,6 +3327,7 @@ class Handler(BaseHTTPRequestHandler):
                         thread["id"], owner=self._person(body)
                     ),
                     attachments=atts,
+                    on_step=_step_pusher(log),
                 )
                 # 问数/知识库/资料库都没命中时，用 octop_harness 引擎（含插件工具）兜底。
                 # 只在装了 harness 且结果 refused 时才走，否则保持原结果不变。
@@ -3030,11 +3339,12 @@ class Handler(BaseHTTPRequestHandler):
         # 有一个可核对的解释，而不是让人怀疑系统不稳定。
         result["context"] = ctx
         # 落库只留清单，不留全文：材料正文进 prompt 就够，进历史是纯占地
-        result["attachments"] = [
-            {"name": a["name"], "chars": a["chars"], "truncated": a["truncated"]}
-            for a in atts
-        ]
-        msg = self._persist_answer(thread["id"], result)
+        result["attachments"] = [_att_meta(a) for a in atts if not a.get("archived")]
+        result["materials_reused"] = len([a for a in atts if a.get("archived")])
+        # 与 /api/ask/stream 同一条约定：处理过程跟着结果走、跟着落库
+        log.close_open()
+        result["steps"] = log.items
+        msg = self._persist_answer(thread["id"], result, reply_to)
         # 跨会话记忆：一轮结束就把「关注了什么」沉淀进去（指标/维度/主题），
         # 只记名称不记数值。失败静默，绝不影响这轮回答的返回。
         memory_mod.record(thread["id"], question, result)
@@ -3050,7 +3360,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _ask_stream(self, body: dict) -> None:
         try:
-            thread, history, question, ctx, atts = self._prepare(body)
+            thread, history, question, ctx, atts, reply_to = self._prepare(body)
         except ValueError as exc:
             return self._json({"ok": False, "error": str(exc)}, 400)
 
@@ -3071,7 +3381,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
 
+        # 阶段流水。必须在第一个事件之前建 —— t 的零点是「这一轮开始」，晚建
+        # 的话第一段的耗时会偏小，而第一段（解析意图）恰恰是最长的那一段之一。
+        log = StepLog()
+
         def push(payload: dict) -> None:
+            # 顺手收一条阶段流水（见 StepLog）。放在落日志之前：断线时这一轮仍然
+            # 会跑完并落库，流水要跟着一起留下，不能只留给还在接的那个页面。
+            log.feed(payload)
             # 先记日志再写 socket：断线时这一步就是唯一能把结果留下的地方。
             # 没有它，重连只能靠「再问一遍」，而那一遍又要重新烧 token。
             seq = turn_push(turn_id, payload)
@@ -3129,12 +3446,19 @@ class Handler(BaseHTTPRequestHandler):
             # 本轮上下文的裁剪统计。前端在用量行里写出来，让「它怎么把刚才的忘了」
             # 有一个可核对的解释，而不是让人怀疑系统不稳定。
             result["context"] = ctx
-            # 落库只留清单，不留全文：材料正文进 prompt 就够，进历史是纯占地
-            result["attachments"] = [
-                {"name": a["name"], "chars": a["chars"], "truncated": a["truncated"]}
-                for a in atts
-            ]
-            msg = self._persist_answer(thread["id"], result)
+            # 落库只留清单，不留全文：材料正文进 prompt 就够，进历史是纯占地。
+            # 只算**本轮新传**的那几份 —— 会话早前挂着的也进了 prompt，但它们
+            # 不是这一轮参考的材料，算进来会让每轮都显示「参考 2 个附件」。
+            result["attachments"] = [_att_meta(a) for a in atts if not a.get("archived")]
+            # 沿用了早前的材料就单独记一笔：这一轮的答案确实看了那几份，
+            # 界面要说出来，否则回看时「这轮没传附件，怎么答得出表里的数」
+            result["materials_reused"] = len([a for a in atts if a.get("archived")])
+            # 阶段流水跟着这一轮一起回去、一起落库：界面上的「处理过程」那一折
+            # 就是它。放 result 里而不是单独推一个事件，是为了让 done / 落库 /
+            # 离线快照三条路径拿到的是同一份东西。
+            log.close_open()   # 兜底：异常路径上可能还有没发 end 的步骤
+            result["steps"] = log.items
+            msg = self._persist_answer(thread["id"], result, reply_to)
             memory_mod.record(thread["id"], question, result)
             push(
                 {
@@ -3148,11 +3472,19 @@ class Handler(BaseHTTPRequestHandler):
         except ask_mod.TurnCancelled as exc:
             # 停止也要留痕：只落一条 user 提问、没有任何回答，刷新后像是"卡住了"。
             # 落一句明确的「已停止」，并把已经花掉的 token 记上（模型那一步是计费的）。
+            #
+            # 停在哪一步也要留痕：只写「已停止」的话，回看时分不清是模型没起来就
+            # 停了，还是查了五步、答案都快好了才停的。cut=True 让前端把那一步写成
+            # 「已中断」而不是「进行中」。
+            log.close_open(cut=True)
             msg = chat.append(
                 thread["id"],
                 "assistant",
                 "已停止生成，这一轮没有产出答案。",
-                meta={"cancelled": True, "usage": exc.usage or {}},
+                meta={"cancelled": True, "usage": exc.usage or {}, "steps": log.items},
+                # 挂到这一轮的问句上：它是这一问的一版"答案"（内容是没有答案），
+                # 重答之后它退成候选之一，随时能切回来看当时停在哪一步
+                reply_to=reply_to,
             )
             push(
                 {
@@ -3194,6 +3526,12 @@ def main() -> None:
     # "所有人可见"——那等于隔离没做；也不是直接丢弃——用户的会话不该莫名消失。
     # 只认「字段缺失」，重复启动不会反复改写。
     claimed = chat.own_orphans(people.resolve(None))
+
+    # 材料库顺手清一遍过期件（120 天没被引用）。放在启动时做而不是每个请求：
+    # 这是几毫秒的目录扫描，但每轮都扫一遍没有意义 —— 材料是按天变的。
+    dropped = materials_mod.prune()
+    if dropped:
+        print(f"材料库：清掉 {dropped} 份过期材料", flush=True)
 
     httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     info = modelcfg.llm_info()

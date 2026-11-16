@@ -855,8 +855,13 @@ def ask(
             # 这一步和上面那条 B 档边界不冲突 —— 它产出的仍然是**并列对照**，
             # 数字不回流进 headline/facts，只是把「对上了几期、差多少」算给用户看。
             # 放在 headline 生成之后，结构上就保证了它改不了答案正文。
-            if attachments:
-                ext = extdata_mod.analyze(attachments, today)
+            #
+            # 只对**本轮新传**的材料做：会话早前挂着的那几份标了 archived，它们
+            # 进上下文是为了让追问能翻到原文，不是为了每轮把同一张表重对一遍 ——
+            # 问「固投」却贴一张工业增加值的对照表，比不贴更让人糊涂。
+            fresh_atts = [a for a in (attachments or []) if not a.get("archived")]
+            if fresh_atts:
+                ext = extdata_mod.analyze(fresh_atts, today)
                 if ext:
                     result["external"] = ext
                     # 附件里有能对上的指标、但这一问本身没命中指标（比如

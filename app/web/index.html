@@ -574,6 +574,25 @@ html.ask-fold .ask-rail{display:flex}
 .ai-cp:hover{color:var(--brand);border-color:var(--line);background:var(--surface)}
 /* 导出跟在复制后面：复制那个用 margin-left:auto 顶到右边，导出不再抢这个位置 */
 .ai-cp.ai-exp{margin-left:0}
+/* 「换一版」也在右侧那组里，同样不抢 auto 边距 */
+.ai-cp.ai-regen{margin-left:0}
+/* 同一问留了几版：‹ 2/3 ›。挨着 AI 标签放，不跟右侧那组操作挤在一起 ——
+   它说的是"这条答案还有另一版"，是这条的属性，不是对它的操作。
+   边界那颗 disabled 而不是藏起来：两颗并排才看得出这是第几版、还能往哪走。 */
+.alt-nav{
+  display:inline-flex;align-items:center;gap:1px;margin-left:4px;
+  border:1px solid var(--line);border-radius:5px;background:var(--surface);overflow:hidden
+}
+.alt-nav button{
+  border:0;background:transparent;color:var(--muted);font:inherit;font-size:12px;
+  line-height:1;padding:2px 5px;cursor:pointer
+}
+.alt-nav button:hover:not(:disabled){color:var(--brand);background:var(--brand-soft)}
+.alt-nav button:disabled{color:var(--faint);opacity:.3;cursor:default}
+.alt-nav b{
+  font-size:10px;font-weight:600;color:var(--ink-2);
+  padding:0 1px;min-width:26px;text-align:center
+}
 .ai-body{
   background:var(--surface-4);border:1px solid var(--line);border-radius:3px 10px 10px 10px;
   padding:10px 12px;font-size:12.5px;line-height:1.75;color:var(--ink-2)
@@ -877,6 +896,24 @@ html.ask-fold .ask-rail{display:flex}
 .trace .t{font-size:10.5px;color:var(--muted);margin-bottom:5px;line-height:1.55}
 .trace .t b{color:var(--ink-2);font-weight:600}
 .trace .t code{background:var(--line-2);padding:1px 4px;border-radius:3px;font-size:10px;color:var(--ink-3)}
+/* 处理过程：一轮里系统做过的事，逐条带耗时，落库、可回放。
+   和下面 .trace 的分工要分清：trace 是调用链路（模型/接口级，只有实时那一轮有，
+   刷新即失）；这里是用户看得懂的阶段（解析意图、哪位参谋说了话、调了哪个工具），
+   存进 meta.steps，切回历史也在。两者都收在答案末尾，不抢正文。 */
+.steps-fold{margin-top:8px;font-size:11px;color:var(--muted);cursor:pointer;user-select:none}
+.steps-fold:hover{color:var(--brand)}
+.steps{margin-top:6px;border-left:2px solid var(--line-3);padding-left:10px}
+.steps[hidden]{display:none}
+.steps .st{display:flex;align-items:baseline;gap:6px;font-size:11px;color:var(--ink-2);line-height:1.6;margin-bottom:3px}
+.steps .st::before{content:"";flex:0 0 auto;width:5px;height:5px;border-radius:50%;background:var(--brand);transform:translateY(-1px)}
+.steps .st b{font-weight:500;min-width:0;overflow-wrap:anywhere}
+.steps .st i{margin-left:auto;font-style:normal;font-size:10px;color:var(--faint);white-space:nowrap;padding-left:8px}
+/* 进行中：点和字都动起来。回放里不该出现这个态（落库前一定收尾），
+   它只在实时那一轮出现，作用是告诉用户「卡在这一步，但还活着」。 */
+.steps .st.run::before{animation:pulse 1s ease-in-out infinite}
+.steps .st.run i{color:var(--brand)}
+.steps .st.bad::before{background:var(--warn)}
+.steps .st.bad i{color:var(--warn)}
 
 .ask-foot{padding:9px 14px 11px;border-top:1px solid var(--line-2)}
 .inputbar{display:flex;gap:7px;position:relative;align-items:flex-end}
@@ -935,6 +972,10 @@ html.ask-fold .ask-rail{display:flex}
 .att-chip.wait .sz{color:var(--faint)}
 .att-chip.bad{border-color:var(--danger)}
 .att-chip.bad .sz{color:var(--danger)}
+/* 已挂到会话上的材料：虚框 + 压暗。它还在手上，但这轮不会重发 ——
+   和「刚选好、等着发」的芯片要能分辨，否则用户以为每次都在重传 */
+.att-chip.saved{border-style:dashed;background:transparent;color:var(--faint)}
+.att-chip.saved .sz{color:var(--faint)}
 
 /* 右：罗盘 */
 .compass{flex:1;display:flex;flex-direction:column;gap:10px;overflow:hidden;min-width:0}
@@ -2476,9 +2517,9 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
       <!-- 附件芯片：选中之后才出现，没选就整行不占位 -->
       <div class="attach-list" id="attachList" hidden></div>
       <div class="inputbar">
-        <button class="attach" id="attachBtn" title="随这一问附材料：月报、统计表、政策文件（txt / md / csv / Word / Excel / PDF，最多 5 个、合计 3 万字）。只作用于本轮问答，不落盘、不入库；表格会按「期次 + 指标」与系统指标逐期对照。要以后还能查到，用知识库右上角的「上传入库」。" aria-label="随本轮提问附材料（仅本轮，不入库）">
+        <button class="attach" id="attachBtn" title="随这一问附材料：月报、统计表、政策文件（txt / md / csv / Word / Excel / PDF，最多 5 个、合计 3 万字）。传上来就存在本机材料库里、挂到当前会话，之后的追问（「表里第 7 行是多少」）不用再传一遍；点芯片上的 ✕ 从本会话摘掉。表格会按「期次 + 指标」与系统指标逐期对照。要长期检索，用知识库右上角的「上传入库」。" aria-label="随本会话附参考材料（可追问，点 ✕ 摘掉）">
           <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.5-8.5a3.5 3.5 0 0 1 4.9 4.9l-8.5 8.5a2 2 0 0 1-2.8-2.8l7.7-7.7"/></svg>
-          <span>附材料</span><span class="att-scope">仅本轮</span>
+          <span>附材料</span><span class="att-scope">可追问</span>
         </button>
         <!-- 这里以前有个「整理提问」按钮：把口语、错别字按指标字典改写一遍再发。
              现在这件事由后端在「一个指标都没命中」时自动做（ask._should_autofix），
@@ -3999,6 +4040,188 @@ function srcCode(s) {
   return m ? m[1] : "";
 }
 
+/* ---------- 处理过程（阶段流水） ----------
+   一轮里系统做了什么：解析意图用了哪个规划器、命中哪些指标、哪位参谋说了话、
+   调了哪个工具、各花多久。后端只存**事件字段**（见 app/main.py 的 StepLog），
+   中文一律在这里生成 —— 实时那条路和回放那条路共用这一份文案。
+
+   为什么不做两份：实时拼一句、回放再拼一句，两边迟早走偏（改了一处忘了另一处），
+   而「刷新一下说法就变了」比没有这个功能更让人不敢信。
+
+   条目形状 {k,t,ms?,ok?,cut?,x}：
+     k   plan / experts / rewrite / tool
+     t   相对这一轮开始的毫秒偏移（只用于排序，界面不显示）
+     ms  这一步花了多久；一次性事件（plan）没有
+     ok  false = 没走通
+     cut true = 用户停在这一步（不是失败，但也没走完）
+   注意 ms 缺失和 ms=0 是两件事：前者是"还没结束/不适用"，后者是"瞬间完成"。 */
+const STEP_TOOL_CN = {
+  list_metrics: "列出可用指标",
+  query_metric: "查询指标数据",
+  scan_oversight: "扫督办台账",
+  advance_item: "推进台账事项",
+  draft_directive: "拟办指示",
+  scan_directives: "查已下发的令",
+  draft_meeting: "草拟会议",
+  draft_document: "起草公文",
+  compare_material: "材料与库值对照",
+  search_knowledge: "查知识库",
+  clarify: "反问澄清",
+  wemeet_meetings: "查会议记录",
+  wemeet_transcript: "取会议转写",
+};
+
+function stepText(s) {
+  const x = (s && s.x) || {};
+  const k = (s && s.k) || "";
+  if (k === "plan") {
+    // planner 是 llm / llm_retry / llm_fallback / rules，只认 === "llm" 会把
+    // 换过模型的那次说成「规则解析」，正好说反 —— 所以判前缀。
+    const who = String(x.planner || "").startsWith("llm") ? "模型" : "规则";
+    const dg = x.dg === "rules" ? "（退回规则）" : x.dg === "fallback" ? "（备用模型）" : "";
+    const names = (x.names || []).filter(Boolean).slice(0, 3).join("、");
+    return `解析意图 · ${who}${dg} · ${intentLabel(x.intent)}${names ? " · " + names : " · 未命中已注册指标"}`;
+  }
+  if (k === "experts") {
+    const i = x.index ? `（${x.index}/${x.total || "?"}）` : "";
+    return `${x.name || "参谋"}解读${i}`;
+  }
+  if (k === "rewrite") {
+    // 改写成功时没有 ok 字段（只有失败那条路会带 ok:false）
+    return s.ok === false ? "改写问句后仍未命中指标" : "改写问句再理解";
+  }
+  if (k === "tool") return `调用工具 · ${STEP_TOOL_CN[x.name] || x.name || "未知工具"}`;
+  return k || "处理";
+}
+
+function stepState(s) {
+  if (s && s.cut) return "bad";          // 停在这一步：不是失败，但也没走完
+  // plan 是一次性事件，天生没有 ms —— 到了就是做完了，不能因为「没有耗时」判成进行中
+  if (s && s.ms === undefined) return s.k === "plan" ? (s.ok === false ? "bad" : "ok") : "run";
+  return s && s.ok === false ? "bad" : "ok";
+}
+
+function stepLine(s) {
+  const st = stepState(s);
+  const ms = s && s.ms;
+  // 0ms 不写「0ms」：那是"瞬间做完"，给个 0 反而像在报错。缺数字就是没有可说的。
+  const dur = ms >= 1000 ? (ms / 1000).toFixed(1) + "s" : ms > 0 ? ms + "ms" : "";
+  const right = st === "run"
+    ? "进行中"
+    : s && s.cut
+      ? "已中断"
+      : st === "bad"
+        ? "没走通"
+        : dur;
+  return `<div class="st ${st}"><b>${esc(stepText(s))}</b>${right ? `<i>${right}</i>` : ""}</div>`;
+}
+
+/* 一折「处理过程 · N 步」。open=true 时默认展开（停在这一轮的用户最想看它）。 */
+function stepsFold(list, open) {
+  const arr = (list || []).filter((s) => s && s.k);
+  if (!arr.length) return "";
+  const bad = arr.filter((s) => s.ok === false || s.cut).length;
+  const label = `处理过程 · ${arr.length} 步${bad ? ` · ${bad} 步没走完` : ""}`;
+  return `<div class="steps-fold" data-stepsfold data-label="${esc(label)}">${esc(label)} · ${open ? "收起" : "展开"}</div>
+    <div class="steps"${open ? "" : " hidden"}>${arr.map(stepLine).join("")}</div>`;
+}
+
+/* 实时那一轮的阶段流水。配对规则和后端 StepLog 是同一套（start 开一条、end 收它），
+   差别只在数据从哪儿来：这里吃 SSE 事件，回放吃 meta.steps。
+
+   为什么前端也要算一遍耗时：实时这一轮还没有落库那份 meta，而用户等的就是这会儿。
+   两边都从「这一步开始」量到「这一步结束」，差的是网络延迟里的几毫秒。
+
+   形状照抄后端（k/t/ms/ok/cut），这样 `stepLine` 一处就能画两种来源 ——
+   如果实时这边另造一套字段，回放和实时迟早会长得不一样。 */
+function stageTracker() {
+  const items = [];
+  const open = {};          // "kind:name" → items 下标
+  const t0 = Date.now();
+  let hint = "正在调用模型解析意图…";
+
+  const extra = (f) => {
+    if (f.type === "plan") {
+      const x = {
+        planner: f.planner || "",
+        intent: f.intent || "",
+        names: (f.names || []).filter(Boolean).slice(0, 4),
+      };
+      if (f.degraded && f.degraded.kind) x.dg = f.degraded.kind;
+      return x;
+    }
+    if (f.type === "experts") {
+      const x = { name: f.name || "" };
+      if (f.index) { x.index = f.index; x.total = f.total || 0; }
+      return x;
+    }
+    if (f.type === "tool") return { name: f.name || "" };
+    return {};
+  };
+
+  return {
+    items,
+    setHint(t) { hint = t; },
+    /* 收掉还开着的步骤。用户点停止时调用：不然那一步会永远显示「进行中」 */
+    cut() {
+      const now = Date.now() - t0;
+      for (const i of Object.values(open)) {
+        items[i].ms = Math.max(0, now - items[i].t);
+        items[i].cut = true;
+      }
+      for (const k of Object.keys(open)) delete open[k];
+    },
+    feed(f) {
+      const kind = String((f && f.type) || "");
+      if (!["plan", "experts", "rewrite", "tool"].includes(kind)) return;
+      // 一旦有了具体步骤，那句泛泛的「正在解析」就该退场：它不知道现在到哪一步，
+      // 留着只会和下面的行重复，甚至在答案快出来时还挂着「已接入会话 · 第 2 轮」。
+      hint = "";
+      const now = Date.now() - t0;
+      const key = `${kind}:${f.name || ""}`;
+      if (f.phase === "start") {
+        open[key] = items.length;
+        items.push({ k: kind, t: now, x: extra(f) });
+        return;
+      }
+      if (f.phase === "end") {
+        const i = open[key];
+        if (i === undefined) {
+          // 没等到 start（断线续流从中间接上的那种）：照样记一条，别让回放少一步
+          const it = { k: kind, t: now, ms: 0, x: extra(f) };
+          if (f.ok !== undefined) it.ok = !!f.ok;
+          items.push(it);
+        } else {
+          items[i].ms = Math.max(0, now - items[i].t);
+          if (f.ok !== undefined) items[i].ok = !!f.ok;
+          delete open[key];
+        }
+        return;
+      }
+      // 一次性事件（plan）。plan 到达 = 意图已解析，顺手收掉改写那一步：
+      // 改写成功那条路上后端不发 end（见 core/metrics/ask.py）
+      if (kind === "plan") {
+        const i = open["rewrite:"];
+        if (i !== undefined) {
+          items[i].ms = Math.max(0, now - items[i].t);
+          items[i].ok = true;
+          delete open["rewrite:"];
+        }
+      }
+      const it = { k: kind, t: now, x: extra(f) };
+      if (f.ok !== undefined) it.ok = !!f.ok;
+      items.push(it);
+    },
+    html() {
+      const running = items.some((s) => s.ms === undefined && s.k !== "plan");
+      const head = items.length ? `<div class="steps">${items.map(stepLine).join("")}</div>` : "";
+      // 有步骤在跑时不再显示那句泛泛的提示：具体哪一步在跑比「正在解析」有用
+      const tail = hint && !running ? `<div class="stage-hint">${esc(hint)}</div>` : "";
+      return head + tail;
+    },
+  };
+}
+
 function aiBubble(r, ref) {
   // 收藏星号。只认后端给的消息 id：拿不到 id 就不画 —— 点了收藏哪一条都说不清，
   // 而收藏夹里躺一条"不知道是什么"的条目比没有这个功能更糟。
@@ -4226,6 +4449,10 @@ function aiBubble(r, ref) {
     ? `<div class="trace-fold" data-fold>展开调用链路</div><div class="trace">${traceItems}</div>`
     : "";
 
+  // 处理过程：这一轮做过的每一步（落库的 meta.steps）。排在调用链路之前 ——
+  // 它能回放，而 trace 不能；用户点开历史时想看的是「它查了没有」。
+  const stepsBlock = stepsFold(r.steps);
+
   // 用量：这一轮到底花了多少。以前只出现在 trace 的一句摘要里，而 trace 不落库，
   // 刷新即失。政务/企业场景对模型预算是敏感的，这笔账必须能回看。
   const u = r.usage || {};
@@ -4264,7 +4491,11 @@ function aiBubble(r, ref) {
     .join("\n");
   const attSpan = atts.length
     ? `<span class="ai-att" title="${esc(attTip)}">参考 ${atts.length} 个附件</span>`
-    : "";
+    // 这一轮没新传，但用了本会话早前的材料。不说这句，用户会以为系统在凭空
+    // 讲表里的数 —— 反过来，如果不说，他也不敢确定追问到底还有没有效
+    : r.materials_reused
+      ? `<span class="ai-att" title="这一轮用的是本会话此前传的材料，正文仍在材料库里">沿用本会话材料 ${r.materials_reused} 份</span>`
+      : "";
 
   const usageBlock = u.calls || ctxSpan || attSpan || degPill
     ? `<div class="ai-usage">
@@ -4280,16 +4511,42 @@ function aiBubble(r, ref) {
   // 政务场景里后者更常见（一份带出处和口径的答复要跟着流程走）。
   const expBtn = `<button class="ai-cp ai-exp" data-exp="1" title="导出这一轮为 Markdown" aria-label="导出这一轮为 Markdown">导出</button>`;
 
+  /* 同一问留了几版：给「‹ 2/3 ›」。
+     三处取舍：
+     - 不做下拉。版数封顶 6，前后翻比展开列表快，也不遮答案。
+     - 边界那颗 disabled 而不是藏起来：两颗并排才看得出"这是第几版、还能往哪走"。
+     - 切换只改"显示哪一版"，一条消息都不删 —— 所以敢让用户随便点。 */
+  const alts = (ref && ref.alts) || null;
+  const altAt = (k) => {
+    const ids = alts && alts.ids;
+    return ids && k >= 0 && k < ids.length ? String(ids[k] || "") : "";
+  };
+  const altNav = alts && alts.n > 1
+    ? `<span class="alt-nav" title="同一问留了 ${alts.n} 版答案，切换看哪一版（都不删）">`
+      + `<button data-act="alt" data-to="${esc(altAt(alts.i - 2))}" ${alts.i <= 1 ? "disabled" : ""} aria-label="上一版">‹</button>`
+      + `<b>${alts.i}/${alts.n}</b>`
+      + `<button data-act="alt" data-to="${esc(altAt(alts.i))}" ${alts.i >= alts.n ? "disabled" : ""} aria-label="下一版">›</button>`
+      + `</span>`
+    : "";
+  // 换一版：同一问再要一个答案。只有最后一条答案给这个按钮 ——
+  // 中间那一轮换了，后面几轮就是照着旧答案说的，整段历史会自相矛盾。
+  const regenBtn = ref && ref.canRegen
+    ? `<button class="ai-cp ai-regen" data-act="regen" title="同一问再要一版答案。上一版留着，可以切回去">换一版</button>`
+    : "";
+
   // 用户点了「停止」：后端落了一条明确的记录。这里不能再画成正常答案，
   // 否则回看历史会以为当时真的答了这么一句。
+  // 它也可能是这一问的**其中一版**（重答之后旧版留着），所以照样给切换钮 ——
+  // 停在「已停止」这一版上却没有出口，用户只能重打一遍问题。
   if (r.cancelled) {
     return `
-      <div class="ai-tag"><i>AI</i>${esc(plannerLabel())}${copyBtn}</div>
-      <div class="ai-body"><div class="ai-note">已停止生成 · 这一轮没有产出答案</div>${usageBlock}</div>`;
+      <div class="ai-tag"><i>AI</i>${esc(plannerLabel())}${altNav}${copyBtn}${regenBtn}</div>
+      <div class="ai-body"><div class="ai-note">已停止生成 · 这一轮没有产出答案</div>
+      ${stepsFold(r.steps, true)}${usageBlock}</div>`;
   }
 
   return `
-    <div class="ai-tag"><i>AI</i>${esc(plannerLabel())}${star}${copyBtn}${expBtn}</div>
+    <div class="ai-tag"><i>AI</i>${esc(plannerLabel())}${altNav}${star}${copyBtn}${expBtn}${regenBtn}</div>
     <div class="ai-body">
       <div>${r.headline_html || esc(r.headline)}</div>
       ${r.detail ? `<div style="margin-top:6px;color:var(--muted);font-size:12px">${esc(r.detail)}</div>` : ""}
@@ -4310,6 +4567,7 @@ function aiBubble(r, ref) {
       ${notesBlock}
       ${evBlock}
       ${srcs ? `<div class="ai-src">${srcs}</div>` : ""}
+      ${stepsBlock}
       ${traceBlock}
       ${usageBlock}
     </div>`;
@@ -4807,6 +5065,44 @@ async function resumePending() {
   return false;
 }
 
+/* SSE 帧解析：按规范认「字段: 值」，不靠字符串前缀猜。
+   以前是 buf.split("\n\n") 加 line.startsWith("data: ")，三处会**静默**失效 ——
+   网关把行尾改写成 CRLF（"data: x\r\n\r\n" 里切不出 "\n\n"，整条流再也出不了帧）、
+   服务端写成 `data:{...}`（冒号后没空格）、`id:1`（同样没空格）。失效时的表现
+   不是报错，而是"永远收不到事件"，排查要花很久。
+   多字节汉字跨分片由调用方的 TextDecoder(stream:true) 兜住。 */
+function sseReader() {
+  let buf = "";
+  const split = (frame) => {
+    const ev = { id: "", data: [] };
+    for (const line of frame.split(/\r\n|\n|\r/)) {
+      if (!line || line.startsWith(":")) continue;      // 空行与注释行
+      const i = line.indexOf(":");
+      const field = i < 0 ? line : line.slice(0, i);
+      let value = i < 0 ? "" : line.slice(i + 1);
+      if (value.startsWith(" ")) value = value.slice(1); // 规范：只吃一个前导空格
+      if (field === "data") ev.data.push(value);
+      else if (field === "id") ev.id = value;
+    }
+    return ev;
+  };
+  return {
+    push(chunk) {
+      buf += chunk;
+      const out = [];
+      for (;;) {
+        // 帧边界三种写法都认：LF、CRLF、单独的 CR
+        const m = buf.match(/\r\n\r\n|\n\n|\r\r/);
+        if (!m) break;
+        const frame = buf.slice(0, m.index);
+        buf = buf.slice(m.index + m[0].length);
+        out.push(split(frame));
+      }
+      return out;
+    },
+  };
+}
+
 async function ask(question, opts = {}) {
   question = String(question || "");
   if (!question.trim()) return;
@@ -4829,8 +5125,17 @@ async function ask(question, opts = {}) {
     localStorage.removeItem(DRAFT_KEY(null));
   } catch (e) { /* 隐身模式 */ }
 
+  // 换一版：上一版先从屏幕上撤下来，否则生成期间同一问底下并排两个答案。
+  // 撤的只是这一屏的节点，库里那条还在 —— 切回去（‹ 2/3 ›）随时能看。
+  if (opts.regen) {
+    const old = opts.mid
+      ? box.querySelector(`.bub-ai[data-mid="${opts.mid}"]`)
+      : box.lastElementChild;
+    if (old && old.classList && old.classList.contains("bub-ai")) old.remove();
+  }
+
   // 重试不重复画用户气泡：这一问上一轮已经显示在屏幕上了，后端也已落库
-  if (!opts.retry) {
+  if (!opts.retry && !opts.regen) {
     box.insertAdjacentHTML("beforeend", `<div class="bub-user">${esc(question)}</div>`);
   }
   const holder = document.createElement("div");
@@ -4844,12 +5149,19 @@ async function ask(question, opts = {}) {
   box.appendChild(holder);
   box.scrollTop = box.scrollHeight;
 
-  // 发出去就清空：下一轮不该还带着上一轮的参考材料。重试不清，它还要接着用
-  if (!opts.retry) { ATT.files = []; renderAttach(); }
+  // 材料不再清空，改成「挂到会话上」：后端收到就落库、会话记下 id，之后
+  // 每一轮都能翻到原文。芯片留着正是为了让用户看见「这几份还在手上」——
+  // 以前发出去就清空，追问「表里第 7 行」时用户以为材料还在，其实早没了。
+  // 重试/换一版都不动它：上一轮已经挂过了，重复挂只是白跑一次 attach。
+  if (!opts.retry && !opts.regen) {
+    ATT.files.forEach((f) => { if (f.id) f.saved = true; });
+    ATT.drop = [];
+    renderAttach();
+  }
 
   // threadId 记下这一轮属于哪个会话。发问时可能还是 null（新会话），
   // start 事件会带回真实 id —— 之后无论用户切到哪儿，这个值都不再变。
-  RUN = { ac: new AbortController(), question, turnId: null, threadId: THREAD, holder, stopped: false };
+  RUN = { ac: new AbortController(), question, turnId: null, threadId: THREAD, holder, stopped: false, regen: !!opts.regen };
   setRunning(true);
 
   // 记下这一轮，刷新后 resumePending() 靠它接回来。turn_id 在响应头和 start
@@ -4870,30 +5182,50 @@ async function ask(question, opts = {}) {
      所以每次写之前都问一次「这个 turn 还在屏幕上吗」，不在就只落库、不渲染。 */
   const live = () => (holder.isConnected && holder.parentElement && holder.parentElement.id === "thread" ? holder : null);
 
-  const stage = (text) => {
+  /* 这一轮的阶段流水。事件进来就喂它，界面只是它的投影 —— 等 done 落库之后，
+     屏幕上那一折「处理过程」和这里画的是同一份数据、同一套文案（见 stepsFold）。 */
+  const TR = stageTracker();
+
+  const paint = () => {
     const h = live();
     if (!h) return;
     const el = h.querySelector(".ai-body");
-    if (el) el.innerHTML = `<div class="stage-hint">${esc(text)}</div>`;
+    if (el) el.innerHTML = TR.html();
+  };
+  const stage = (text) => {
+    TR.setHint(text);
+    paint();
   };
   const fail = (msg) => {
     const h = live();
     if (!h) return false;
     h.innerHTML = `<div class="ai-tag"><i>AI</i>${esc(plannerLabel())}</div>
       <div class="ai-body"><div class="warnbox">${esc(msg)}</div>
+      ${stepsFold(TR.items, true)}
       ${retryOps()}</div>`;
+    bindFold(h);   // 折着的条要能点开，这里不走 done 那条路，得自己绑
     return true;
   };
   const stopped = () => {
     const h = live();
     if (!h) return false;
+    // 停在这一步：把还开着的那条标成「已中断」，不然它会一直显示「进行中」。
+    // 后端落库时也会这么标（StepLog.close_open(cut=True)），两边一致。
+    TR.cut();
     h.innerHTML = `<div class="ai-tag"><i>AI</i>${esc(plannerLabel())}</div>
       <div class="ai-body"><div class="ai-note">已停止生成 · 这一轮没有产出答案</div>
+      ${stepsFold(TR.items, true)}
       ${retryOps()}</div>`;
+    bindFold(h);
     return true;
   };
 
   let finished = false;
+  // 换一版成功后要重画的会话 id。为什么不就地只换那一条气泡：这一版和上一版
+  // 是同一问的两版，界面得知道「共几版、这是第几版、另外几版的 id」才画得出
+  // 「‹ 2/3 ›」，而那几个数只有服务端算得出来（它才掌握 picks 和全部候选）。
+  // 多一次 GET，换一个不会说谎的切换钮。
+  let redraw = "";
   // 收到的最后一条事件序号。断线续流从这里接着拉，已经处理过的不再重放。
   let lastSeq = 0;
 
@@ -4919,26 +5251,16 @@ async function ask(question, opts = {}) {
       if (!finished) {
         stage(f.turns ? `已接入会话 · 第 ${f.turns + 1} 轮` : "新会话已建立，正在解析…");
       }
-    } else if (f.type === "plan") {
+    } else if (f.type === "plan" || f.type === "experts" || f.type === "rewrite" || f.type === "tool") {
+      /* 阶段事件：只喂流水，文案由 stepLine 一处生成（实时和回放共用）。
+         以前每种事件各拼一句 stage()，下一句把上一句顶掉 —— 等的时候看不见
+         「刚做完什么」，结束后更是一个字都不剩。现在它们是叠起来的时间线。
+
+         tool 是新接的一路：agent 调工具（查指标、扫台账、起草公文）以前在界面上
+         完全不可见，用户只看到「正在解析」然后突然出答案。 */
       if (finished) return;
-      // planner 现在是 llm / llm_retry / llm_fallback / rules / llm_failed:…，
-      // 只认 === "llm" 的话，换过模型的那次会被说成「规则解析」，正好说反
-      const who = String(f.planner || "").startsWith("llm") ? "模型" : "规则";
-      const names = (f.names || []).join("、");
-      const extra = f.degraded && f.degraded.kind === "fallback" ? `（备用 ${f.degraded.model || ""}）` : "";
-      stage(`${who}解析完成${extra} · ${intentLabel(f.intent)}${names ? " · " + names : " · 未命中已注册指标"}`);
-    } else if (f.type === "experts") {
-      // 专家是串行调模型的，三位加起来好几秒。不报进度的话，界面会从
-      // 「解析完成」一直静默到出结果，看着像卡死。
-      if (finished) return;
-      const tail = f.phase === "start" ? "正在看材料" : (f.ok ? "已给出意见" : "未给出意见");
-      stage(`专家解读 · ${f.name} ${tail}（${f.index}/${f.total}）`);
-    } else if (f.type === "rewrite") {
-      // 指标一个都没命中时，后端会让模型把这句问句改写一遍再匹配（auto 理解）。
-      // 这一步是两三秒的模型调用，不报进度的话界面会从「已接入会话」静默到出答案。
-      if (finished) return;
-      if (f.phase === "start") stage("这句话没直接对上指标，正在换个说法理解…");
-      else if (f.ok === false) stage("改写后仍没对上指标，继续查知识库…");
+      TR.feed(f);
+      paint();
     } else if (f.type === "done") {
       finished = true;
       const h = live();
@@ -4950,15 +5272,26 @@ async function ask(question, opts = {}) {
         toast(`这一轮算完了，答案存在「${(owner && owner.title) || "原会话"}」里`);
         return;
       }
-      h.innerHTML = aiBubble(f.result, { threadId: f.thread_id, messageId: f.message_id });
+      // 这一版就是最新的答案，所以它总是"最后一轮"，可以再换一版。
+      // 换完之后要整屏重画一次（见下面 redraw），才能拿到「共几版、这是第几版」。
+      h.innerHTML = aiBubble(f.result, {
+        threadId: f.thread_id, messageId: f.message_id, canRegen: true,
+      });
       // 导出要用完整 result（含 usage/context/trace）；历史回放走 __m
       h.__r = f.result;
       // 星级按钮要能定位到这条消息（收藏夹跳回来也靠它），落库 id 由后端返回
       h.dataset.mid = f.message_id || "";
+      // 这一版成了新的「最后一轮」：之前那条答案上的「换一版」要撤掉。
+      // 服务端只允许最后一轮换版（中间轮换了，后面几轮就是照着旧答案说的），
+      // 留着那颗按钮点下去就是 404，而用户看不出为什么"上次还能点"。
+      box.querySelectorAll("[data-act='regen']").forEach((b) => {
+        if (!h.contains(b)) b.remove();
+      });
       bindFold(h);
       hydrateCharts(h);
       THREAD_TOKENS += Number(u.total_tokens) || 0;
       renderUsageFoot();
+      if (opts.regen) redraw = f.thread_id || THREAD || "";
     } else if (f.type === "cancelled") {
       // 后端确认已经停了。它落了一条「已停止生成」，所以侧栏条数会变，
       // 但这里不重载正文 —— 用户刚主动停下，不该立刻给他换一屏内容。
@@ -5009,9 +5342,15 @@ async function ask(question, opts = {}) {
         // 参考材料。后端只把它当 planner 的背景，不进指标取值 ——
         // 界面和导出都据此标注「参考了哪些附件」
         attachments: atts,
+        // 本轮摘掉的材料（用户点了芯片上的 ✕）。后端只从会话清单上摘，
+        // 材料本身还在库里
+        drop_materials: ATT.drop.length ? ATT.drop : undefined,
         // 重试时后端认「上一条 user 正文相同」就跳过落库，否则会话里会出现
         // 同一条问题连问两遍
         retry: !!opts.retry,
+        // 换一版：同一问再要一版，后端把答案挂到原来那条问句上（reply_to），
+        // 上一版留在库里 —— 界面上就成了「‹ 2/3 ›」
+        regen: !!opts.regen,
       }),
       signal: RUN.ac.signal,
     });
@@ -5031,26 +5370,22 @@ async function ask(question, opts = {}) {
 
     const reader = res.body.getReader();
     const dec = new TextDecoder();
-    let buf = "";
+    const sse = sseReader();
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const chunks = buf.split("\n\n");
-      buf = chunks.pop();
-      for (const chunk of chunks) {
-        let payload = null;
-        for (const raw of chunk.split("\n")) {
-          const line = raw.trim();
-          // id 行形如 `id: 1a2b3c-4`，后半段是序号
-          if (line.startsWith("id: ")) {
-            const n = Number(line.slice(4).split("-").pop());
-            if (Number.isFinite(n) && n > lastSeq) lastSeq = n;
-          } else if (line.startsWith("data: ")) {
-            try { payload = JSON.parse(line.slice(6)); } catch { /* 半截包，等下一块 */ }
-          }
+      // stream:true 让跨分片的多字节汉字不被截成乱码
+      for (const ev of sse.push(dec.decode(value, { stream: true }))) {
+        // id 行形如 `id: 1a2b3c-4`，后半段是序号（续流时用 after=seq 接回）
+        if (ev.id) {
+          const n = Number(String(ev.id).split("-").pop());
+          if (Number.isFinite(n) && n > lastSeq) lastSeq = n;
         }
+        if (!ev.data.length) continue;
+        let payload = null;
+        try { payload = JSON.parse(ev.data.join("\n")); }
+        catch { try { payload = JSON.parse(ev.data.join("")); } catch { /* 坏帧，丢掉 */ } }
         if (payload) handle(payload);
       }
     }
@@ -5077,6 +5412,9 @@ async function ask(question, opts = {}) {
   }
 
   box.scrollTop = box.scrollHeight;
+  // 重画要在 finally 之后：那时 RUN 已经清空，openThread 不会把这一轮当成
+  // 「还在跑」而把占位块又挂回来。
+  if (redraw && THREAD === redraw) await openThread(redraw);
   refreshThreads();
 }
 
@@ -5143,7 +5481,7 @@ function copyBubble(el) {
   // 折叠条也是界面元件：复制出来一句「另 6 位参谋的原始意见 · 展开」，粘到汇报
   // 材料里等于一句没人看得懂的残句。折着的卡片本来就不进 innerText（hidden），
   // 展开过的照原样带上 —— 所见即所得。
-  clone.querySelectorAll(".trace, .trace-fold, .ai-usage, .fail-ops, .ev-fold").forEach((n) => n.remove());
+  clone.querySelectorAll(".trace, .trace-fold, .steps, .steps-fold, .ai-usage, .fail-ops, .ev-fold").forEach((n) => n.remove());
   const text = (clone.innerText || "").trim();
   if (!text) return;
   copyText(text).then(
@@ -5500,6 +5838,8 @@ const ASK_ERR = {
   empty_question: "问题不能为空",
   thread_not_found: "这个会话已经不在了，新建一条再问",
   unknown_metric: "没有这个指标",
+  // 只有最后一轮能换版：中间那轮换了，后面几轮就是照着另一版答案说的
+  answer_not_switchable: "只有这一问的最新版能切换，更早的轮次换了会和后面的回答对不上",
 };
 function askErrText(code) {
   const s = String(code || "").trim();
@@ -5612,24 +5952,35 @@ function historyView(m, threadId) {
     // 附件清单同理：这条结论参考过材料，刷新后这句话不能说没就没 ——
     // 少了它，同一轮答案在实时视图里"有依据"、在历史里"凭空来的"
     attachments: meta.attachments || [],
+    // 这一轮沿用了本会话早前传的材料（没新传）。回看时少了这一笔，
+    // 「这轮没附件，怎么答得出表里第 7 行」就成了无解
+    materials_reused: meta.materials_reused || 0,
     // 材料对照也是同一轮结论的一部分：刷新后只剩单边数字，用户会以为当初
     // 系统根本没看到材料，或者更糟——以为那两行是同时给的
     material_compare: meta.material_compare || [],
     // 外部数据对照同理：那张表是这一轮的主证据，刷新后不能说没就没
     external: meta.external || {},
+    // 处理过程：这一轮做过的每一步（解析/参谋/工具），各花多久。实时那一轮是
+    // 用阶段事件画的，落库之后从这里读 —— 两处用同一份 stepLine 渲染。
+    steps: meta.steps || [],
     planner_info: { available: !!meta.model, model: meta.model },
     // 用量与「已停止」都要回放。用量是账，停止是事实陈述，两者丢了都会让
     // 历史看起来像另一轮对话。
     usage: meta.usage || {},
     cancelled: !!meta.cancelled,
+    // 同一问留了几版（n / i / ids）。服务端只在多于两版时给，这里原样带上 ——
+    // 少了它，切回历史会话就看不见「这一问还有另一版」，而那一版还在库里。
+    alts: m.alts || null,
     trace: [],
     // 时间戳给导出抬头用。原来靠 __m.ts，而原始消息上是 m.ts —— 也一并在这收口
     ts: m.ts || meta.ts || "",
   };
 }
 
-function bubbleFromHistory(m, threadId) {
-  return aiBubble(historyView(m, threadId), { threadId, messageId: m.id });
+function bubbleFromHistory(m, threadId, canRegen) {
+  return aiBubble(historyView(m, threadId), {
+    threadId, messageId: m.id, alts: m.alts, canRegen,
+  });
 }
 
 function renderThread(thread) {
@@ -5639,10 +5990,21 @@ function renderThread(thread) {
     box.innerHTML = emptyHtml();
     return;
   }
-  box.innerHTML = msgs.map((m) => m.role === "user"
-    ? `<div class="bub-user">${esc(m.content)}</div>`
-    : `<div class="bub-ai" data-mid="${esc(m.id || "")}">${bubbleFromHistory(m, thread.id)}</div>`
-  ).join("");
+  // 最后一条答案 = 最后一轮（服务端只回可见消息，所以它就在末尾）。
+  // 只有它能「换一版」：中间那一轮换了，后面几轮就是照着旧答案说的。
+  let lastAi = -1;
+  msgs.forEach((m, i) => { if (m.role === "assistant") lastAi = i; });
+  // 每条答案记下它回答的那句问题：「换一版」要原样再问一遍，而气泡本身
+  // 只有答案没有问句。挂在 data-q 上而不是存全局下标 —— 重排/过滤之后下标会错位。
+  let asked = "";
+  box.innerHTML = msgs.map((m, i) => {
+    if (m.role === "user") {
+      asked = m.content;
+      return `<div class="bub-user">${esc(m.content)}</div>`;
+    }
+    return `<div class="bub-ai" data-mid="${esc(m.id || "")}" data-q="${esc(asked)}">${
+      bubbleFromHistory(m, thread.id, i === lastAi)}</div>`;
+  }).join("");
   // 把气泡数据挂到节点上，供复制/导出取数。必须挂 historyView 的产物，
   // 不能挂原始消息 —— 原始消息上是 role/content/meta，没有 facts/sources，
   // 导出会得到一份"完整但空"的文档。挂引用而不是存全局下标：过滤重排后
@@ -5813,6 +6175,10 @@ async function openThread(id) {
     draftLoad(null);
     THREAD_TOKENS = 0;
     renderUsageFoot();
+    // 新会话没有材料：上一个会话挂的那几份不该显示在这里，更不该被带进新一轮
+    ATT.files = [];
+    ATT.drop = [];
+    renderAttach();
     // 按钮只属于「这一轮所在的会话」。正在跑的轮次在别处时还留着「停止」，
     // 用户在这里按下去，停的是另一条会话的事
     setRunning(!!(RUN && RUN.threadId && RUN.threadId === id));
@@ -5822,6 +6188,15 @@ async function openThread(id) {
   if (!res.ok) { THREAD = null; renderThread(null); renderChats(); return; }
   const d = await res.json();
   renderThread(d.thread);
+  // 本会话挂着的材料：芯片要按服务端的清单重建。刷新之后 ATT 是空的，
+  // 不重建的话用户看不见「材料还在」，只会以为又得重传一遍 —— 而追问其实
+  // 一直能用。这类芯片标 saved：留着显示，不随请求重发。
+  ATT.files = (d.materials || []).map((m) => ({
+    name: m.name, size: 0, text: "", chars: m.chars || 0, state: "ok",
+    cut: !!m.truncated, id: m.id, saved: true, kind: m.kind || "",
+  }));
+  ATT.drop = [];
+  renderAttach();
   // 切回「正在算」的那个会话：把占位块挂回去。这一轮还没落库，服务端返回的
   // 消息里没有它 —— 不挂回去，用户会以为自己刚才那问白问了，然后重问一遍
   if (RUN && RUN.holder && RUN.threadId === id && !RUN.holder.isConnected) {
@@ -6649,6 +7024,21 @@ function bindFold(scope) {
       if (t.hasAttribute("hidden")) {
         t.removeAttribute("hidden");
         el.textContent = "收起参谋原始意见";
+      } else {
+        t.setAttribute("hidden", "");
+        el.textContent = `${label} · 展开`;
+      }
+    };
+  });
+  // 处理过程的折叠条。文案（几步 / 几步没走完）由后端数据算出来存在 data-label 上，
+  // 展开后不再重复那句话 —— 每行本身就是内容。
+  (scope.querySelectorAll ? scope.querySelectorAll("[data-stepsfold]") : []).forEach((el) => {
+    el.onclick = () => {
+      const t = el.nextElementSibling;
+      const label = el.dataset.label || "处理过程";
+      if (t.hasAttribute("hidden")) {
+        t.removeAttribute("hidden");
+        el.textContent = "收起处理过程";
       } else {
         t.setAttribute("hidden", "");
         el.textContent = `${label} · 展开`;
@@ -11308,7 +11698,12 @@ document.addEventListener("click", (e) => {
   // 附件芯片上的 ✕：按索引删，芯片是即时重绘的，索引总跟着当前列表
   const attRm = e.target.closest("[data-attrm]");
   if (attRm) {
-    ATT.files.splice(Number(attRm.dataset.attrm), 1);
+    const i = Number(attRm.dataset.attrm);
+    const gone = ATT.files[i];
+    ATT.files.splice(i, 1);
+    // 已经挂到会话上的，要告诉后端把这一个从清单上摘掉 —— 只删芯片的话，
+    // 下一轮它还会从会话里被带上来，用户会以为「删了没用」
+    if (gone && gone.saved && gone.id) ATT.drop.push(gone.id);
     return renderAttach();
   }
 
@@ -11487,6 +11882,47 @@ document.addEventListener("click", (e) => {
     const atts = (holder && holder.__atts) || [];
     if (holder) holder.remove();
     return ask(q, { retry: true, attachments: atts });
+  }
+
+  // 换一版：同一问再要一个答案。问题挂在 .bub-ai 的 data-q 上（历史回放时
+  // 由 renderThread 挂），实时那一轮挂在 retryq 上。
+  // 材料显式传空数组：后端按会话挂着的清单自己带上（标 archived），
+  // 不传的话 ask() 会把输入框里那几颗芯片再发一遍，被当成"这一轮新传的材料"。
+  const rg = e.target.closest("[data-act='regen']");
+  if (rg) {
+    const holder = rg.closest(".bub-ai");
+    const q = (holder && (holder.dataset.q || holder.dataset.retryq)) || "";
+    if (!q) return toast("这次的问题已经取不到了，请在输入框里重新提问");
+    return ask(q, {
+      regen: true,
+      mid: (holder && holder.dataset.mid) || "",
+      attachments: [],
+    });
+  }
+
+  /* 同一问的几版之间切换。只改"显示哪一版"，一条消息都不删 —— 所以点错了
+     也不要紧，再点回来就是。成功后整屏重画：切换会改变"最后一轮是哪一版"，
+     也就改变哪一条气泡上有「换一版」，逐条改 DOM 反而容易漏。 */
+  const alt = e.target.closest("[data-act='alt']");
+  if (alt) {
+    const to = alt.dataset.to || "";
+    if (!to || !THREAD) return;
+    alt.disabled = true;   // 防连点：一次切换要走一趟网络 + 一次重画
+    fetch(`/api/threads/${encodeURIComponent(THREAD)}/pick`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Person-Id": PID.get() },
+      body: JSON.stringify({ message_id: to }),
+    })
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (!d.ok) throw new Error(askErrText(d.error || `HTTP ${r.status}`));
+        await openThread(THREAD);
+      })
+      .catch((err) => {
+        if (alt.isConnected) alt.disabled = false;
+        toast("切换失败：" + err.message);
+      });
+    return;
   }
 
   const nav = e.target.closest("[data-nav]");
@@ -11700,7 +12136,9 @@ $("#expertsModal").onclick = (e) => { if (e.target.id === "expertsModal") $("#ex
    口径」「这里面说的那个」指什么；答案里的数字仍然只来自指标接口。材料里的
    数字不进取数链路 —— 否则「每个数都能追到出处」这条底线就断了。
    图片要 OCR，还没有，选择时明确拒绝并说明原因。 */
-const ATT = { files: [], MAX: 5, MAX_CHARS: 12000, MAX_TOTAL: 30000 };
+// `saved` 表示这份材料已经挂到会话上（后端有 id、会话记着），芯片留着显示、
+// 但不再随请求重发；`drop` 是本轮要摘掉的 id，跟着下一次发送带过去。
+const ATT = { files: [], MAX: 5, MAX_CHARS: 12000, MAX_TOTAL: 30000, drop: [] };
 const TEXT_EXT = [".txt", ".md", ".csv", ".tsv", ".json", ".log", ".yaml", ".yml", ".xml"];
 // 走服务端解析的格式：xlsx / docx 是 zip + XML，要还原「显示值」或判断「哪些算
 // 正文」；pdf 要解析库。这三种都不能当纯文本读。
@@ -11718,14 +12156,25 @@ function charText(n) {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k 字` : `${n} 字`;
 }
 function attUsed() {
-  return ATT.files.reduce((n, f) => n + (f.chars || 0), 0);
+  // 只算「这轮要发出去的」：已经挂到会话上的（saved）不再占请求体配额，
+  // 不然传过五份材料之后，这个会话里一个新材料都加不进来
+  return ATT.files.reduce((n, f) => n + (f.saved ? 0 : (f.chars || 0)), 0);
+}
+function attPending() {
+  return ATT.files.filter((f) => !f.saved).length;
 }
 /* 附件实际要发出去的那些。只认读成功的：读取中的发出去是空文件，
-   读失败的更不行 —— 用户以为带了材料，模型却没看到，这比拒绝发送糟得多。 */
+   读失败的更不行 —— 用户以为带了材料，模型却没看到，这比拒绝发送糟得多。
+
+   有 id 的只发 id：正文早就存在材料库里了，再传一遍一万多字纯属浪费带宽，
+   而且每次都得重新算一遍 sha 才能认出是同一份。没有 id（入库失败，或者
+   老版本缓存）才退回发正文 —— 发正文这条路后端仍然认，只是慢一点。 */
 function attachPayload() {
   return ATT.files
-    .filter((f) => f.state === "ok" && (f.text || "").trim())
-    .map((f) => ({ name: f.name, text: f.text, chars: f.chars, truncated: !!f.cut }));
+    .filter((f) => f.state === "ok" && !f.saved && (f.text || "").trim())
+    .map((f) => (f.id
+      ? { id: f.id, name: f.name, chars: f.chars, truncated: !!f.cut }
+      : { name: f.name, text: f.text, chars: f.chars, truncated: !!f.cut }));
 }
 /* 初判它像不像一张数据表：只看前几行有没有「分隔符 + 数字」。
    只用来在芯片上标一句「表格」，不决定要不要发、也不决定能不能对上指标 ——
@@ -11752,7 +12201,11 @@ function renderAttach() {
     }
     else if (f.state === "empty") { meta = "没有文字"; cls = " bad"; }
     else if (f.state === "error") { meta = f.err || "读取失败"; cls = " bad"; }
-    const tip = [f.name, f.note].filter(Boolean).join("\n");
+    // 已挂到会话上的芯片压暗一档：它还在（追问能用），但这一轮不会重发，
+    // 和「刚选的、等着发」的芯片不能长得一样
+    if (f.saved && f.state === "ok") cls += " saved";
+    const tip = [f.name, f.note, f.saved ? "已随本会话保存，后续追问会自动带上" : ""]
+      .filter(Boolean).join("\n");
     return `<span class="att-chip${cls}">
       <span class="nm" title="${esc(tip)}">${esc(f.name)}</span>
       <span class="sz">${esc(meta)}</span>
@@ -11779,9 +12232,27 @@ function decodeBest(buf) {
   return { text: utf8, enc: "utf-8" };
 }
 
+/* 读完就地入库，拿一个材料 id。
+   为什么不等到「发送」再存：用户选完材料可能会删掉芯片、会刷新页面、会先切去
+   看别的会话再回来 —— 等到发送才存，这几种情况下材料就没了。上传那一刻入库，
+   芯片上才有稳定的身份，刷新之后也能从会话里重建出来。
+   存不进去不算失败：芯片照样能发（走正文），只是这次没法跟着会话活下去。 */
+async function saveMaterial(rec) {
+  try {
+    const res = await fetch("/api/materials", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json", "X-Person-Id": PID.get() }),
+      body: JSON.stringify({ name: rec.name, text: rec.text, kind: rec.kind || "text" }),
+    });
+    const js = await res.json().catch(() => ({}));
+    if (res.ok && js.ok && js.id) { rec.id = js.id; return true; }
+  } catch (e) { /* 网络断了也照旧能发 */ }
+  return false;
+}
+
 function readOne(file, rec, cap) {
   const r = new FileReader();
-  r.onload = () => {
+  r.onload = async () => {
     const got = decodeBest(new Uint8Array(r.result || new ArrayBuffer(0)));
     let t = String(got.text || "");
     if (t.charCodeAt(0) === 0xfeff) t = t.slice(1);   // 带 BOM 的 csv/txt 很常见
@@ -11792,6 +12263,7 @@ function readOne(file, rec, cap) {
     rec.enc = got.enc;
     rec.state = t.trim() ? "ok" : "empty";
     renderAttach();
+    if (rec.state === "ok") { await saveMaterial(rec); renderAttach(); }
   };
   r.onerror = () => { rec.state = "error"; rec.err = "读取失败"; renderAttach(); };
   r.readAsArrayBuffer(file);
@@ -11818,7 +12290,7 @@ function readBook(file, rec, cap) {
     try {
       const res = await fetch("/api/attachments/parse", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json", "X-Person-Id": PID.get() }),
         body: JSON.stringify({ files: [{ name: file.name, data: b64Of(fr.result) }] }),
       });
       const js = await res.json().catch(() => ({}));
@@ -11830,6 +12302,8 @@ function readBook(file, rec, cap) {
       if (it.truncated) rec.cut = true;
       rec.text = t;
       rec.chars = t.length;
+      // 服务端解析完已经入库了，这个 id 是白拿的 —— 之后每轮只发它
+      rec.id = it.id || "";
       rec.kind = it.kind || "";
       rec.paras = it.paras || 0;
       rec.rows = it.rows || 0;
@@ -11850,7 +12324,7 @@ function readBook(file, rec, cap) {
 function addAttach(list) {
   let refused = "";
   for (const f of list) {
-    if (ATT.files.length >= ATT.MAX) { refused = `最多 ${ATT.MAX} 个附件`; break; }
+    if (attPending() >= ATT.MAX) { refused = `最多 ${ATT.MAX} 个附件`; break; }
     const lower = (f.name || "").toLowerCase();
     const ext = lower.slice(lower.lastIndexOf("."));
     // 同一个文件重复选不重复列：芯片上分不出两条一模一样的名字

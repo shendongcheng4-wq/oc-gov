@@ -24,6 +24,10 @@
 
 老数据、拒答、中止这类没有正文的消息才退回 `_summary()` 的模板（不含数值）——
 它们本来就没有可回灌的原文。
+
+同一问可以留几版答案（重答 / 重试，见「答案分支」一节），但**只有当前选中
+的那一版回灌**：两版都进去，模型会看到自己对同一个问题说过两个数，下一轮
+追问「刚才那个」时不知道该顺哪个 —— 这一点比省 token 重要得多。
 """
 
 from __future__ import annotations
@@ -38,6 +42,9 @@ import store
 FILE = "chats"
 VERSION = 1
 MAX_TITLE = 24
+# 一个会话最多挂几份材料。一份材料上限 1.2 万字，八份已经能把 8k 窗口吃掉大半，
+# 再多就不是「参考资料」而是「把文件塞给模型」了。
+MAX_MATERIALS = 8
 
 # ── token 估算 ────────────────────────────────────────────────────────
 #
@@ -225,14 +232,17 @@ def list_threads(query: str | None = None, owner: str | None = None) -> list[dic
                 snippet = _snippet(msgs, needle)
                 if snippet is None:
                     continue
-        last = msgs[-1] if msgs else None
+        # 预览和条数按「屏幕上能看到的」算，不按库存 —— 同一问多留了两版答案，
+        # 侧栏条数就莫名多两条、预览还是那版没在显示的，用户会以为会话错了。
+        vis = visible(t)
+        last = vis[-1] if vis else None
         item = {
             "id": t["id"],
             "title": title,
             "created_at": t.get("created_at"),
             "updated_at": t.get("updated_at"),
             "model_ref": t.get("model_ref"),
-            "message_count": len(msgs),
+            "message_count": len(vis) or len(msgs),
             "last_preview": (last.get("content") or "")[:60] if last else "",
             "last_role": last.get("role") if last else None,
         }
@@ -275,6 +285,9 @@ def create(
         "model_ref": model_ref,
         "messages": [],
     }
+    if thread["title"]:
+        # 建会话时就带了标题（导入、外部调用）：当成用户起的，不被后续自动标题覆盖
+        thread["title_src"] = "user"
 
     def _do(cfg: dict[str, Any]) -> dict[str, Any]:
         cfg["threads"].append(thread)
@@ -324,13 +337,334 @@ def own_orphans(owner: str) -> int:
     return changed["n"]
 
 
+# ── 会话标题 ──────────────────────────────────────────────────────────
+#
+# 标题有两层：发送那一刻先用「问句前 24 字」顶上（侧栏立刻有字，不用等），
+# 首轮答完再换成一句真正的标题。第二层**不额外调模型** —— 答案里的
+# `metric_names` / `period_label` 就是这一轮到底在说什么，用它拼比让模型
+# 再读一遍问题更准，也少一次调用、少一份延迟。
+#
+# 为什么值得换：原话里一半是套话（「请帮我看看今年 9 月……是多少」），
+# 十个会话在同一屏里全是「请帮我看看」，侧栏等于没有标题。
+#
+# 三种来源按优先级往上换，换上去就不往回退：
+#   auto（问句截断） → derived（清掉套话的问句） → metric（指标 + 期次） → user
+# `user` 是用户手改的，永远最高，任何自动逻辑都不许覆盖它。
+_TITLE_RANK = {"auto": 0, "derived": 1, "metric": 2, "user": 9}
+
+# 句首套话：只认完整词组，不删单字「请」——「请市政府协调……」删掉就成了另一个人
+# 在说话。这类词在问句里只占字数、不带信息。
+_SOFT_HEAD = (
+    "请帮我看看", "请帮我", "麻烦帮我", "帮我看看", "帮我", "帮忙",
+    "请问一下", "请问", "想问一下", "想问", "想了解", "看一下", "看看",
+    "查一下", "查查", "给我看看", "给我", "告诉我", "能不能", "可以帮",
+)
+# 句尾：长的排前面，逐轮剥（「是多少呢」要先剥「是多少」再剥「呢」）
+_SOFT_TAIL = (
+    "是多少呢", "是多少", "多少", "是啥", "是什么", "怎么样", "如何",
+    "什么情况", "吗", "呢", "？", "?", "。", "！", "!",
+)
+
+
+def _clean_question(text: str) -> str:
+    """问句 → 标题：去掉句首套话、句尾问法，压掉多余空白。"""
+    raw = str(text or "")
+    s = re.sub(r"\s+", " ", raw).strip()
+    changed = True
+    while changed:
+        changed = False
+        for word in _SOFT_HEAD:
+            if s.startswith(word) and len(s) > len(word) + 1:
+                s = s[len(word):].lstrip("，,、 ")
+                changed = True
+                break
+    for _ in range(3):
+        hit = False
+        for word in _SOFT_TAIL:
+            if s.endswith(word) and len(s) > len(word) + 2:
+                s = s[: -len(word)].rstrip("，,、 ")
+                hit = True
+                break
+        if not hit:
+            break
+    s = s.strip()
+    # 「今年 1-9 月」这种数字两边带空格的写法，标题里读着断：抹成「1-9月」
+    s = re.sub(r"(?<=\d)\s+(?=[月年日季])", "", s)
+    s = re.sub(r"(?<=[年月日季])\s+(?=\d)", "", s)
+    # 剥到只剩两三个字就说明剥过头了（「你好」被剥成「你」），退回原话
+    if len(s) < 3:
+        s = re.sub(r"\s+", " ", raw).strip()
+    return s[:MAX_TITLE]
+
+
+# 指标名里人人都懂的缩写。只收「删掉不会改变含义」的几个 —— 「规模以上」写成
+# 「规上」是这个系统自己在答案里一直在用的说法，不会让标题变难懂。
+_NAME_ABBR = (("规模以上", "规上"),)
+
+
+def _short_name(name: str) -> str:
+    s = str(name or "").strip()
+    for long, short in _NAME_ABBR:
+        s = s.replace(long, short)
+    return s
+
+
+def _short_period(label: str) -> str:
+    """期次写成标题里的样子：今年的省掉年份（「2026年9月」→「9月」）。"""
+    s = str(label or "").strip()
+    if not s:
+        return ""
+    s = re.sub(rf"^{time.localtime().tm_year}年", "", s)
+    return s[:9]
+
+
+def derive_title(
+    question: str,
+    meta: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    """按这一轮实际查到的东西起标题，返回 (标题, 来源)。
+
+    有指标就把「期次 + 指标名」放前面：十个会话都问同一个指标时，区分它们的
+    只有期次。查不到指标（闲聊、知识库、拒答）才退回清理过的问句。
+    """
+    meta = meta or {}
+    names = [str(n) for n in (meta.get("metric_names") or []) if str(n).strip()]
+    intent = str(meta.get("intent") or "")
+    # 问口径的那一轮不带期次，「规上工业增加值增速」这个标题会把「问的是口径」
+    # 这层意思抹掉 —— 这种就退回清理过的问句（「规上工业增加值的口径」）。
+    if names and intent != "definition":
+        head = "、".join(_short_name(n) for n in names[:2])
+        if len(names) > 2:
+            head += f" 等 {len(names)} 项"
+        period = _short_period(str(meta.get("period_label") or ""))
+        text = f"{period} · {head}" if period else head
+        return text[:MAX_TITLE], "metric"
+    return _clean_question(question), "derived"
+
+
+def _maybe_retitle(thread: dict[str, Any], msgs: list[dict[str, Any]], meta: dict[str, Any]) -> None:
+    """把标题往上升一级（auto → derived → metric），降不回去。"""
+    first = next((m for m in msgs if m.get("role") == "user"), None)
+    if first is None:
+        return
+    question = str(first.get("content") or "")
+    cur = str(thread.get("title_src") or "")
+    if not cur:
+        # 老数据没有这个字段：只有当标题仍是首问截断时才认作自动生成，
+        # 否则可能已经被用户改过名 —— 覆盖用户起的名字比标题难看严重得多。
+        raw = re.sub(r"\s+", " ", question).strip()[:MAX_TITLE]
+        cur = "auto" if thread.get("title") in (raw, _clean_question(question)) else "user"
+    better, src = derive_title(question, meta)
+    if better and _TITLE_RANK.get(src, 0) > _TITLE_RANK.get(cur, 0):
+        thread["title"] = better
+        thread["title_src"] = src
+
+
+# ── 答案分支：同一问可以有几版答案 ─────────────────────────────────────
+#
+# 以前「重答」是删掉上一条（`drop_last`）。删掉是错的：那一轮花掉的模型调用、
+# 试过的步骤、以及「用户按了停止」这件事本身都是记录，删了就没有对照可看，
+# 而用户想比较的恰恰是「上一版和这一版哪个对」。
+#
+# 现在一条 assistant 消息记 `reply_to`（它回答的那条 user 消息 id），同一
+# `reply_to` 下的若干条就是同一问的几版；`thread["picks"]` 记住当前显示哪一版。
+# **只有被选中的那一版进模型上下文** —— 两版都进去，模型会看到自己对同一个
+# 问题说了两个数，下一轮就不知道该顺着哪个说。
+#
+# 刻意不做的两件事：
+#
+# 1. **不做「从中间某轮分叉」**（改掉第 2 轮再往下答）。第 3 轮的回答是照着
+#    第 2 轮写的，换掉第 2 轮之后第 3 轮就自相矛盾 —— 要么一起作废、要么逐轮
+#    重算。所以只允许**最后一轮**重答或换版（`pick_answer` 里判死）。
+# 2. **不把消息组织成树**。仍是 append-only 的扁平数组，`seq` 单调，导出、
+#    搜索、审计、收藏夹都不必改。树能表达的东西这里用不上，而代价是每个读
+#    消息的地方都要换成递归。
+#
+# 老数据没有 `reply_to`：按位置推断（挂到前面最近那条 user 上）。那正是老
+# 代码的回灌顺序，所以升级前后上下文一字不差。
+MAX_ANSWERS = 6
+
+
+def _last_user_id(msgs: list[dict[str, Any]]) -> str | None:
+    for msg in reversed(msgs):
+        if msg.get("role") == "user":
+            return str(msg.get("id") or "") or None
+    return None
+
+
+def _turns_of(thread: dict[str, Any]) -> list[dict[str, Any]]:
+    """把扁平消息折成轮次：`[{user, answers, pick}]`。
+
+    只在内存里折，**不落库** —— 落一份「轮次表」就得和 messages 保持同步，
+    迟早不一致，而不一致的表现是「点某一版没反应」，还查不出哪一步错的。
+
+    没有 `reply_to` 的消息挂到最后一轮；连一轮都没有（凭空来的一条 assistant）
+    就自成一轮 —— 那种消息没有「同一问」可言，也就没有分支。
+    """
+    picks = thread.get("picks")
+    picks = picks if isinstance(picks, dict) else {}
+    turns: list[dict[str, Any]] = []
+    by_user: dict[str, dict[str, Any]] = {}
+    for msg in thread.get("messages") or []:
+        role = msg.get("role")
+        if role == "user":
+            turn = {"user": msg, "answers": [], "pick": None}
+            turns.append(turn)
+            by_user[str(msg.get("id") or "")] = turn
+            continue
+        if role != "assistant":
+            continue
+        key = str(msg.get("reply_to") or "")
+        turn = by_user.get(key) if key else None
+        if turn is None:
+            if not turns or turns[-1].get("user") is None:
+                turns.append({"user": None, "answers": [], "pick": None})
+            turn = turns[-1]
+        turn["answers"].append(msg)
+
+    for turn in turns:
+        user = turn.get("user")
+        want = str(picks.get(str((user or {}).get("id") or "")) or "")
+        hit = next(
+            (a for a in turn["answers"] if str(a.get("id") or "") == want), None
+        ) if want else None
+        # picks 指向一条已经被删掉的答案（会话被手改过、或裁剪过）：退回最后
+        # 一版，不报错也不清空 —— 宁可显示"某一版"，不能显示"这一轮没有答案"。
+        turn["pick"] = hit or (turn["answers"][-1] if turn["answers"] else None)
+    return turns
+
+
+def _remember_pick(thread: dict[str, Any], msg: dict[str, Any]) -> None:
+    """新答案默认显示。顺手把这一轮超过 `MAX_ANSWERS` 的最旧一版丢掉。
+
+    为什么要封顶：界面只给前后切换，留到第八版之后，最早那几版已经不可能被
+    翻到，而它们每一次都要跟着 `chats.json` 整份读写一遍 —— 多试几次答法，
+    之后每一轮问答都变慢。丢的是最旧的、且一定不是刚选中的那一版。
+    """
+    rid = str(msg.get("reply_to") or "")
+    picks = thread.get("picks")
+    picks = picks if isinstance(picks, dict) else {}
+    picks[rid] = str(msg.get("id"))
+    thread["picks"] = picks
+
+    same = [
+        m for m in thread.get("messages") or [] if str(m.get("reply_to") or "") == rid
+    ]
+    if len(same) > MAX_ANSWERS:
+        for old in same[: len(same) - MAX_ANSWERS]:
+            thread["messages"] = [
+                m for m in thread.get("messages") or [] if m is not old
+            ]
+
+
+def visible(thread: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """这一屏该显示的消息：每条问句 + 它当前选中的那一版答案。
+
+    接口层用它回放 —— 把没选中的几版一起发给前端，界面要么重复画（同一问
+    两条答案），要么自己再实现一遍选择逻辑（两份逻辑必然走偏）。
+
+    多于两版时给那一条塞 `alts = {n, i, ids}`（共几版、这是第几版、各版 id），
+    界面据此画「‹ 2/3 ›」。带 `ids` 是为了切换时不必再问一次"同问的另外几版
+    是谁" —— 一个 `pick` 请求就够，少一次往返，也就少一处可能对不上的状态。
+    **只在一版时不塞**：一版的题占着位置画个 1/1 是纯噪音。
+    """
+    if not thread:
+        return []
+    out: list[dict[str, Any]] = []
+    for turn in _turns_of(thread):
+        user = turn.get("user")
+        if user:
+            out.append(user)
+        pick = turn.get("pick")
+        if pick is None:
+            continue
+        answers = turn["answers"]
+        if user and len(answers) > 1:
+            idx = next((i for i, a in enumerate(answers) if a is pick), len(answers) - 1)
+            pick = {
+                **pick,
+                "alts": {
+                    "n": len(answers),
+                    "i": idx + 1,
+                    "ids": [str(a.get("id") or "") for a in answers],
+                },
+            }
+        out.append(pick)
+    return out
+
+
+def last_turn(thread: dict[str, Any] | None) -> dict[str, Any] | None:
+    """最后一轮（`{user, answers, pick}`）。重答/重试都只作用在它上面。"""
+    turns = _turns_of(thread or {})
+    return turns[-1] if turns else None
+
+
+def pick_answer(
+    thread_id: str,
+    message_id: str,
+    owner: str | None = None,
+) -> dict[str, Any] | None:
+    """把某一轮显示的那一版换成 `message_id`，返回换完之后的落点。
+
+    换来换去只换「显示和上下文用哪一版」，一条消息都不删 —— 用户看过的那一版
+    随时能切回去，这是他敢去点「换一版」的前提。
+
+    不属于会话、不是答案、不在最后一轮，一律返回 None（接口层给 404）。中间轮
+    不给换：换掉它，后面几轮就是照着另一版答案说的，整段历史自相矛盾。这条路
+    正常走不到（界面只在最后一轮画切换钮），所以返回错误比返回 403 更合适 ——
+    用户没做错什么。
+    """
+    if get(thread_id, owner=owner) is None:
+        return None
+    got: dict[str, Any] = {}
+
+    def _do(cfg: dict[str, Any]) -> dict[str, Any]:
+        thread = _find(cfg, thread_id)
+        if thread is None:
+            return cfg
+        turns = _turns_of(thread)
+        if not turns:
+            return cfg
+        last = turns[-1]
+        user = last.get("user")
+        if user is None:
+            return cfg
+        hit = next(
+            (a for a in last["answers"] if str(a.get("id") or "") == str(message_id)),
+            None,
+        )
+        if hit is None:
+            return cfg
+        picks = thread.get("picks")
+        picks = picks if isinstance(picks, dict) else {}
+        picks[str(user.get("id") or "")] = str(hit.get("id"))
+        thread["picks"] = picks
+        got.update(
+            ok=True,
+            message_id=hit.get("id"),
+            reply_to=user.get("id"),
+            n=len(last["answers"]),
+            i=last["answers"].index(hit) + 1,
+        )
+        return cfg
+
+    store.update(FILE, _do, _empty())
+    return got or None
+
+
 def append(
     thread_id: str,
     role: str,
     content: str,
     meta: dict[str, Any] | None = None,
+    reply_to: str | None = None,
 ) -> dict[str, Any] | None:
-    """追加一条消息，seq 取 max+1。线程不存在返回 None。"""
+    """追加一条消息，seq 取 max+1。线程不存在返回 None。
+
+    `reply_to` 只对 assistant 有意义：它回答的是哪一条问句。同一 `reply_to`
+    下的多条就是同一问的几版答案（见下面的「答案分支」）。不给就取前面最近
+    那条 user —— 老调用方（测试、脚本、别的入口）不必知道这个字段存在。
+    """
     added: dict[str, Any] = {}
 
     def _do(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -346,13 +680,25 @@ def append(
             "content": content,
             "ts": _now(),
         }
+        if role == "assistant":
+            rid = str(reply_to or _last_user_id(msgs) or "")
+            if rid:
+                msg["reply_to"] = rid
         if meta:
             msg["meta"] = meta
         msgs.append(msg)
         thread["updated_at"] = msg["ts"]
-        # 首条用户消息自动当标题，省一个「请命名」的步骤
+        if msg.get("reply_to"):
+            _remember_pick(thread, msg)
+        # 首条用户消息先顶一个标题，省一个「请命名」的步骤。这时候还没有答案，
+        # 只能拿问句凑；首轮答完会换成真标题（见下面 derive_title）。
         if role == "user" and not thread.get("title"):
-            thread["title"] = content.strip().replace("\n", " ")[:MAX_TITLE]
+            thread["title"] = _clean_question(content)
+            thread["title_src"] = "auto"
+        # 首轮答完：用这一轮实际查到的指标和期次重起一个标题。不额外调模型 ——
+        # 这些字段本来就在 meta 里（见 app/main.py 的 _persist_answer）。
+        if role == "assistant" and meta:
+            _maybe_retitle(thread, msgs, meta)
         added.update(msg)
         return cfg
 
@@ -365,12 +711,50 @@ def rename(thread_id: str, title: str, owner: str | None = None) -> bool:
         thread = _find(cfg, thread_id)
         if thread is not None:
             thread["title"] = title.strip()[:MAX_TITLE]
+            # 用户亲手起的名字是终态：自动派生到此为止，后面轮次一律不许覆盖
+            thread["title_src"] = "user"
         return cfg
 
     if get(thread_id, owner=owner) is None:
         return False
     store.update(FILE, _do, _empty())
     return True
+
+
+def attach_materials(
+    thread_id: str,
+    add: list[str] | None = None,
+    drop: list[str] | None = None,
+) -> list[str]:
+    """把材料 id 记到会话上（或从会话上摘掉），返回记完之后的清单。
+
+    清单里只有 id，正文在 `core/materials.py` 里按 id 取 —— 一份一万多字的材料
+    要是塞进 chats.json，每一轮上下文都会把它重复带一遍，几十轮之后光历史就能
+    把窗口吃干净。
+
+    封顶 `MAX_MATERIALS`，超了摘最旧的而不是拒绝新的：用户刚传的那份显然比
+    上周那份更该在。摘掉只是不挂在会话上，材料本身还在库里（可能别的会话在用）。
+    """
+    gone = {str(x) for x in (drop or []) if x}
+
+    def _do(cfg: dict[str, Any]) -> dict[str, Any]:
+        thread = _find(cfg, thread_id)
+        if thread is None:
+            return cfg
+        cur = [str(x) for x in (thread.get("material_ids") or []) if x]
+        cur = [x for x in cur if x not in gone]
+        for mid in add or []:
+            key = str(mid or "")
+            if key and key not in cur:
+                cur.append(key)
+        cur = cur[-MAX_MATERIALS:]
+        if cur != (thread.get("material_ids") or []):
+            thread["material_ids"] = cur
+        return cfg
+
+    store.update(FILE, _do, _empty())
+    thread = get(thread_id)
+    return [str(x) for x in ((thread or {}).get("material_ids") or [])]
 
 
 def delete(thread_id: str, owner: str | None = None) -> bool:
@@ -383,29 +767,6 @@ def delete(thread_id: str, owner: str | None = None) -> bool:
 
     store.update(FILE, _do, _empty())
     return get(thread_id) is None
-
-
-def drop_last(thread_id: str) -> dict[str, Any] | None:
-    """删掉最后一条消息，返回被删的那条。
-
-    只给"重试"用：上一轮被用户停掉时落了一句「已停止生成」占位，重新问同一句时
-    这条占位应当被真正的答案顶掉 —— 留着它，会话里就会出现
-    问 → 已停止 → 问 → 答案，同一句话连着问了两遍。
-    """
-    removed: dict[str, Any] = {}
-
-    def _do(cfg: dict[str, Any]) -> dict[str, Any]:
-        thread = _find(cfg, thread_id)
-        if thread is None:
-            return cfg
-        msgs = thread.get("messages") or []
-        if msgs:
-            removed.update(msgs.pop())
-            thread["updated_at"] = _now()
-        return cfg
-
-    store.update(FILE, _do, _empty())
-    return removed or None
 
 
 def set_message_meta(thread_id: str, message_id: str, patch: dict[str, Any]) -> bool:
@@ -708,6 +1069,7 @@ def context(
     window: int | None = None,
     system_text: str = "",
     reserved: int = 0,
+    drop_tail: int = 0,
 ) -> list[dict[str, str]]:
     """取历史对话，转成 OpenAI messages 格式，供意图解析参考指代。
 
@@ -725,6 +1087,12 @@ def context(
     窗口）。界面要把这件事说出来：上下文被裁而用户不知道，表现上就是
     「它怎么把刚才说的忘了」，而用户唯一能做的判断是「系统不靠谱」。
     用出参而不是改返回值，是为了不动已有的调用方（同 degraded 的出参风格）。
+
+    `drop_tail` 是从末尾摘掉几条（重答时用）：正在重答的那一轮，问句和上一版
+    答案都不能进上下文 —— 模型看见自己上一版会把那套说法（含数字）复述一遍，
+    而用户点「换一版」要的正是另一种答法。这几条在库里还在，只是这一轮不读。
+    为什么放在这里而不是让调用方自己 pop：pop 之后 `out` 里的轮数/用量就对不上
+    了，界面会显示「带入了 4 轮」而实际只有 3 轮。
     """
     def _report(**kw: Any) -> None:
         if out is not None:
@@ -752,29 +1120,45 @@ def context(
         return []
 
     entries: list[tuple[str, str]] = []
-    # 只认**最后一条**带对照的回答：更早的对照早被后面的问题顶掉了，每轮都
-    # 往回灌只会让 prompt 里堆一串过期的表，还挤掉真正有用的历史。
-    last_ext: dict[str, Any] | None = None
-    last_ext_at: int | None = None
-    for msg in thread.get("messages") or []:
-        role = msg.get("role")
-        if role == "user":
-            entries.append(("user", (msg.get("content") or "").strip()))
-        elif role == "assistant":
+    # 带对照的回答落在哪一条上，按 entries 下标记。记成字典而不是就地记住
+    # "最后一条"：重答要摘掉末尾那一轮（见下面的 drop_tail），摘完得能往回找。
+    exts: dict[int, dict[str, Any]] = {}
+    # **只回灌选中的那一版**（`_turns_of` 的 pick）。同一问的另外几版既不进
+    # 上下文，也不参与 token 预算 —— 否则模型会看到自己答过两个不同的数，
+    # 追问「刚才那个数」时不知道该顺哪个，而且一轮历史按两三轮的钱算。
+    for turn in _turns_of(thread):
+        user = turn.get("user")
+        if user:
+            entries.append(("user", (user.get("content") or "").strip()))
+        answer = turn.get("pick")
+        if answer is not None:
             # 原文回灌，数值照带。只有拿不到正文的消息（老数据、空 headline）
             # 才退回模板摘要 —— 那种消息本来就没有可回灌的内容。
-            text = (msg.get("content") or "").strip()
-            entries.append(("assistant", text or _summary(msg.get("meta"))))
-            ext = (msg.get("meta") or {}).get("external")
-            last_ext = ext if isinstance(ext, dict) else None
-            last_ext_at = len(entries) - 1
+            text = (answer.get("content") or "").strip()
+            entries.append(("assistant", text or _summary(answer.get("meta"))))
+            ext = (answer.get("meta") or {}).get("external")
+            if isinstance(ext, dict):
+                exts[len(entries) - 1] = ext
+
+    # 重答时把末尾这一轮摘掉（见 `drop_tail` 的说明）。必须赶在对照摘要之前：
+    # 摘要挂在"最后一条回答"上，而那条正是要被摘掉的那一轮。
+    if drop_tail > 0 and entries:
+        entries = entries[: max(0, len(entries) - int(drop_tail))]
+
+    # **只认最后一条回答的对照**：更早的对照早被后面的问题顶掉了，每轮都往回
+    # 灌只会让 prompt 里堆一串过期的表，还挤掉真正有用的历史。所以判的是
+    # "最后一条 assistant 有没有对照"，不是"历史上有没有人对过表"——
+    # 后一种写法会让新一轮明明没对表，却还挂着一张上上轮的表。
+    last_at = next(
+        (i for i in range(len(entries) - 1, -1, -1) if entries[i][0] == "assistant"),
+        None,
+    )
+    last_ext = exts.get(last_at) if last_at is not None else None
+    last_ext_at = last_at if last_ext else None
 
     # 对照结论补在上一轮回答的末尾。B 档边界把外部数字挡在正文外，历史里于是
     # 只剩「一张表对过」的残影；不补这一段，「哪期差最多」这类追问会掉进拒答。
     # 必须赶在下面切轮次之前加，让它的 token 也计入预算 —— 否则摘要会白占窗口。
-    # 挂到「最后一条 assistant」而不是 entries[-1]：调用方有可能已经先把本轮
-    # 问句落库了（重试、脚本、以后的别的入口），那时末尾是 user，判 entries[-1]
-    # 就会静默不回灌 —— 这种错在界面上完全看不出来。
     if last_ext:
         # 追问句 = 那条带对照的回答**之后**的第一条用户消息。摘要靠它把
         # 「问到的这一期」补进来 —— 「表里 9 月多少」本来就是冲着上一轮那张
@@ -786,11 +1170,12 @@ def context(
                     query = text
                     break
         digest = external_digest(last_ext, query)
-        if digest:
-            for i in range(len(entries) - 1, -1, -1):
-                if entries[i][0] == "assistant":
-                    entries[i] = ("assistant", entries[i][1] + "\n\n" + digest)
-                    break
+        # 挂回**那条**带对照的回答本身，不挂"最后一条 assistant"：两者之间可能
+        # 还隔着一轮（那一轮没有对照），挂错了就是给下一轮贴了上一轮的表。
+        if digest and last_ext_at is not None and entries[last_ext_at][0] == "assistant":
+            entries[last_ext_at] = (
+                "assistant", entries[last_ext_at][1] + "\n\n" + digest
+            )
 
     # 成对：assistant 紧跟 user 才算一轮；落单的（比如上一轮被停止）自己算一轮
     turns: list[list[tuple[str, str]]] = []

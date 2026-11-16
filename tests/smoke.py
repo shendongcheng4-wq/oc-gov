@@ -495,18 +495,65 @@ def test_chat() -> None:
     check("新建会话", bool(t["id"]), str(t.get("id")))
 
     chat.append(t["id"], "user", "9月规上工业增加值增速是多少")
+    # 发送那一刻就得有标题，不能等答案 —— 侧栏空一行比标题难看更糟
+    check(
+        "首条用户消息先顶上标题",
+        chat.get(t["id"])["title"] == "9月规上工业增加值增速",
+        chat.get(t["id"])["title"],
+    )
     chat.append(
         t["id"],
         "assistant",
         "2026年9月全市规模以上工业增加值增速为 8.9%",
-        meta={"intent": "value", "metric_names": ["规模以上工业增加值增速"], "refused": False},
+        meta={
+            "intent": "value",
+            "metric_names": ["规模以上工业增加值增速"],
+            "period_label": "2026年9月",
+            "refused": False,
+        },
     )
     chat.append(t["id"], "user", "那上个月呢")
 
     thread = chat.get(t["id"])
     seqs = [m["seq"] for m in thread["messages"]]
     check("seq 从 1 单调递增", seqs == [1, 2, 3], str(seqs))
-    check("首条用户消息成为标题", thread["title"].startswith("9月规上"), thread["title"])
+    check("答完后按「期次 · 指标」起标题", thread["title"] == "9月 · 规上工业增加值增速", thread["title"])
+
+    # 标题派生是纯函数（core/chat.derive_title），单独断言几条边界：
+    # 今年的期次省年份、跨年要带年、问口径不改成指标名、套话要清掉、别超长。
+    def _tt(q: str, meta: dict | None = None) -> str:
+        return chat.derive_title(q, meta)[0]
+
+    _m = {"metric_names": ["规模以上工业增加值增速"], "period_label": "2026年9月"}
+    check("今年的期次省掉年份", _tt("x", _m) == "9月 · 规上工业增加值增速", _tt("x", _m))
+    check(
+        "去年的期次要带年份",
+        _tt("x", {"metric_names": ["规模以上工业增加值增速"], "period_label": "2025年9月"})
+        == "2025年9月 · 规上工业增加值增速",
+        _tt("x", {"metric_names": ["规模以上工业增加值增速"], "period_label": "2025年9月"}),
+    )
+    check(
+        "问口径就不硬塞指标名",
+        _tt("规上工业增加值的口径是什么", dict(_m, intent="definition")) == "规上工业增加值的口径",
+        _tt("规上工业增加值的口径是什么", dict(_m, intent="definition")),
+    )
+    check("清掉句首套话和句尾问法", _tt("请帮我看看今年经济形势怎么样") == "今年经济形势", _tt("请帮我看看今年经济形势怎么样"))
+    check("标题不超过 24 字", len(_tt("很长" * 40)) == chat.MAX_TITLE, str(len(_tt("很长" * 40))))
+
+    # 升级阶梯：闲聊先起名 → 问到指标后升级 → 用户手改后冻结
+    t2 = chat.create()
+    chat.append(t2["id"], "user", "你好")
+    chat.append(t2["id"], "assistant", "您好，可以问我指标和督办事项。", meta={"intent": "answer"})
+    check("闲聊不硬凑指标标题", chat.get(t2["id"])["title"] == "你好", chat.get(t2["id"])["title"])
+    chat.append(t2["id"], "user", "9月规上工业增加值增速是多少")
+    chat.append(t2["id"], "assistant", "8.9%", meta=dict(_m, intent="value"))
+    check("后来查到指标，标题升级", chat.get(t2["id"])["title"] == "9月 · 规上工业增加值增速", chat.get(t2["id"])["title"])
+    chat.rename(t2["id"], "我自己起的")
+    chat.append(
+        t2["id"], "assistant", "8.7%",
+        meta={"intent": "value", "metric_names": ["规模以上工业增加值增速"], "period_label": "2026年8月"},
+    )
+    check("用户改过名字就冻结", chat.get(t2["id"])["title"] == "我自己起的", chat.get(t2["id"])["title"])
 
     ctx = chat.context(t["id"])
     check("上下文条数一致", len(ctx) == 3, str(len(ctx)))
@@ -918,6 +965,24 @@ def test_experts() -> None:
     for t in ("2026年11月上旬前报一次", "11月中旬前完成", "2026年11月前完成", "2026年12月31日前完成"):
         check(f"未来时限放行：{t}", numgate.audit(t, {"facts": []})["ok"], "")
     check("已发生的年月仍要溯源", numgate.audit("2026年11月完成", {"facts": []})["ok"] is False, "")
+
+    # 出处里的期次常被模型抄成带空格的样子（《统计月报》2026 年 9 月）。期次归一
+    # 只抹了「数字+空格+单位」，抹完还剩「2026年 9月」，匹配不上「2026年9月」的
+    # 变体，于是短的「9月」先被抹掉、剩下裸的 2026 —— 模型照实交代来源却被判编数，
+    # 每轮白烧一次重答（还会连带重复调一次 query_metric）。
+    _p = {"facts": [{"label": "2026年9月增速", "value": "8.9%"}]}
+    _t = "出处：《本市统计月报》2026 年 9 月。增速 8.9%。"
+    check("带空格的期次照样认得出", numgate.audit(_t, _p)["ok"], str(numgate.audit(_t, _p)["bad"]))
+    check(
+        "出处里的年份单独出现也放行",
+        numgate.audit("2026 年度目标已超额完成", _p)["ok"],
+        str(numgate.audit("2026 年度目标已超额完成", _p)["bad"]),
+    )
+    check(
+        "库里没有的年份仍要溯源",
+        numgate.audit("2023 年增速 8.9%", _p)["ok"] is False,
+        "",
+    )
 
     # 逐句剔除：建议句通常不含数，不该跟着违规句一起丢
     part = numgate.salvage(
@@ -3551,7 +3616,10 @@ def test_attach_entry() -> None:
     # GBK：政务 csv 十有八九是 GBK，按 utf-8 硬读会得到满屏乱码
     check("按字节探测编码并支持 GBK", "TextDecoder" in html and '"gbk"' in html, "")
     check("附件随提问发出", "attachments: atts," in html, "")
-    check("发送后清空附件芯片", "ATT.files = []; renderAttach();" in html, "")
+    # 行为在「材料库」这一版变了：发送后芯片不再清空，而是标 saved 留在手边 ——
+    # 材料已经挂到会话上，追问照样能用；清空会让人以为材料没了，然后重传一遍。
+    check("发送后芯片保留并标 saved", "f.saved = true" in html, "")
+    check("saved 的芯片不随请求重发", "!f.saved && (f.text || \"\").trim()" in html, "")
     check("附件正文不进历史回放", "attachments: meta.attachments || []" in html, "")
 
     # 服务端校验：不信前端，自己再截一遍
@@ -3736,11 +3804,12 @@ def test_attach_entry() -> None:
     check("气泡渲染外部对照块", 'class="ext-cmp"' in html and "外部数据 × 指标库" in html, "")
     check("对照块写清「以指标库为准」", "仍以指标库为准" in html, "")
     check("导出带外部对照段", "**外部数据 × 指标库**" in html, "")
-    # 入口不再叫「导入数据」：材料不落盘、不入库，叫「导入」会让人以为已经存进
-    # 系统，下次找不到才来问。「仅本轮」必须写在按钮上，只在 title 里等于没写。
+    # 入口不再叫「导入数据」：叫「导入」会让人以为文件已经进知识库，下次找不到
+    # 才来问。材料这一版起**挂在会话上、可以追问**，所以标签写「可追问」——
+    # 「仅本轮」在材料库落地之后就是句假话。
     check(
-        "输入区有附材料入口，且标明只作用于本轮",
-        ">附材料<" in html and 'class="att-scope">仅本轮<' in html,
+        "输入区有附材料入口，且标明可追问",
+        ">附材料<" in html and 'class="att-scope">可追问<' in html,
         "两个上传入口长得像，不写清范围，用户会以为文件已经入库",
     )
     check(
@@ -3835,6 +3904,10 @@ def test_book_parse() -> None:
     check("单文件上限小于请求体上限", web_main._MAX_UPLOAD_FILE < web_main._MAX_UPLOAD_BODY, "")
     src = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
     check("解析接口注册在位", '"/api/attachments/parse"' in src, "")
+    # 材料入库口没登记进 WRITE_POLICY 的话会被当成未授权写路径直接 403 ——
+    # 界面上的「附材料」会静默失效（芯片还在，只是永远挂不上会话）
+    policy = "\n".join(str(x) for x in web_main.WRITE_POLICY)
+    check("材料入库口登记在写白名单里", "/api/materials" in policy, policy[:60])
     check("上传走 base64", "b64decode" in src, "")
 
     # 解析产物要能被现有材料通道吃下（字段形状和额度都得对）
