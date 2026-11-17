@@ -608,6 +608,9 @@ html.ask-fold .ask-rail{display:flex}
 }
 .kb-item.link{cursor:pointer}
 .kb-item.link:hover{border-color:var(--brand);border-left-color:var(--brand);background:var(--hover)}
+/* 引用了已废止文件的那条依据：左边那道竖条本来就是分类色，这里换成警示色。
+   不整块变灰 —— 内容还要读（旧口径、沿革都靠它），只是不能当现行依据。 */
+.kb-item.stale{border-left-color:var(--warn-line)}
 .kb-hd{display:flex;align-items:baseline;gap:7px;margin-bottom:5px;flex-wrap:wrap}
 .kb-kind{
   font-size:9.5px;padding:0 6px;border-radius:20px;flex:0 0 auto;white-space:nowrap;
@@ -889,6 +892,13 @@ html.ask-fold .ask-rail{display:flex}
 /* 附件：用品牌色而不是灰，因为它在语义上不是「消耗」而是「依据」——
    和上下文、用量排在一起，但读起来要能分开 */
 .ai-usage .ai-att{color:var(--brand);border-bottom:1px dotted var(--brand);cursor:help}
+/* 生成合成内容标识（GB 45438—2025）。排在用量行最后，但不和它们同色：
+   用量是"这轮花了多少"，标识是"这段话的来路"，混成一片灰就等于没标。
+   不抢正文的注意力，也不做成可关闭的角标 —— 强制性标识没有开关。 */
+.ai-usage .ai-aigc{
+  margin-left:auto;color:var(--muted);
+  border:1px solid var(--line-3);border-radius:9px;padding:0 6px;cursor:help
+}
 .trace-fold{margin-top:8px;font-size:11px;color:var(--muted);cursor:pointer;user-select:none}
 .trace-fold:hover{color:var(--brand)}
 .trace{margin-top:6px;border-left:2px solid var(--line-3);padding-left:9px;display:none}
@@ -1402,6 +1412,14 @@ html.embedded .drawer{top:0;height:100%}
 .rag-hit{margin-top:10px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2)}
 .rag-hit-meta{font-size:11px;color:var(--muted);margin-bottom:5px}
 .rag-hit-text{font-size:12.5px;line-height:1.55;color:var(--ink);white-space:pre-wrap}
+/* 引用了废止文件的那一段：左边一道警示条 + 标题上挂「已废止」。
+   不做成整块灰掉 —— 内容本身还要读（沿革、旧口径都在这儿），只是不能当现行依据。 */
+.rag-hit.stale{border-color:var(--warn-line);box-shadow:inset 2px 0 0 var(--warn-line)}
+.rag-exp{
+  margin-left:6px;padding:0 6px;border-radius:8px;font-size:10.5px;
+  color:var(--warn-ink);background:var(--warn-bg);border:1px solid var(--warn-line)
+}
+.rag-exp.soon{color:var(--brand);background:var(--brand-soft);border-color:var(--brand)}
 /* ---------------- 会议助手 ---------------- */
 .mt-box{width:min(1120px,96vw);max-height:88vh}
 .mt-body{display:grid;grid-template-columns:236px 1fr;gap:0;flex:1;min-height:0}
@@ -1810,6 +1828,33 @@ html.embedded .drawer{top:0;height:100%}
 .kl-docwrap{display:flex;flex-direction:column;gap:12px;height:100%;min-height:0}
 .kl-dochead{display:flex;flex-direction:column;gap:7px;flex:0 0 auto}
 .kl-docmeta{font-size:11px;color:var(--faint);line-height:1.7}
+
+/* 政策时效（GB/T 48324 第 7 章那条「政策时效性识别」落在界面上的样子）。
+   未标时效不装成"有效"：系统没核对过的事，界面不给它背书，只说没标。 */
+.doc-vdoc{
+  align-self:center;flex:0 0 auto;font-size:10.5px;line-height:1.7;padding:0 7px;
+  border-radius:9px;border:1px solid var(--line-3);color:var(--muted);background:var(--surface-2);
+  cursor:help;white-space:nowrap
+}
+.doc-vdoc.expired{color:var(--warn-ink);border-color:var(--warn-line);background:var(--warn-bg);font-weight:600}
+.doc-vdoc.upcoming{color:var(--brand);border-color:var(--brand);background:var(--brand-soft)}
+.doc-vdoc.valid{color:var(--ok-ink,var(--muted));border-color:var(--line-3)}
+.doc-vdoc.none{color:var(--faint);border-style:dashed}
+.dv{flex:0 0 auto;font-size:11.5px;color:var(--muted)}
+.dv>summary{cursor:pointer;color:var(--muted);list-style:none;user-select:none}
+.dv>summary::-webkit-details-marker{display:none}
+.dv>summary::before{content:"▸ ";color:var(--faint)}
+.dv[open]>summary::before{content:"▾ "}
+.dv>summary:hover{color:var(--brand)}
+.dv-now{color:var(--warn-ink)}
+.dv-row{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-top:8px}
+.dv-row label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--faint)}
+.dv-row input{
+  border:1px solid var(--line);border-radius:6px;background:var(--surface);
+  padding:4px 7px;font:inherit;font-size:11.5px;color:var(--ink);min-width:118px
+}
+.dv-row input:focus{outline:none;border-color:var(--brand)}
+.dv-tip{margin-top:6px;font-size:10.5px;line-height:1.7;color:var(--faint);max-width:62ch}
 .kl-docnav{
   flex:0 0 auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap;
   padding:8px 10px;border-radius:8px;background:var(--warn-bg);border:1px solid var(--warn-line);
@@ -3463,6 +3508,13 @@ function plannerLabel() {
   const cur = EXP.list.find((e) => e.id === EXP.cur);
   return cur ? `AI${cur.name}` : "AI参谋";
 }
+
+/* 生成合成内容标识（GB 45438—2025，强制性国标，2025-09-01 起施行）。
+   显式标识要「清晰可辨」，所以它不是那个角色标签的附属说明，而是每条回答
+   自己的一个标记 —— 换个参谋、换个模型，这句话都不变。
+   导出物那边用的是同一句话（后端 docxgen.AIGC_TEXT），改一处就得改两处。 */
+const AIGC_TEXT = "本内容由人工智能生成，请核对后使用。";
+const AIGC_PILL = `<span class="ai-aigc" title="${esc(AIGC_TEXT)}（依据 GB 45438—2025）">AI 生成 · 请核对</span>`;
 /* 知识库条目：每块都带出处，能点的跳回台账或会议记录。
    这里不折叠、不截断——用户问「依据是什么」，就是要看原文。 */
 function kbBlock(items) {
@@ -3476,9 +3528,16 @@ function kbBlock(items) {
     // 引句和正文不一样才单独显示，否则同一段话在卡里出现两遍
     const quoteHtml = quote && quote !== tx ? `<div class="kb-quote">${esc(quote)}</div>` : "";
     const s = h.source || {};
+    const v = h.validity || {};
+    // 依据卡片上的「已废止」。source.note 里也写了这几个字，但那行是灰色小字，
+    // 排在「12 页 · 1000 字」中间，读的人根本不会注意 —— 失效要能一眼看见。
+    const vtag = v.state === "expired"
+      ? `<span class="rag-exp" title="${esc(v.detail || "已废止")}">已废止</span>`
+      : v.state === "upcoming"
+        ? `<span class="rag-exp soon" title="${esc(v.detail || "")}">尚未施行</span>` : "";
     const src = [s.department, s.report, s.period, s.note].filter(Boolean).map((x) => esc(x)).join(" · ");
-    return `<div class="kb-item${ref ? " link" : ""}" ${ref ? `data-kbref="${esc(ref)}"` : ""}>
-      <div class="kb-hd"><span class="kb-kind ${esc(h.kind || "")}">${esc(h.kind_label || "记录")}</span><b>${esc(h.title || "")}</b></div>
+    return `<div class="kb-item${ref ? " link" : ""}${v.state === "expired" ? " stale" : ""}" ${ref ? `data-kbref="${esc(ref)}"` : ""}>
+      <div class="kb-hd"><span class="kb-kind ${esc(h.kind || "")}">${esc(h.kind_label || "记录")}</span><b>${esc(h.title || "")}</b>${vtag}</div>
       ${tx ? `<div class="kb-tx">${esc(tx)}</div>` : ""}
       ${quoteHtml}
       <div class="kb-src">${src}</div>
@@ -3492,8 +3551,13 @@ function ragBlock(items) {
   if (!items || !items.length) return "";
   const rows = items.map((h) => {
     const tx = String(h.text || "").trim();
-    const meta = [h.kb_name, h.doc_name].filter(Boolean).map((x) => esc(x)).join(" · ");
-    return `<div class="rag-hit">
+    const v = h.validity || {};
+    // 已废止必须挂在文档名旁边，而不是只在末尾 notes 里提一句：
+    // 人是从上往下读的，读到原文那段时如果还没看见「已废止」，就已经信了。
+    const badge = v.state === "expired" ? `<span class="rag-exp" title="${esc(v.detail || "已废止")}">已废止</span>`
+      : v.state === "upcoming" ? `<span class="rag-exp soon" title="${esc(v.detail || "")}">尚未施行</span>` : "";
+    const meta = [h.kb_name, h.doc_name].filter(Boolean).map((x) => esc(x)).join(" · ") + badge;
+    return `<div class="rag-hit${v.state === "expired" ? " stale" : ""}">
       <div class="rag-hit-meta">${meta}</div>
       <div class="rag-hit-text">${esc(tx)}</div>
     </div>`;
@@ -4497,14 +4561,16 @@ function aiBubble(r, ref) {
       ? `<span class="ai-att" title="这一轮用的是本会话此前传的材料，正文仍在材料库里">沿用本会话材料 ${r.materials_reused} 份</span>`
       : "";
 
-  const usageBlock = u.calls || ctxSpan || attSpan || degPill
-    ? `<div class="ai-usage">
+  // 标识无条件挂在用量行末尾：用量可以没有（规则兜底、纯检索），标识不能没有。
+  // 「有内容才显示」是标识类东西最常见的实现错误 —— 恰恰是兜底那种不像 AI 的
+  // 回答，最需要这句话。
+  const usageBlock = `<div class="ai-usage">
          ${u.calls ? `<span>${u.calls} 次模型调用</span>${usageDetail}${u.ms ? `<span>${(u.ms / 1000).toFixed(1)}s</span>` : ""}${u.failed ? `<span class="bad">${u.failed} 次失败</span>` : ""}` : ""}
          ${degPill}
          ${ctxSpan}
          ${attSpan}
-       </div>`
-    : "";
+         ${AIGC_PILL}
+       </div>`;
 
   const copyBtn = `<button class="ai-cp" data-cp="1" title="复制这条回答" aria-label="复制这条回答">复制</button>`;
   // 导出：把这一轮落成 Markdown。复制解决"贴到别处"，导出解决"发给别人 / 存档"——
@@ -5538,6 +5604,9 @@ function answerMd(r, question, stamp) {
   const head = String(question || "").replace(/\s+/g, " ").slice(0, 40) || "问答导出";
   L.push(`# ${head}`, "");
   L.push(`> 导出自 AI 市长工作台${stamp ? ` · ${stamp}` : ""}`, "");
+  // 显式标识（GB 45438—2025，强制性国标）。放在抬头而不是只在末尾：
+  // 这份 Markdown 十有八九会被截一段贴进汇报，末尾那行往往跟着被截掉。
+  L.push(`> **${AIGC_TEXT}**`, "");
   if (question) L.push(`**提问**：${question}`, "");
 
   const body = mdFromHtml(r.headline_html || r.headline || "");
@@ -11298,6 +11367,70 @@ async function renderDocPreview(it) {
   renderDocReader();
 }
 
+/* 时效与文号：折叠的一小行，默认收起。
+   为什么不放在上传弹窗里：文件刚传上来时人常常还不知道它哪天废止，等到真拿它
+   当依据那天才知道。所以入口放在「正在读这份文件」的地方，而不是上传那一刻。
+
+   为什么不自动从正文里抽日期：抽错的代价太大 —— 把一份现行文件标成已废止，
+   等于系统主动让人不敢用它。宁可空着，让人自己填。 */
+function docValidityBox(doc, v) {
+  const detail = v.detail ? `<span class="dv-now">${esc(v.detail)}</span>` : "";
+  return `<details class="dv">
+    <summary>时效与文号${detail ? ` · ${esc(v.detail)}` : ""}</summary>
+    <div class="dv-row" data-vbox="${esc(doc.kb_id)}|${esc(doc.id)}">
+      <label>文号<input data-vf="doc_no" value="${esc(doc.doc_no || "")}" placeholder="某政发〔2023〕7 号"></label>
+      <label>施行<input data-vf="effective_from" type="date" value="${esc(doc.effective_from || "")}"></label>
+      <label>废止<input data-vf="effective_to" type="date" value="${esc(doc.effective_to || "")}"></label>
+      <label>替代文件<input data-vf="superseded_by" value="${esc(doc.superseded_by || "")}" placeholder="被哪份文件替代（可空）"></label>
+      <button class="mini" data-vsave="1">保存时效</button>
+    </div>
+    <div class="dv-tip">废止日期当天起视为失效。填了之后，检索会把这份文件排到现行文件之后，引用它的答复也会写明「已废止」。</div>
+  </details>`;
+}
+
+async function saveDocValidity(btn) {
+  const box = btn.closest("[data-vbox]");
+  if (!box) return;
+  const [kbId, docId] = String(box.dataset.vbox || "").split("|");
+  if (!kbId || !docId) return;
+  const val = (k) => {
+    const el = box.querySelector(`[data-vf="${k}"]`);
+    return el ? el.value.trim() : "";
+  };
+  const body = {
+    doc: docId,
+    doc_no: val("doc_no"),
+    effective_from: val("effective_from"),
+    effective_to: val("effective_to"),
+    superseded_by: val("superseded_by"),
+  };
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/rag/bases/${encodeURIComponent(kbId)}/doc/validity`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!d.ok) return handleWriteDeny(d);
+    toast(d.validity && d.validity.state === "expired" ? "已保存：这份文件标记为已废止" : "已保存时效");
+    // 就地更新再重画：重新拉一次详情能拿到服务端算出来的状态，也顺带把清单刷新了
+    if (DOC.view && DOC.view.doc) {
+      Object.assign(DOC.view.doc, {
+        doc_no: body.doc_no,
+        effective_from: body.effective_from,
+        effective_to: body.effective_to,
+        superseded_by: body.superseded_by,
+        validity: d.validity,
+      });
+      renderDocReader();
+    }
+    await loadKb();
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function renderDocReader() {
   const v = DOC.view || {};
   const doc = v.doc || {};
@@ -11409,14 +11542,25 @@ function renderDocReader() {
       }).join("")
     : "";
 
+  // 时效徽标。只在「已废止 / 尚未施行」时出现 —— 现行有效是常态，标出来只是
+  // 噪音；而失效必须跳出来，它是看的人唯一能立刻发现的信号。
+  const vv = doc.validity || {};
+  const vBadge = vv.state === "expired" || vv.state === "upcoming"
+    ? `<span class="doc-vdoc ${esc(vv.state)}" title="${esc(vv.detail || vv.label || "")}">${esc(vv.label || "")}</span>`
+    : vv.state === "valid"
+      ? `<span class="doc-vdoc valid" title="${esc(vv.detail || "")}">现行有效</span>`
+      : `<span class="doc-vdoc none" title="没有填施行/废止日期。检索照常，但系统无法替你判断它还算不算数">未标时效</span>`;
+
   $("#kbMain").innerHTML = `
     <div class="kl-docwrap">
       <div class="kl-dochead">
         <div class="kl-h">
           <span class="kl-kind doc">上传文档</span>
           <h4>${esc(doc.name || "")}</h4>
+          ${vBadge}
         </div>
         <div class="kl-docmeta">${esc(meta)}</div>
+        ${docValidityBox(doc, vv)}
         <div class="kl-jump">
           ${modeBar}
           <button class="mini" data-kbdocdel="${esc(doc.id)}">删除这份文件</button>
@@ -11610,6 +11754,8 @@ document.addEventListener("click", (e) => {
   // 文档阅读视图里的章节跳转（命中导航）
   const docHit = e.target.closest("[data-dochit]");
   if (docHit) return scrollDocTo(Number(docHit.dataset.dochit));
+  const vSave = e.target.closest("[data-vsave]");
+  if (vSave) return saveDocValidity(vSave);
   // 文档预览底部的「删除这份文档」：写接口，未登录时由 handleWriteDeny 给登录引导
   const kbDocDel = e.target.closest("[data-kbdocdel]");
   if (kbDocDel) {

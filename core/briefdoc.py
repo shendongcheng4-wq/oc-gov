@@ -605,6 +605,10 @@ def _markdown(meta: dict[str, Any], blocks: list[dict[str, Any]]) -> str:
             L.append(f"- {s['department']}　{s['report']}　{s['published_at']} 披露")
         L.append("")
 
+    # 显式标识（GB 45438—2025）：Markdown 出口同样要带。这份文件被转成 PDF、
+    # 贴进邮件、传进群里之后，除了这行字没有别的地方还留得住「这是 AI 排的」
+    L.extend(["---", "", f"> {dg.AIGC_TEXT}", ""])
+
     return "\n".join(L).rstrip() + "\n"
 
 
@@ -981,7 +985,7 @@ def bulletin_docx(fields: dict[str, Any]) -> bytes:
     addressee = str(fields.get("addressee") or "各镇（区）人民政府，市各委办局、市各直属单位：").strip()
     title = f"关于{task}的督办通报"
 
-    d = dg.Doc(title=title, author=org)
+    d = dg.Doc(title=title, author=org, aigc=False)
     d.red_head(org)
     if no:
         d.para(no, align="center", indent=False, after=180)

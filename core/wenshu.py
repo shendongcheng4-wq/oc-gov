@@ -704,6 +704,9 @@ def markdown(meta: dict[str, Any], doc: dict[str, Any]) -> str:
     L.append("")
     if meta.get("mock"):
         L.append("> 演示数据：本稿的事实取自内置样例库，未接入真实数据源，不可直接签发。")
+    # 显式标识（GB 45438—2025）。这份稿子是要送签的，而「缘由段」是模型写的 ——
+    # 签发之前必须让人知道哪一部分不是人写的事实，标识就是那句话。
+    L.extend(["", "---", "", f"> {dg.AIGC_TEXT}"])
     return "\n".join(L).rstrip() + "\n"
 
 

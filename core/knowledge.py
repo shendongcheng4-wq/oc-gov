@@ -789,18 +789,21 @@ def to_meta(items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     """
     out: list[dict[str, Any]] = []
     for h in items or []:
-        out.append(
-            {
-                "kind": h.get("kind"),
-                "kind_label": h.get("kind_label"),
-                "id": h.get("id"),
-                "title": h.get("title"),
-                "text": h.get("text"),
-                "quote": h.get("quote"),
-                "source": h.get("source"),
-                "ref": h.get("ref"),
-            }
-        )
+        item = {
+            "kind": h.get("kind"),
+            "kind_label": h.get("kind_label"),
+            "id": h.get("id"),
+            "title": h.get("title"),
+            "text": h.get("text"),
+            "quote": h.get("quote"),
+            "source": h.get("source"),
+            "ref": h.get("ref"),
+        }
+        # 政策时效只有上传文档有。台账/口径/会议这些记录没有"废止"这回事，给它们
+        # 塞一个 `validity: null` 只是让每条历史消息都多一个空字段。
+        if h.get("validity"):
+            item["validity"] = h["validity"]
+        out.append(item)
     return out
 
 

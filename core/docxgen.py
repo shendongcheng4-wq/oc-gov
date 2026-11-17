@@ -76,6 +76,23 @@ MARGIN_TOP, MARGIN_BOTTOM, MARGIN_LEFT, MARGIN_RIGHT = 37, 35, 28, 26
 # 正文行距：公文每页 22 行，28.5 磅 ≈ 570 twips
 LINE_BODY = 570
 
+# ---------------------------------------------------------------- 内容标识
+#
+# GB 45438—2025《网络安全技术 人工智能生成合成内容标识方法》，强制性国标，
+# 2025-09-01 起施行。它要求 AI 生成的内容同时带两种标识：
+#
+#   显式标识 —— 人一眼能看见的文字提示（这份文件末尾那一行）；
+#   隐式标识 —— 文件元数据里的机器可读标记（Word「属性」里能看到）。
+#
+# 标识做进 `Doc` 的默认路径，而不是让每个导出器自己记得加。「忘了加」是这类
+# 合规项唯一真实的失败方式，而它看起来和「这份文件本来就不需要标」一模一样。
+# 确实不含 AI 生成内容的（红头督办通报是用户填表、代码排版），显式传
+# `aigc=False` —— 反过来标上去也是一种不实。
+AIGC_TEXT = "本内容由人工智能生成，请核对后使用。"
+AIGC_KEYWORD = "AIGC"
+AIGC_CATEGORY = "人工智能生成内容"
+AIGC_PROVIDER = "oc-gov 政务大模型工作台"
+
 
 def _esc(text: Any) -> str:
     """XML 转义。制表符转空格——公文里没人用真 tab，留着会在 Word 里跑版。"""
@@ -173,12 +190,17 @@ def _ppr(
 class Doc:
     """一份文档。按顺序 add 段落/表格，最后 build() 出字节。"""
 
-    def __init__(self, *, title: str = "", author: str = "", subject: str = "") -> None:
+    def __init__(self, *, title: str = "", author: str = "", subject: str = "",
+                 aigc: bool = True) -> None:
         self.blocks: list[str] = []
         # 注意不能叫 self.title：那个名字被 title() 方法占了，属性会把它盖掉
         self._title = title
         self._author = author
         self.subject = subject
+        # 默认标 —— 漏标的代价（硬性国标）远大于多标的代价，所以默认值是 True，
+        # 不含 AI 内容的那几处自己 opt out
+        self._aigc = aigc
+        self._marked = False
 
     # ---- 段落 ----
 
@@ -331,6 +353,14 @@ class Doc:
 
     def build(self) -> bytes:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if self._aigc and not self._marked:
+            # 显式标识放正文末尾，不放页脚：页脚是页码，混进去打印时容易被裁掉；
+            # 而复制正文粘贴到别处时，这句话也得跟着走。
+            # 小五灰字，是提示不是正文 —— 不能让人误以为它是公文的一部分内容。
+            # `_marked` 是给「同一份 Doc build 两次」兜底（预览一次、下载一次）：
+            # 不记这个，第二次导出会在文末叠出两行一模一样的提示。
+            self.para(AIGC_TEXT, size=SZ_5, color="808080", indent=False, before=240)
+            self._marked = True
         sect = (
             "<w:sectPr>"
             '<w:footerReference w:type="default" r:id="rId2"/>'
@@ -347,7 +377,8 @@ class Doc:
             'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
             f"<w:body>{''.join(self.blocks)}{sect}</w:body></w:document>"
         )
-        return _package(document, self._styles(), _footer(), self._title, self._author, now)
+        return _package(document, self._styles(), _footer(), self._title, self._author,
+                        now, self._aigc)
 
     def _styles(self) -> str:
         return (
@@ -392,7 +423,7 @@ def _footer() -> str:
 
 
 def _package(document: str, styles: str, footer: str,
-             title: str, author: str, now: str) -> bytes:
+             title: str, author: str, now: str, aigc: bool = True) -> bytes:
     """把五份 XML 打进一个 zip。顺序不重要，[Content_Types].xml 放第一个是习惯。"""
     content_types = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
@@ -421,17 +452,26 @@ def _package(document: str, styles: str, footer: str,
         '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>'
         "</Relationships>"
     )
+    # 隐式标识：机器读的那一份。keywords 里放机读标记 AIGC，description 放人读的
+    # 完整提示 —— 文件被转发、改名、传上系统之后，只有元数据还跟着它。
+    #
+    # 子元素顺序按 CT_CoreProperties 的 sequence：category → created → creator →
+    # description → keywords → lastModifiedBy → modified → title。Word 对这里比
+    # 正文宽松得多（顺序乱了也能打开），但既然别的部件都按 schema 拼，这里也不破例。
     core = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
         '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
         'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" '
         'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
-        f"<dc:title>{_esc(title)}</dc:title>"
-        f"<dc:creator>{_esc(author or 'oc-gov')}</dc:creator>"
-        f"<cp:lastModifiedBy>{_esc(author or 'oc-gov')}</cp:lastModifiedBy>"
-        f'<dcterms:created xsi:type="dcterms:W3CDTF">{now}</dcterms:created>'
-        f'<dcterms:modified xsi:type="dcterms:W3CDTF">{now}</dcterms:modified>'
-        "</cp:coreProperties>"
+        + (f"<cp:category>{_esc(AIGC_CATEGORY)}</cp:category>" if aigc else "")
+        + f'<dcterms:created xsi:type="dcterms:W3CDTF">{now}</dcterms:created>'
+        + f"<dc:creator>{_esc(author or 'oc-gov')}</dc:creator>"
+        + (f"<dc:description>{_esc(AIGC_TEXT)}</dc:description>" if aigc else "")
+        + (f"<cp:keywords>{AIGC_KEYWORD}</cp:keywords>" if aigc else "")
+        + f"<cp:lastModifiedBy>{_esc(AIGC_PROVIDER if aigc else (author or 'oc-gov'))}</cp:lastModifiedBy>"
+        + f'<dcterms:modified xsi:type="dcterms:W3CDTF">{now}</dcterms:modified>'
+        + f"<dc:title>{_esc(title)}</dc:title>"
+        + "</cp:coreProperties>"
     )
     app = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'

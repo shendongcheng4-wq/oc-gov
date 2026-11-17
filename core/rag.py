@@ -53,6 +53,7 @@ import secrets
 import sqlite3
 import struct
 import threading
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -179,6 +180,143 @@ def _new_id(prefix: str) -> str:
 
 def _doc_path(kb_id: str, doc_id: str, filename: str) -> Path:
     return FILES_DIR / kb_id / f"{doc_id}{Path(filename).suffix.lower()}"
+
+
+# ── 政策时效 ────────────────────────────────────────────────────────────
+#
+# 政务知识库和通用知识库的分水岭就在这一节：通用库管「有没有」，政务库还得管
+# 「还算不算数」。文档进库之后全文检索永远命中，模型于是永远理直气壮地引用一份
+# 2019 年就废止的文件 —— 这不是模型在编，是知识库过期了，而界面上完全看不出来。
+#
+# 四个字段够用，不建政策关系图谱：
+#   doc_no          文号（「某政发〔2023〕7 号」），出处里比只有标题可信
+#   effective_from  施行日期，当天起有效
+#   effective_to    废止日期，**当天起视为失效**
+#   superseded_by   替代文件（名字或文号，自由文本）
+#
+# 状态不落库、每次现算：落一个 `status` 字段就要有人去改它，而「今天是否过期」
+# 是会变的 —— 存下来的那天和看的那天不是同一天。
+
+DATE_FIELDS = ("effective_from", "effective_to")
+
+
+def norm_date(value: Any) -> str:
+    """把日期归一成 ``YYYY-MM-DD``；空值返回 ``""``，看不懂的抛 ValueError。
+
+    用户填的是政务写法（``2023年5月1日``、``2023/5/1``），存的和比的是同一套
+    —— ISO 字符串按字典序就是时间序，省掉一个日期类型。
+    """
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    s = s.replace("年", "-").replace("月", "-").replace("日", "").replace("/", "-").replace(".", "-")
+    s = "-".join([p for p in s.split("-") if p != ""])
+    if re.fullmatch(r"\d{8}", s):
+        s = f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    m = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", s)
+    if not m:
+        raise ValueError(f"看不懂的日期：{value}（写成 2023-05-01 或 2023年5月1日）")
+    y, mo, d = (int(x) for x in m.groups())
+    try:
+        return date(y, mo, d).isoformat()
+    except ValueError as exc:
+        raise ValueError(f"日期不存在：{value}") from exc
+
+
+def validity(doc: dict[str, Any] | None, today: date | None = None) -> dict[str, Any]:
+    """这份文件现在还算不算数。
+
+    三种状态之外还有一个「未标」——不标时效的文件仍然是可检索的（政务库里九成
+    文件没有明确废止日），但界面必须说清「这条没有时效信息」，而不是默认它有效。
+    默认有效是这类系统最容易造成的事故：没人核对过，系统却给了背书。
+    """
+    doc = doc or {}
+    today = today or date.today()
+    since = str(doc.get("effective_from") or "")
+    until = str(doc.get("effective_to") or "")
+    repl = str(doc.get("superseded_by") or "").strip()
+    out = {
+        "state": "unknown",
+        "label": "未标时效",
+        "detail": "",
+        "from": since,
+        "to": until,
+        "superseded_by": repl,
+        "stale": False,
+    }
+    if until and today.isoformat() >= until:
+        out.update(state="expired", label="已废止", stale=True,
+                   detail=f"{until} 起废止" + (f"，替代文件：{repl}" if repl else ""))
+        return out
+    if since and today.isoformat() < since:
+        out.update(state="upcoming", label="尚未施行",
+                   detail=f"{since} 起施行" + (f"，将替代：{repl}" if repl else ""))
+        return out
+    if since or until:
+        out.update(state="valid", label="现行有效",
+                   detail=f"{since} 起施行" if since else f"有效至 {until}")
+    return out
+
+
+def set_validity(kb_id: str, doc_id: str, *, effective_from: Any = None,
+                 effective_to: Any = None, superseded_by: Any = None,
+                 doc_no: Any = None) -> dict[str, Any] | None:
+    """改一份文件的时效与文号。只动传进来的字段，没传的保持原样。
+
+    `None` 与 `""` 要分开：「表单里没这一栏」和「把这一栏清空」是两件事，
+    混成一个的话，只改施行日期就会顺手把废止日期抹掉。
+    """
+    patch: dict[str, Any] = {}
+    clear: list[str] = []
+    for key, raw in (("effective_from", effective_from), ("effective_to", effective_to)):
+        if raw is None:
+            continue          # 没传 = 不动
+        val = norm_date(raw)
+        if val:
+            patch[key] = val
+        else:
+            clear.append(key)  # 传了空串 = 清空（表单里把日期删掉就是这个意思）
+    if superseded_by is not None:
+        val = str(superseded_by or "").strip()[:80]
+        if val:
+            patch["superseded_by"] = val
+        else:
+            clear.append("superseded_by")
+    if doc_no is not None:
+        val = str(doc_no or "").strip()[:80]
+        if val:
+            patch["doc_no"] = val
+        else:
+            clear.append("doc_no")
+    if not patch and not clear:
+        return None
+
+    got: dict[str, Any] = {}
+
+    def _do(cfg: dict[str, Any]) -> dict[str, Any]:
+        for base in cfg.get("bases") or []:
+            if base.get("id") != kb_id:
+                continue
+            for doc in base.get("documents") or []:
+                if doc.get("id") != doc_id:
+                    continue
+                # 先后校验要拿**合并之后**的值来比：只改废止日的时候，施行日
+                # 是库里的旧值，只看 patch 永远比不出来
+                since = patch.get("effective_from") or doc.get("effective_from") or ""
+                until = patch.get("effective_to") if "effective_to" in patch else (
+                    "" if "effective_to" in clear else doc.get("effective_to") or "")
+                if since and until and until < since:
+                    raise ValueError("废止日期早于施行日期，这两栏是不是填反了")
+                doc.update(patch)
+                for key in clear:
+                    doc.pop(key, None)
+                got.update(doc)
+                _bump(base)
+                return cfg
+        return cfg
+
+    store.update(FILE, _do, _empty())
+    return got or None
 
 
 # ── 向量索引（每库一个 SQLite） ──────────────────────────────────────────
@@ -485,7 +623,16 @@ def upload_document(
     content: bytes,
     *,
     content_type: str = "",
+    doc_no: str = "",
+    effective_from: str = "",
+    effective_to: str = "",
+    superseded_by: str = "",
 ) -> dict[str, Any]:
+    """上传并入库。可在上传时就带上时效信息，也可以之后用 `set_validity` 补。
+
+    上传时能带上是因为窗口期就这么长：文件刚落盘、人还记得这份文件什么时候
+    废止，顺手填两栏的成本最低；等到发问时才发现引用的是废纸，再回头补已经晚了。
+    """
     base = get_base(kb_id)
     if base is None:
         raise LookupError("分类库不存在")
@@ -493,6 +640,13 @@ def upload_document(
         raise ValueError(f"一个分类库最多 {MAX_DOCS_PER_BASE} 个文档")
     if len(content) > MAX_DOC_BYTES:
         raise ValueError(f"文件超过 {MAX_DOC_BYTES // (1024 * 1024)}MB")
+
+    # 日期先验：落盘和建索引都在后面，等写到一半才发现日期填错，就留下一个
+    # 没有清单条目的孤儿文件，谁也清不掉
+    since = norm_date(effective_from)
+    until = norm_date(effective_to)
+    if since and until and until < since:
+        raise ValueError("废止日期早于施行日期，这两栏是不是填反了")
 
     # 只留文件名：有的客户端会把整条本地路径当 name 传上来（浏览器不会，脚本
     # 会），存进清单就变成「C:/Users/xxx/Desktop/…」这种一屏放不下的标题。
@@ -536,6 +690,14 @@ def upload_document(
         "embedded": vecs is not None,
         "created_at": int(time.time()),
     }
+    # 时效四栏：填了才存。空字段不进库，`validity()` 见到就报「未标时效」——
+    # 这和「标了但过期」是两件事，界面上不能混。
+    for key, val in (("doc_no", str(doc_no or "").strip()[:80]),
+                     ("effective_from", since),
+                     ("effective_to", until),
+                     ("superseded_by", str(superseded_by or "").strip()[:80])):
+        if val:
+            doc[key] = val
     if pages:
         # 页码表进控制面：阅读视图靠它把「命中位置」换算成「第几页」。
         # 12000 字上限下最多几十页，几百个整数，不值得另开一个文件。
@@ -836,6 +998,12 @@ def doc_view(
             "embedded": bool(doc.get("embedded")),
             "created_at": int(doc.get("created_at") or 0),
             "chapters": len(chapters),
+            # 时效跟着阅读视图一起回：详情页要能就地改，也要能一眼看见「已废止」
+            "doc_no": str(doc.get("doc_no") or ""),
+            "effective_from": str(doc.get("effective_from") or ""),
+            "effective_to": str(doc.get("effective_to") or ""),
+            "superseded_by": str(doc.get("superseded_by") or ""),
+            "validity": validity(doc),
         },
         # PDF 才有：总页数 / 已索引页数 / 是不是扫描件。前端据此决定显示页面图
         # 还是章节文字，并如实说明"这份没有文字层，只能看图"。
@@ -1027,6 +1195,11 @@ def search(
             doc = doc_by_id.get(h["doc_id"])
             if doc is None:
                 continue
+            v = validity(doc)
+            # 废止文件**不剔除，只降权**。剔除看着更「干净」，但用户问的很可能
+            # 就是那份旧文件（「2019 年那个办法怎么规定的」），搜不到等于系统
+            # 假装它不存在。降权让现行文件排在前面，同时把「已废止」如实带出去。
+            score = h["score"] * (0.55 if v["stale"] else 1.0)
             ranked.append(
                 {
                     "kb_id": kb_id,
@@ -1035,7 +1208,9 @@ def search(
                     "doc_name": doc["name"],
                     "ordinal": h["ordinal"],
                     "text": h["text"],
-                    "score": h["score"],
+                    "score": score,
+                    "raw_score": h["score"],
+                    "validity": v,
                     "method": "vector" if query_vec is not None else "bigram",
                 }
             )

@@ -621,6 +621,7 @@ WRITE_POLICY: tuple[tuple[str, str, str | None], ...] = (
     # ── 共享资料库：读不限，写要登录 ──
     ("POST", r"/api/rag/bases", authz.KNOWLEDGE_WRITE),
     ("POST", r"/api/rag/bases/[^/]+/upload", authz.KNOWLEDGE_WRITE),
+    ("POST", r"/api/rag/bases/[^/]+/doc/validity", authz.KNOWLEDGE_WRITE),
     ("DELETE", r"/api/rag/bases/[^/]+", authz.KNOWLEDGE_WRITE),
     ("DELETE", r"/api/rag/bases/[^/]+/doc", authz.KNOWLEDGE_WRITE),
 )
@@ -748,6 +749,17 @@ def _kb_doc_entry(doc: dict[str, Any], body: str) -> dict[str, Any]:
         note = f"{doc.get('chars') or 0} 字" + (" · 已向量化" if doc.get("embedded") else " · 关键词索引")
         if pages.get("count"):
             note = f"{int(pages['count'])} 页 · " + note
+    v = rag_mod.validity(doc)
+    # 时效与文号挤进备注：依据卡片、清单、落库回放三处都在读 `source.note`，
+    # 塞进这里等于一次改完三处；另起字段就得三处各改一遍，还会漏。
+    # 「现行有效」不写 —— 九成文件都是这个状态，写上去只是噪音；
+    # 「已废止」「尚未施行」必须写，那是看的人唯一能立刻发现的信号。
+    lead = []
+    if v["state"] in ("expired", "upcoming"):
+        lead.append(v["label"])
+    if doc.get("doc_no"):
+        lead.append(str(doc["doc_no"]))
+    note = " · ".join(lead + [note])
     return {
         "kind": "doc",
         "kind_label": _KB_DOC_LABEL,
@@ -755,6 +767,7 @@ def _kb_doc_entry(doc: dict[str, Any], body: str) -> dict[str, Any]:
         "title": doc["name"],
         "text": body,
         "quote": None,
+        "validity": v,
         "source": {
             "department": doc.get("kb_name") or "",
             "report": size,
@@ -1835,12 +1848,44 @@ class Handler(BaseHTTPRequestHandler):
                 if len(blob) > rag_mod.MAX_DOC_BYTES:
                     return self._json({"ok": False, "error": "文件超过 9MB"}, 400)
                 try:
-                    doc = rag_mod.upload_document(parts[0], name, blob, content_type=str(body.get("content_type") or ""))
+                    doc = rag_mod.upload_document(
+                        parts[0], name, blob,
+                        content_type=str(body.get("content_type") or ""),
+                        doc_no=str(body.get("doc_no") or ""),
+                        effective_from=str(body.get("effective_from") or ""),
+                        effective_to=str(body.get("effective_to") or ""),
+                        superseded_by=str(body.get("superseded_by") or ""),
+                    )
                 except ValueError as exc:
                     return self._json({"ok": False, "error": str(exc)}, 400)
                 except LookupError as exc:
                     return self._json({"ok": False, "error": str(exc)}, 404)
                 return self._json({"ok": True, "doc": doc, "documents": rag_mod.list_documents(parts[0])})
+
+            # ---- 资料库：政策时效 ----
+            # 「这份文件还算不算数」不能靠上传那一刻定死：废止是后来才知道的。
+            # 所以单开一个口子，随时能改，改完检索与依据立刻跟着变。
+            if len(parts) == 3 and parts[1] == "doc" and parts[2] == "validity":
+                if rag_mod.get_base(parts[0]) is None:
+                    return self._json({"ok": False, "error": "base_not_found"}, 404)
+                doc_id = str(body.get("doc") or "")
+                if not doc_id:
+                    return self._json({"ok": False, "error": "doc_required"}, 400)
+                try:
+                    doc = rag_mod.set_validity(
+                        parts[0], doc_id,
+                        effective_from=body.get("effective_from"),
+                        effective_to=body.get("effective_to"),
+                        superseded_by=body.get("superseded_by"),
+                        doc_no=body.get("doc_no"),
+                    )
+                except ValueError as exc:
+                    return self._json({"ok": False, "error": str(exc)}, 400)
+                if doc is None:
+                    return self._json({"ok": False, "error": "doc_not_found"}, 404)
+                return self._json(
+                    {"ok": True, "doc": doc, "validity": rag_mod.validity(doc)}
+                )
 
             # ---- 会话 ----
             if path == "/api/threads":

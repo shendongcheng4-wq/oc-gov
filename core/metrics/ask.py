@@ -646,6 +646,14 @@ def _doc_ref(hit: dict[str, Any]) -> dict[str, Any]:
     doc_id = str(hit.get("doc_id") or "")
     kb_name = str(hit.get("kb_name") or "")
     doc_name = str(hit.get("doc_name") or "")
+    v = hit.get("validity") or {}
+    # 时效进备注而不是另开字段：前端依据行、落库裁剪、数字闸白名单都按这一套
+    # 形状走，多一个字段就要三处跟着改。失效状态是必须**看得见**的，所以放最前。
+    note = f"第 {int(hit.get('ordinal') or 0) + 1} 段"
+    if v.get("stale"):
+        note = f"{v.get('label') or '已废止'}（{v.get('detail') or '以现行文件为准'}）· " + note
+    elif v.get("state") == "upcoming":
+        note = f"{v.get('label')}（{v.get('detail')}）· " + note
     return {
         "kind": "doc",
         "kind_label": "政策原文",
@@ -654,12 +662,13 @@ def _doc_ref(hit: dict[str, Any]) -> dict[str, Any]:
         "text": str(hit.get("text") or ""),
         "quote": "",
         "unit": kb_name,
+        "validity": v,
         "ref": {"type": "doc", "id": doc_id, "kb_id": kb_id},
         "source": {
             "department": kb_name,
             "report": doc_name,
             "period": "",
-            "note": f"第 {int(hit.get('ordinal') or 0) + 1} 段",
+            "note": note,
         },
         "when": None,
     }
@@ -1274,6 +1283,17 @@ def _ask_impl(
                     ),
                 }
             )
+            stale = [h for h in rag_hits if (h.get("validity") or {}).get("stale")]
+            notes: list[str] = []
+            if stale:
+                # 命中废止文件不是"没搜到"，不能说成检索失败；但也不能让它悄悄
+                # 混在现行文件里。这句必须是答案的一部分 —— 用户问政策原文，
+                # 最坏的结果不是答不出，是捧着废纸当依据。
+                names = "、".join(dict.fromkeys(f"《{h['doc_name']}》" for h in stale))
+                notes.append(
+                    f"{names}已废止，以下引用仅作沿革参考，不作为现行依据；"
+                    "请以现行有效文件为准。"
+                )
             return {
                 "refused": False,
                 "question": question,
@@ -1287,11 +1307,12 @@ def _ask_impl(
                         "text": h["text"],
                         "score": h["score"],
                         "method": h["method"],
+                        "validity": h.get("validity") or {},
                     }
                     for h in rag_hits
                 ],
                 "sources": [],
-                "notes": [],
+                "notes": notes,
                 "trace": trace,
             }
 

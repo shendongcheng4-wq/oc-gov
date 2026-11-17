@@ -16,6 +16,10 @@
 2. **不含模型**。问答入口拦在 `ask()` 上，直接说清楚不能问。
    不能让请求打到「未收录接口」，那会显示成「服务端出错了」。
 3. **不联网**。垫片拦的是 `window.fetch`，命中即返回本地快照，未命中也不外发。
+
+导出物照样要带**生成合成内容标识**（GB 45438—2025，强制性国标）：界面里
+那些回答是 AI 生成的，换成单文件 html 之后一样是。显式标识写在页脚，
+隐式标识写进 `<meta>`；和 docx / Markdown 出口用同一句话。
 """
 
 from __future__ import annotations
@@ -301,6 +305,21 @@ def collect(port: int, person: str, with_threads: bool, max_threads: int) -> tup
 
 
 # ---------------------------------------------------------------- 拼装
+# GB 45438—2025 的显式标识。和 core/docxgen.AIGC_TEXT、前端 AIGC_TEXT 同一句话，
+# 改一处就得改三处 —— 三种出口说的是同一件事，措辞不一致会让人以为其中一份没标。
+AIGC_TEXT = "本内容由人工智能生成，请核对后使用。"
+AIGC_META = (
+    '<meta name="AIGC" content="1">'
+    '<meta name="AIGC-Provider" content="oc-gov">'
+    f'<meta name="AIGC-Label" content="{AIGC_TEXT}">'
+)
+AIGC_FOOT = (
+    '<div style="max-width:820px;margin:18px auto 26px;padding:0 16px;'
+    'font:12px/1.6 system-ui,-apple-system,\'Microsoft YaHei\',sans-serif;color:#8a8f98;">'
+    f'{AIGC_TEXT}</div>'
+)
+
+
 def build_html(records: dict, meta: dict) -> str:
     snap = {"__meta__": meta, **records}
     blob = json.dumps(snap, ensure_ascii=False, separators=(",", ":"))
@@ -316,11 +335,11 @@ def build_html(records: dict, meta: dict) -> str:
     anchor = re.search(r'<meta charset="[^"]*">', page)
     if not anchor:
         raise SystemExit("index.html 里找不到 <meta charset>，结构变了，导出中止")
-    page = page[: anchor.end()] + "\n" + shim + page[anchor.end():]
+    page = page[: anchor.end()] + "\n" + AIGC_META + shim + page[anchor.end():]
 
     if "</body>" not in page:
         raise SystemExit("index.html 里找不到 </body>，结构变了，导出中止")
-    page = page.replace("</body>", TAIL + "</body>", 1)
+    page = page.replace("</body>", TAIL + AIGC_FOOT + "</body>", 1)
     return page
 
 
