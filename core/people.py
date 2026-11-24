@@ -50,7 +50,9 @@ DEFAULT_LAYOUT = list(BLOCK_IDS)
 MAX_FOLLOW = 20
 
 # 预设身份。scope 写清分管范围，界面直接显示，避免别人误以为这是权限。
-PEOPLE: tuple[dict[str, str], ...] = (
+# 这四个是「演示身份」：市长 / 常务 / 局长 / 秘书，用来展示换人之后可见范围不同。
+# 单位账号在下面单独追加，不从这张表里派生 —— 两者是不同性质的东西。
+DEMO_PEOPLE: tuple[dict[str, str], ...] = (
     {
         "id": "mayor",
         "name": "市长",
@@ -96,6 +98,55 @@ PEOPLE: tuple[dict[str, str], ...] = (
         "mentions": ("秘书", "市长秘书"),
     },
 )
+
+# ── 单位账号 ──────────────────────────────────────────────────────────────
+# 一个责任单位一个可登录主体。为什么必须有：台账里的 assignee 只是「市住建局」
+# 这样一个字符串 —— 能统计、能筛、能判权限，但**不是一个能收消息、能签收的主体**。
+# 没有单位账号时，给住建局催办只会往事件流写一条记录：没人收到、没人签收，
+# 逾期天数照涨。名单与 `directory.UNITS` 一一对应，授权侧不用改：
+# 角色一律 bureau（只管本单位），units 只有自己那一格。
+#
+# 单位账号**不登记 mentions**：那是「个人交办」的认人表，一句「让住建局办」
+# 不该被认成给某个自然人派活；`assignable()` 也因此不会把它们列进交办下拉。
+#
+# 关注列表（DEFAULT_WATCH）刻意不给默认值：单位看什么指标，是各局自己的事，
+# 由使用者自己挑 —— 替财政局预设「看空气质量」比空着更糟。
+UNIT_ACCOUNTS: tuple[tuple[str, str, str, str], ...] = (
+    # (身份 id, 单位全称, 头像字, 简称)
+    ("u-gov", "市政府办", "办", "政府办"),
+    ("u-drc", "市发改委", "发", "发改"),
+    ("u-edu", "市教育局", "教", "教育"),
+    ("u-tpa", "市公安局交警支队", "警", "交通管理"),
+    ("u-civil", "市民政局", "民", "民政"),
+    ("u-fin", "市财政局", "财", "财政"),
+    ("u-natres", "市自然资源局", "自", "自然资源"),
+    ("u-zhujian", "市住建局", "住", "住建"),
+    ("u-chengguan", "市城管局", "城", "城管"),
+    ("u-transport", "市交通运输局", "交", "交通运输"),
+    ("u-water", "市水务局", "水", "水务"),
+    ("u-emergency", "市应急管理局", "应", "应急"),
+    ("u-market", "市市场监管局", "监", "市场监管"),
+    ("u-data", "市大数据局", "数", "大数据"),
+)
+# 市生态环境局不在这里：它的账号就是既有的 `bureau`（生态环境局局长）。
+# 再开一个 `u-env` 会出现同一单位两个账号，事件流里分不清是谁签的。
+
+
+def _unit_account(pid: str, unit: str, avatar: str, short: str) -> dict[str, Any]:
+    return {
+        "id": pid,
+        "name": unit,
+        "avatar": avatar,
+        "post": "单位账号",
+        "scope": short,
+        "note": "本单位事项的签收、报进展、提交办结",
+        "units": [unit],
+        # 和演示身份区分：前端/测试据此认出「这是单位，不是那位领导」
+        "unit": True,
+    }
+
+
+PEOPLE: tuple[dict[str, Any], ...] = DEMO_PEOPLE + tuple(_unit_account(*row) for row in UNIT_ACCOUNTS)
 
 # 四个身份的关注范围刻意不同：市长看总量，常务看投资工业，局长看空气与投诉，
 # 秘书看「这几天要盯的进度与办结」。
@@ -319,19 +370,31 @@ def set_follow(pid: str | None, ids: Any) -> dict[str, Any]:
     return {"ok": True, "person": key, "follow": clean, "count": len(clean)}
 
 
+def default_layout(pid: str | None) -> list[str]:
+    """没配过布局时的缺省块序。
+
+    单位账号没有关注指标（`watch` 是空的：指标是市级口径，一个局看全市 GDP
+    没有意义），把空的「我的关注」摆第一，登录进来第一眼就是一块白板。
+    所以「没有关注项」的人缺省先从 follow 开始 —— 他真正要看的是本单位的账。
+    """
+    if not watch_of(pid):
+        return ["follow", "feed"]
+    return list(DEFAULT_LAYOUT)
+
+
 def layout_of(pid: str | None) -> list[str]:
-    """这个人工作台的板块顺序（只含显示出来的块）。没配过就是三块全显示。"""
+    """这个人工作台的板块顺序（只含显示出来的块）。没配过就按 default_layout。"""
     key = resolve(pid)
     stored = _doc()["people"].get(key) or {}
     blocks = stored.get("layout")
     if not isinstance(blocks, list):
-        return list(DEFAULT_LAYOUT)
+        return default_layout(key)
     # 只认登记过的块：配置文件里可能留着以后删掉的块 id
     seen: list[str] = []
     for b in blocks:
         if isinstance(b, str) and b in BLOCK_IDS and b not in seen:
             seen.append(b)
-    return seen or list(DEFAULT_LAYOUT)
+    return seen or default_layout(key)
 
 
 def set_layout(pid: str | None, blocks: Any) -> dict[str, Any]:

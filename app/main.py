@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import json
+import mimetypes
 import os
 import re
 import secrets
@@ -31,7 +32,7 @@ import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import workbench as wb
 
@@ -81,6 +82,7 @@ sys.path.insert(0, str(CORE / "oversight"))
 
 import ask as ask_mod  # noqa: E402
 import agent as agent_mod  # noqa: E402
+import attach as ov_attach  # noqa: E402  —— 佐证原件仓库（core/oversight/attach.py）
 import chat  # noqa: E402
 import docparse  # noqa: E402
 import directives as directives_mod  # noqa: E402
@@ -531,6 +533,9 @@ _MAX_ATT_TOTAL = 30000     # 合计上限，超了就不再收
 _MAX_JSON_BODY = 4 * 1024 * 1024
 _MAX_UPLOAD_BODY = 16 * 1024 * 1024
 _MAX_UPLOAD_FILE = 9 * 1024 * 1024     # 单个文件解码后的大小
+# 一次请求最多带几份佐证。一次传整个文件夹（50 张照片）会让请求体顶到上限，
+# 全部失败；分成几次传，每份单独报结果，反而都能进去。
+_MAX_EVIDENCE_FILES = 10
 _DRAIN_MAX = 24 * 1024 * 1024          # 超限时最多还愿意读掉多少字节再回 413
 
 
@@ -586,6 +591,13 @@ WRITE_POLICY: tuple[tuple[str, str, str | None], ...] = (
     ("POST", r"/api/oversight", authz.GATE_SESSION),
     ("POST", r"/api/oversight/urge", authz.GATE_SESSION),
     ("POST", r"/api/oversight/[^/]+/action", authz.GATE_SESSION),
+    # 佐证原件：上传和删除都按「能不能动这条事项」在业务层再判一次，
+    # 闸门这里只回答「有没有登录」。
+    ("POST", r"/api/oversight/[^/]+/evidence", authz.GATE_SESSION),
+    ("DELETE", r"/api/oversight/[^/]+/evidence/[^/]+", authz.GATE_SESSION),
+    # 给历史事件补挂原件：改的是已经发生过的记录，除了登录还要在业务层按
+    # 「这条事项当前是什么状态」再过一遍（已办结只给市级）。
+    ("POST", r"/api/oversight/[^/]+/backfill", authz.GATE_SESSION),
     # 对话层生成的待确认动作。粗闸门只要求登录，行级判定在 handler 里按
     # 「这条提议动的是哪条事项」再过一次 —— 和 /api/oversight/[id]/action 同构。
     ("POST", r"/api/proposal/confirm", authz.GATE_SESSION),
@@ -1291,11 +1303,19 @@ class Handler(BaseHTTPRequestHandler):
 
             parts = _parts(path, "/api/oversight/")
             if len(parts) == 1:
+                sess = self._session_scope()
                 _pid, scope = self._read_scope()
                 one = ov.detail(parts[0], scope=scope)
                 if one is None:
                     return self._json({"ok": False, "error": "item_not_found", "item_id": parts[0]}, 404)
+                # 补挂历史凭证的按钮该不该亮，由后端算 —— 规则要看角色 + 事项状态
+                one["backfill"] = ({"allowed": False, "why": "未登录"} if sess is None
+                                   else self._with_backfill(one, sess)["backfill"])
                 return self._json({"ok": True, "item": one})
+            # 佐证原件下载：/api/oversight/<事项>/evidence/<id>。返回的是字节流，
+            # 不是 JSON —— 所以走 _send_file，不能落到下面的 _json 分支。
+            if len(parts) == 3 and parts[1] == "evidence":
+                return self._download_evidence(parts[0], parts[2])
 
             # ---- 指示（受令 → 拟办 → 分办 → 回执）----
             # 可见性在 directives._visible 里按身份收窄：非分管的令连标题都不会
@@ -1663,6 +1683,11 @@ class Handler(BaseHTTPRequestHandler):
         # 文件一律 413，而界面还写着 9MB。
         is_upload = path == "/api/attachments/parse" or (
             path.startswith("/api/rag/bases/") and path.endswith("/upload")
+        ) or (
+            path.startswith("/api/oversight/") and path.endswith("/evidence")
+        ) or (
+            # 补挂历史凭证可以直接带文件（已办结的事项没有「先上传」这一步）
+            path.startswith("/api/oversight/") and path.endswith("/backfill")
         )
         limit = _MAX_UPLOAD_BODY if is_upload else _MAX_JSON_BODY
         try:
@@ -2073,6 +2098,10 @@ class Handler(BaseHTTPRequestHandler):
             parts = _parts(path, "/api/oversight/")
             if len(parts) == 2 and parts[1] == "action":
                 return self._advance(parts[0], body)
+            if len(parts) == 2 and parts[1] == "evidence":
+                return self._upload_evidence(parts[0], body)
+            if len(parts) == 2 and parts[1] == "backfill":
+                return self._backfill_evidence(parts[0], body)
 
             # ---- 材料助手：出 .docx ----
             # 两个出口（Markdown / Word）共用同一次 compose()。如果各自查一遍数，
@@ -2315,6 +2344,11 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 1:
                 return self._delete_ok(meetings.delete(parts[0]))
 
+            # ---- 督办：删一份还没报送过的佐证原件 ----
+            parts = _parts(path, "/api/oversight/")
+            if len(parts) == 3 and parts[1] == "evidence":
+                return self._delete_evidence(parts[0], parts[2])
+
             # ---- 资料库：删文档（库/文档两级）----
             parts = _parts(path, "/api/rag/bases/")
             if len(parts) == 1:
@@ -2421,7 +2455,10 @@ class Handler(BaseHTTPRequestHandler):
         result = ov.advance(
             iid,
             action,
-            actor=scope["person"],  # actor 由登录身份定，不再信前端
+            # actor 由登录身份定，不再信前端；写进事件流的是**显示名**而不是 pid：
+            # 台账上「u-zhujian 已签收」没人看得懂，「市住建局 已签收」才是公文口径。
+            # 授权与审计仍用 pid（见上一段 az_action 与下面的 user_event）。
+            actor=str(people.meta(scope["person"]).get("name") or scope["person"]),
             text=text,
             reason=reason,
             evidence=evidence,
@@ -2432,6 +2469,258 @@ class Handler(BaseHTTPRequestHandler):
         if not result.get("ok"):
             return self._json(result, 409)
         return self._json({**result, "item": ov.detail(iid), "stats": ov.stats()})
+
+    # ---------------- 佐证材料原件 ----------------
+    def _evidence_gate(self, iid: str) -> tuple[dict | None, dict | None]:
+        """佐证的原件级鉴权。返回 (拒绝体, scope)：二者必有一个为 None。
+
+        能报进展的人才该能往上放材料：佐证是责任单位报送的东西，别人替它传一份
+        「现场照片」等于替它伪造报送材料。判定沿用 `_advance` 的资源口径
+        （主办 ∪ 协办），所以分管副市长、主办局、协办局都能传自己的那部分。
+        """
+        item = ov.get(iid)
+        if item is None:
+            return {"ok": False, "error": "item_not_found", "item_id": iid}, None
+        units = tuple([item.assignee] + list(item.co_assignees))
+        scope, allowed, why = self._require(authz.OVERSIGHT_EVIDENCE, {"units": units})
+        if not allowed:
+            audit.user_event(
+                scope.get("person") if scope else None, "access.denied",
+                target=authz.OVERSIGHT_EVIDENCE, payload={"item_id": iid, "reason": why},
+            )
+            return {"ok": False, "error": why}, None
+        return None, scope
+
+    def _upload_evidence(self, iid: str, body: dict) -> None:
+        """收佐证原件（base64 包在 JSON 里，和资料库上传同一种投递方式）。
+
+        **逐份报结果，不整体回滚**：一次选 5 张照片，其中一张是 12MB，另外
+        4 张不该跟着失败。失败项连同原因一起回给前端，用户只补那一张。
+        """
+        denied, scope = self._evidence_gate(iid)
+        if denied is not None:
+            return self._json(denied, 404 if denied.get("error") == "item_not_found" else 403)
+        assert scope is not None  # 上面已经判过
+
+        raw = body.get("files")
+        if isinstance(raw, dict):
+            raw = [raw]
+        if not isinstance(raw, list) or not raw:
+            # 兼容单文件的写法 {name, data}：脚本和 curl 更愿意这么传
+            raw = [{"name": body.get("name"), "data": body.get("data")}] if body.get("data") else []
+        if not raw:
+            return self._json({"ok": False, "error": "没有收到文件", "code": "no_file"}, 400)
+        if len(raw) > _MAX_EVIDENCE_FILES:
+            return self._json(
+                {"ok": False, "error": f"一次最多传 {_MAX_EVIDENCE_FILES} 份佐证，收到 {len(raw)} 份。"}, 400
+            )
+
+        actor = str(people.meta(scope["person"]).get("name") or scope["person"])
+        done: list[dict] = []
+        failed: list[dict] = []
+        for it in raw[:_MAX_EVIDENCE_FILES]:
+            if not isinstance(it, dict):
+                continue
+            name = str(it.get("name") or "未命名").strip()[:120] or "未命名"
+            b64 = it.get("data")
+            if not isinstance(b64, str) or not b64.strip():
+                failed.append({"name": name, "error": "文件是空的"})
+                continue
+            # base64 比原始字节胖约 4/3：先按编码长度挡掉，省一次大内存分配
+            if len(b64) > _MAX_UPLOAD_FILE * 4 // 3 + 4096:
+                failed.append({"name": name, "error": "文件超过 9MB"})
+                continue
+            try:
+                blob = base64.b64decode(b64, validate=False)
+            except (ValueError, TypeError):
+                failed.append({"name": name, "error": "base64 解不开，文件可能在传输中损坏"})
+                continue
+            res = ov.add_evidence(iid, name, blob, actor=actor)
+            if res.get("ok"):
+                f = res["file"]
+                audit.user_event(
+                    scope["person"], authz.OVERSIGHT_EVIDENCE, target=iid,
+                    payload={
+                        "evidence": f["id"], "name": f["name"], "size": f["size"],
+                        # 同一份文件重复上传时返回的是已有那条，记下来才看得懂审计
+                        "dedup": bool(f.get("dedup")),
+                    },
+                )
+                done.append(f)
+            else:
+                failed.append({"name": name, "error": res.get("error") or "上传失败"})
+
+        detail = ov.detail(iid) or {}
+        if not done and failed:
+            # 全失败才判失败。混合成功时 ok=True + failed 列表：让用户看到
+            # 「3 份进去了、1 份太大」，而不是一句话把 3 份也否掉。
+            return self._json(
+                {
+                    "ok": False,
+                    "error": failed[0]["error"],
+                    "items": [],
+                    "failed": failed,
+                    "evidence_files": detail.get("evidence_files") or [],
+                },
+                409,
+            )
+        return self._json(
+            {
+                "ok": True,
+                "items": done,
+                "failed": failed,
+                "evidence_files": detail.get("evidence_files") or [],
+            }
+        )
+
+    def _delete_evidence(self, iid: str, eid: str) -> None:
+        """删一份还没报送过的佐证。已随事件报送的不许删（理由见 `ov.remove_evidence`）。"""
+        denied, scope = self._evidence_gate(iid)
+        if denied is not None:
+            return self._json(denied, 404 if denied.get("error") == "item_not_found" else 403)
+        assert scope is not None
+        res = ov.remove_evidence(iid, eid)
+        if not res.get("ok"):
+            return self._json(res, 404 if res.get("code") == "not_found" else 409)
+        audit.user_event(scope["person"], authz.OVERSIGHT_EVIDENCE, target=iid,
+                         payload={"remove": eid})
+        return self._json(res)
+
+    def _backfill_evidence(self, iid: str, body: dict) -> None:
+        """把一份已上传的原件挂到某条历史事件的「仅备注」上。
+
+        这是唯一会改动**已发生记录**的接口，所以三道门都要过：登录（路由闸门）、
+        行级授权（按事项状态分档）、核心层再兜一道「待审核不许动」。
+        补完不改状态，但会追加一条「补录佐证」事件 —— 补了什么、谁补的、什么时候，
+        都留在台账上。
+        """
+        item = ov.get(iid)
+        if item is None:
+            return self._json({"ok": False, "error": "item_not_found", "item_id": iid}, 404)
+        units = tuple([item.assignee] + list(item.co_assignees))
+        scope, allowed, why = self._require(
+            authz.OVERSIGHT_BACKFILL, {"units": units, "status": item.status}
+        )
+        if not allowed:
+            audit.user_event(
+                scope.get("person") if scope else None, "access.denied",
+                target=authz.OVERSIGHT_BACKFILL,
+                payload={"item_id": iid, "status": item.status, "reason": why},
+            )
+            return self._json({"ok": False, "error": why}, 401 if scope is None else 403)
+        assert scope is not None
+
+        try:
+            index = int(body.get("index"))
+        except (TypeError, ValueError):
+            return self._json({"ok": False, "error": "没有指明要补哪条事件（index 无效）。"}, 400)
+        note = str(body.get("note") or "").strip()
+        eid = str(body.get("eid") or "").strip()
+        raw = body.get("file") if isinstance(body.get("file"), dict) else None
+        if not eid and not (raw and raw.get("data")):
+            return self._json({"ok": False, "error": "没有选中要挂上去的原件，也没有收到文件。"}, 400)
+
+        fname = ""
+        blob = b""
+        if not eid:
+            assert raw is not None  # 上面已经判过
+            fname = str(raw.get("name") or note or "佐证材料").strip()
+            try:
+                blob = base64.b64decode(str(raw.get("data") or ""), validate=False)
+            except Exception:  # noqa: BLE001  —— base64 坏掉就是坏掉，不需要分类型
+                return self._json({"ok": False, "error": "文件内容不是合法的 base64。"}, 400)
+            if not blob:
+                return self._json({"ok": False, "error": "收到的是空文件。"}, 400)
+            if len(blob) > _MAX_UPLOAD_FILE:
+                return self._json(
+                    {"ok": False, "error": f"单个文件不能超过 {_MAX_UPLOAD_FILE // (1024 * 1024)}MB。"}, 413
+                )
+
+        actor = str(people.meta(scope["person"]).get("name") or scope["person"])
+        res = ov.backfill_evidence(
+            iid, index, note, eid, filename=fname, content=blob, actor=actor
+        )
+        if not res.get("ok"):
+            code = 404 if res.get("code") in ("not_found",) else 409
+            return self._json(res, code)
+        audit.user_event(
+            scope["person"], "oversight.backfill", target=iid,
+            payload={"index": index, "note": note, "eid": eid, "event_ts": res.get("event_ts")},
+        )
+        return self._json(
+            {
+                **res,
+                "item": self._with_backfill(ov.detail(iid, scope=None), scope),
+                "stats": ov.stats(),
+            }
+        )
+
+    def _with_backfill(self, one: dict | None, scope: dict) -> dict | None:
+        """详情里补一个 `backfill`：这个人现在能不能给这条事项补历史凭证。
+
+        为什么由后端算而不是前端按角色猜：判定要同时看角色和**事项状态**
+        （已办结只给市级），这套规则只在 `authz.can` 里有一份。前端再抄一遍，
+        迟早出现「按钮亮着、点下去 403」。
+        """
+        if one is None:
+            return None
+        units = tuple([one["assignee"]] + list(one.get("co_assignees") or []))
+        allowed, why = authz.can(scope, authz.OVERSIGHT_BACKFILL, {"units": units, "status": one.get("status")})
+        one["backfill"] = {"allowed": bool(allowed), "why": "" if allowed else why}
+        return one
+
+    def _download_evidence(self, iid: str, eid: str) -> None:
+        """取原件。
+
+        可见性按台账的行级口径（`ov.detail(scope=...)`）判：看不到这条事项的人，
+        也不该能下载它的材料。
+
+        和台账其他读口有一处**故意不同**：这里必须登录，未登录一律 401。
+        台账那边「未登录看全量」是演示需要，但原件不是摘要 —— 扫描件、现场照片、
+        回执上常常带着经办人姓名和电话。而且「id 猜不到」这层保护等于零：
+        id 就写在事件 JSON 里，而台账匿名可读，拿到 id 就能直接拉原件。
+        """
+        _pid, scope = self._read_scope()
+        if _pid is None:
+            return self._json(
+                {"ok": False, "error": "佐证原件需要登录后才能下载。", "need_login": True},
+                401,
+            )
+        if ov.detail(iid, scope=scope) is None:
+            return self._json({"ok": False, "error": "item_not_found", "item_id": iid}, 404)
+        got = ov_attach.get(iid, eid)
+        if got is None:
+            return self._json(
+                {"ok": False, "code": "file_missing", "error": "这份佐证的原件不在了（可能已被删掉）。"},
+                404,
+            )
+        meta, path = got
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            return self._json({"ok": False, "error": f"读取失败：{exc}"}, 500)
+        self._send_file(data, str(meta.get("type") or "application/octet-stream"), str(meta.get("name") or "文件"))
+
+    def _send_file(self, data: bytes, content_type: str, filename: str) -> None:
+        """附件响应。一律 `attachment`，不在站内内联渲染。
+
+        理由不是洁癖：这些是别人报上来的文件，内联渲染等于让上传者决定在本站
+        执行什么（一张「照片.svg」里就能塞脚本）。`nosniff` 再挡一层。
+        """
+        suffix = Path(filename).suffix.lower()
+        ctype = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        # ASCII 兜底名：老客户端不认 filename*，但也不能让它拿到一串乱码
+        stem = Path(filename).stem.encode("ascii", "ignore").decode().strip() or "evidence"
+        fallback = f"{stem}{suffix}" if all(ord(c) < 128 for c in suffix) else stem
+        disp = f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename)}"
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", disp)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "private, no-store")
+        self.end_headers()
+        self.wfile.write(data)
 
     def _urge(self, body: dict) -> None:
         """批量催办。
@@ -2452,7 +2741,9 @@ class Handler(BaseHTTPRequestHandler):
         if len(ids) > 200:
             return self._json({"ok": False, "error": f"一次最多催办 200 条，收到 {len(ids)} 条。"}, 400)
 
-        actor = scope["person"]  # 由登录身份定，不再信前端
+        # 事件流写显示名（「市长秘书」），审计写 pid —— 前者是给责任单位看的，
+        # 后者要能对上账号。两处都从登录身份派生，不取前端传的值。
+        actor = str(people.meta(scope["person"]).get("name") or scope["person"])
         custom = str(body.get("text") or "").strip()
         done: list[dict] = []
         failed: list[dict] = []
@@ -2480,16 +2771,27 @@ class Handler(BaseHTTPRequestHandler):
             res = ov.advance(iid, "催办", actor=actor, text=text)
             if res.get("ok"):
                 audit.user_event(scope["person"], "oversight.urge", target=iid, payload={"ok": True})
-                done.append({"item_id": iid, "assignee": one.get("assignee"), "text": text})
+                done.append({
+                    "item_id": iid,
+                    "assignee": one.get("assignee"),
+                    "co_assignees": [str(x) for x in (one.get("co_assignees") or [])],
+                    "text": text,
+                })
             else:
                 failed.append({"item_id": iid, "error": res.get("error")})
 
+        # 主送 = 主办单位，抄送 = 协办单位。批量催办最容易被误解成「群发所有人」，
+        # 所以把两类分开报出去：收件方看到的是自己的关系，发起方也该知道催了几家主办。
+        primary = {str(d.get("assignee") or "") for d in done} - {""}
+        cc = {u for d in done for u in (d.get("co_assignees") or [])} - primary
         return self._json(
             {
                 "ok": True,
                 "urged": done,
                 "failed": failed,
                 "count": len(done),
+                "primary_units": len(primary),
+                "cc_units": len(cc),
                 "stats": ov.stats(),
                 "scan": ov.scan(),
             }
@@ -2558,7 +2860,8 @@ class Handler(BaseHTTPRequestHandler):
         res = ov.advance(
             str(prop.get("item_id") or ""),
             action,
-            actor=person,
+            # 和 _advance 同口径：事件流写显示名，审计写 pid
+            actor=str(people.meta(person).get("name") or person),
             text=str(prop.get("text") or ""),
             # 佐证和完成度原样转交：确认的是「这条草稿」，不是「这一类动作」。
             # 状态机守卫会在 advance 里再判一次（提交办结必须有佐证和说明）。

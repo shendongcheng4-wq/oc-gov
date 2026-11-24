@@ -46,6 +46,8 @@ OVERSIGHT_SUBMIT = "oversight.submit"      # 提交办结
 OVERSIGHT_CONFIRM = "oversight.confirm"    # 确认办结（市级收口）
 OVERSIGHT_REJECT = "oversight.reject"      # 退回
 OVERSIGHT_URGE = "oversight.urge"         # 催办
+OVERSIGHT_EVIDENCE = "oversight.evidence"  # 佐证材料原件（上传 / 删除）
+OVERSIGHT_BACKFILL = "oversight.backfill"  # 给历史事件补挂原件（补凭证）
 MEETING_COMMIT = "meeting.commit"          # 会议落库
 MEETING_EDIT = "meeting.edit"              # 删会议、改议定事项（会进日程/提醒，市级动作）
 MEETING_NOTICE = "meeting.notice"          # 导出会议通知到本机（发文口径由市领导定）
@@ -164,13 +166,18 @@ def can(
             return True, ""
         return False, "只有市领导或分管领导能给分管单位建档交办。"
 
-    if action in (OVERSIGHT_SIGN, OVERSIGHT_PROGRESS, OVERSIGHT_SUBMIT):
+    if action in (OVERSIGHT_SIGN, OVERSIGHT_PROGRESS, OVERSIGHT_SUBMIT, OVERSIGHT_EVIDENCE):
         # 签收/进展/办结：责任单位自己的动作。只有「本单位主办」的角色能做，
         # 协办单位不能替主办签收。bureau 就是单位本身，dept-leader/leader 分管则能做。
+        #
+        # 佐证上传同口径：能报进展的人才该能往上放材料。反过来，谁都不能替
+        # 别的单位传一份「现场照片」进去 —— 那是替人伪造报送材料。
         if not units:
             return False, "事项缺少责任单位，无法判定签收权限。"
         if _unit_in_scope(scope, units):
             return True, ""
+        if action == OVERSIGHT_EVIDENCE:
+            return False, "不能替非分管单位上传或删除佐证材料。"
         return False, "不能替非分管单位签收或反馈进展。"
 
     if action == OVERSIGHT_CONFIRM:
@@ -178,6 +185,29 @@ def can(
         if _role_ok(scope, directory.ROLE_LEADER):
             return True, ""
         return False, "确认办结需要市领导。"
+
+    if action == OVERSIGHT_BACKFILL:
+        # 给历史事件补挂原件。这是**事后补凭证**，不改状态、不改结论，
+        # 但它改的是已经发生过的记录，所以按「谁在什么状态下可以改历史」分三档：
+        #
+        # 待审核：一律不补。审核的人看的正是已提交的那一份，中途补一份进去，
+        #   批的和看到的就不是一份东西了 —— 等批完或被退回再说。
+        # 已办结：只剩市级能补。责任单位给自己补一份事后凭证，等于自己给自己
+        #   做背书；这条链已闭环，动它要有第三方。
+        # 办理中 / 待签收：同上传佐证口径（责任单位 + 分管领导 + 市领导）。
+        #   事情还没结束，经手人手上有什么就补什么，不必惊动市里。
+        status = str(resource.get("status") or "")
+        if status == "待审核":
+            return False, "待审核中不能补挂佐证：审核的是已提交的那份材料，等批完或退回后再补。"
+        if status == "已办结":
+            if _role_ok(scope, directory.ROLE_SECRETARY) or _role_ok(scope, directory.ROLE_LEADER):
+                return True, ""
+            return False, "已办结事项补挂凭证要市领导或秘书操作 —— 责任单位不能给自己补事后凭证。"
+        if not units:
+            return False, "事项缺少责任单位，无法判定补挂权限。"
+        if _unit_in_scope(scope, units):
+            return True, ""
+        return False, "不能替非分管单位补挂佐证材料。"
 
     if action == OVERSIGHT_REJECT:
         # 退回是审方动作：领导（市领导 + 分管领导）可退回，但**只能退自己

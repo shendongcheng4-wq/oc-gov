@@ -1634,6 +1634,26 @@ html.embedded .drawer{top:0;height:100%}
 .ov-form-row{display:flex;gap:6px;margin-top:6px}
 .ov-form-row input{flex:1;min-width:0;font:inherit;font-size:11.5px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink-2);box-sizing:border-box}
 .ov-form-row input:focus{outline:none;border-color:var(--brand)}
+/* 上传按钮不能被 flex:1 拉长成一条：它是个动作，不是输入框 */
+.ov-form-row .mini{flex:0 0 auto;white-space:nowrap}
+.ov-form>#ovEv{width:100%;box-sizing:border-box;margin-top:6px;font:inherit;font-size:11.5px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink-2)}
+.ov-form>#ovEv:focus{outline:none;border-color:var(--brand)}
+.ov-evbox{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.ov-evhint{color:var(--faint);font-size:11px}
+.ov-evf{display:inline-flex;align-items:center;gap:5px;max-width:100%;padding:3px 7px;border:1px solid var(--line);border-radius:999px;background:var(--surface);font-size:11px;color:var(--ink-2);line-height:1.5}
+.ov-evf a{color:var(--brand);text-decoration:none;max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ov-evf a:hover{text-decoration:underline}
+.ov-evf i{font-style:normal;color:var(--faint);font-size:10px;white-space:nowrap}
+.ov-evf .x{border:0;background:none;color:var(--faint);cursor:pointer;font-size:11px;padding:0 0 0 2px;line-height:1}
+.ov-evf .x:hover{color:var(--danger)}
+.ov-evf.note{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-ink)}
+.ov-evf.note i{color:var(--warn);font-weight:600}
+.ov-evf.gone{border-style:dashed;color:var(--faint)}
+/* 「补原件」贴在「仅备注」右边，做成一枚小附件按钮：它改的是历史记录，
+   所以样式要比主按钮轻，不能和「反馈进展」抢视线 */
+.ov-bf{margin-left:6px;padding:2px 8px;font-size:11px;border-color:var(--warn-line);color:var(--warn-ink);background:var(--warn-bg)}
+.ov-bf:hover{border-color:var(--warn);color:var(--warn)}
+.ov-evfs{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px;align-items:center}
 .ov-btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .ov-btns .mini.primary{background:var(--brand);border-color:var(--brand);color:#fff}
 .ov-btns .mini.primary:hover{background:var(--brand-2);color:#fff}
@@ -2842,22 +2862,29 @@ html.ask-fold .ask-rail{display:flex}
 .cst-lg span{font-size:11.5px; color:#5d6d84; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .cst-lg b{font-size:12.5px; color:#1d2635; font-weight:700; white-space:nowrap}
 .cst-lg b em, .cst-n em{font-style:normal; font-size:10px; font-weight:500; color:#96a4b8; margin-left:2px}
-.cst-bars{gap:11px}
+.cst-bars{gap:13px}
 /* 一行单位占两行：上面「名次 + 单位 + 件数」，下面整条分段条。条拉满整行宽，
    段与段的长度差才看得出来；挤在名字右边只剩一小截，只能读成「都很短」。 */
-.cst-row{display:flex; flex-direction:column; align-items:stretch; gap:6px; font-size:11.5px}
+.cst-row{display:flex; flex-direction:column; align-items:stretch; gap:7px; font-size:11.5px}
 .cst-l1{display:flex; align-items:center; gap:8px}
+/* 徽标是圆而不是圆角方：参考稿里 1—6 是六个圆点，和右侧的分段条一起把「名次」
+   做成装饰而不是表格列；方角会把它读成表头的一部分。 */
 .cst-rank{
-  width:15px; height:16px; flex:0 0 auto; border-radius:4px;
-  display:grid; place-items:center; color:#fff; font-size:10px; font-weight:700;
+  width:17px; height:17px; flex:0 0 auto; border-radius:50%;
+  display:grid; place-items:center; color:#fff; font-size:10.5px; font-weight:700;
   box-shadow:0 2px 5px -2px rgba(20,50,110,.5);
 }
-.cst-name{flex:1 1 auto; min-width:0; text-align:left; font-size:11.5px; font-weight:600; color:#3b4759;
+.cst-name{flex:1 1 auto; min-width:0; text-align:left; font-size:12px; font-weight:600; color:#2c3849;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.cst-n{flex:0 0 auto; width:auto; font-size:12px; font-weight:700; color:#1d2635}
+/* 件数是这一行唯一的「结论」，字号必须压过单位名 —— 现在两者差不多大，扫下来
+   只看到一排单位。数字放大到 17px，「项」退成 10px 小字并抬到数字肩上（上标），
+   否则两者同高，17px 的数字会被读成「45项」一个词。 */
+.cst-n{flex:0 0 auto; width:auto; font-size:17px; font-weight:700; color:#16202e; letter-spacing:-.2px;
+  display:inline-flex; align-items:flex-start; gap:2px; line-height:1}
+.cst-n em{margin-left:0; margin-top:1px; transform:none}
 /* flex:0 0 auto 是必需的：原样式给的是 flex:1，在纵向 flex 里 basis=0 会把高度算成 0，
    条就整根消失（只剩轨道都看不见）。 */
-.cst-bar{flex:0 0 auto; width:100%; height:8px; border-radius:4px; background:#eff3fa; overflow:hidden}
+.cst-bar{flex:0 0 auto; width:100%; height:7px; border-radius:4px; background:#eef2f9; overflow:hidden}
 .cst-bar i{display:flex; height:100%; border-radius:4px; overflow:hidden; background:none}
 .cst-bar i b{position:static; left:auto; top:auto; bottom:auto; height:100%; display:block; background:none}
 .cst-bar i b.sg-b{background:#2f7ce8}
@@ -3012,6 +3039,9 @@ html.ask-fold .ask-rail{display:flex}
 :root[data-theme="dark"] .bar,
 :root[data-theme="dark"] .cst-bar,
 :root[data-theme="dark"] .fbar{background:#1f2835}
+/* 单位名原来只有浅色定义（#3b4759），深色下一直是暗字压在暗卡上 —— 不是这次改出来的，
+   顺手补掉。 */
+:root[data-theme="dark"] .cst-name{color:#b9c7db}
 :root[data-theme="dark"] .bar i::after{background:var(--surface)}
 :root[data-theme="dark"] .inputbar{background:var(--surface-2)}
 :root[data-theme="dark"] .kpi-illu{opacity:.8}
@@ -4001,7 +4031,7 @@ function coordStatsHtml() {
       </div>
     </div>
     <div class="cst-block">
-      <div class="cst-title"><svg viewBox="0 0 12 12" class="cst-tri"><path d="M3 1.5 L9.5 6 L3 10.5 Z"/></svg>责任单位分布 <span>Top 6</span></div>
+      <div class="cst-title"><svg viewBox="0 0 12 12" class="cst-tri"><path d="M3 1.5 L9.5 6 L3 10.5 Z"/></svg>责任单位分布</div>
       <div class="cst-bars">${bars}</div>
     </div>`;
 }
@@ -8230,7 +8260,7 @@ async function submitLogin() {
   // 登录成功：把本地身份切到登录的那个（读口以 session 身份为准，但本地 PID 也要一致）。
   const changed = person !== PID.get();
   PID.set(person);
-  await refreshAuth();
+  const who = await refreshAuth();
   // 会话是按身份存的：换了身份就清掉当前会话、重拉列表，否则屏幕留的是上一个人的聊天记录。
   if (changed) {
     THREAD = null;
@@ -8241,6 +8271,7 @@ async function submitLogin() {
   await loadWorkspace();
   await loadNotify({ silent: true });
   renderIdMenu();
+  defaultView(who);
   const p = WS && WS.person;
   toast(p ? `已登录「${p.name}」：${p.scope}` : "已登录");
 }
@@ -11514,7 +11545,7 @@ function newMeetingForm() {
 /* 数据流是单向的：接口给什么就画什么，前端不自己算风险等级、不算天数。
    按钮显不显示看 allowed_actions，判断能不能干还是后端说了算 —— 前端只负责
    把拒绝原因原样弹出来，避免两套规则各说各话。 */
-const OVX = { items: [], stats: {}, scan: null, filter: "全部", sel: null };
+const OVX = { items: [], stats: {}, scan: null, filter: "全部", sel: null, files: [], evNeed: false, bf: null };
 const OV_FILTERS = ["全部", "逾期", "今日到期", "临期", "签收超时", "停滞", "已办结"];
 const OV_TONE = { 逾期: "danger", 今日到期: "warn", 临期: "warn", 签收超时: "info", 停滞: "info", 正常: "muted" };
 
@@ -11786,31 +11817,64 @@ function renderOvDetail(raw) {
     return `<button class="mini ${cls}" data-ovact="${esc(a)}">${esc(a)}</button>`;
   }).join("");
 
-  const events = (it.events || []).slice().reverse().map((e) => {
+  // 事件流里的佐证：上传过的给可点的原件名，手填的标注「仅备注」。
+  // 之前这里只有一句「佐证 2 份」——审核的人点开什么都看不到。
+  //
+  // 早期台账的佐证是手打的名字，系统里没有文件。现在「仅备注」旁边可以补原件
+  // （`ov.backfill_evidence`）：这条路径只给有权限的人看，因为补的是已经发生过
+  // 的记录 —— 责任单位不能给自己补事后凭证（已办结时尤其如此）。
+  const bfOk = !!(it.backfill && it.backfill.allowed);
+  const bfWhy = (it.backfill && it.backfill.why) || "";
+  const evFiles = (id, list, idx) => (list || []).map((v) => {
+    if (v.note_only) {
+      const tip = bfWhy
+        ? `手填的备注，系统里没有这份文件；当前身份不能补原件：${bfWhy}`
+        : "手填的备注，系统里没有这份文件";
+      const btn = bfOk
+        ? `<button type="button" class="mini ov-bf" data-ovbf="${idx}" data-note="${esc(v.name)}"
+             title="选一份文件挂到这条记录上（会留一条「补录佐证」痕迹）">补原件</button>`
+        : "";
+      return `<span class="ov-evf note" title="${esc(tip)}">${esc(v.name)}<i>仅备注</i></span>${btn}`;
+    }
+    if (v.missing) {
+      return `<span class="ov-evf gone" title="原件已被删除或移动">${esc(v.name)}<i>原件缺失</i></span>`;
+    }
+    return `<a class="ov-evf" data-evget="${esc(v.id)}" data-item="${esc(id)}" data-evname="${esc(v.name)}" href="/api/oversight/${encodeURIComponent(id)}/evidence/${encodeURIComponent(v.id)}">${esc(v.name)}<i>${esc(evSize(v.size))}</i></a>`;
+  }).join("");
+
+  const events = (it.events || []).map((e, i) => ({ e, i })).reverse().map(({ e, i }) => {
     const meta = [
       e.actor,
       e.from_status && e.to_status ? `${e.from_status} → ${e.to_status}` : "",
       e.percent != null ? `${e.percent}%` : "",
       (e.evidence || []).length ? `佐证 ${e.evidence.length} 份` : "",
     ].filter(Boolean).join(" · ");
+    const files = evFiles(it.id, e.evidence, i);
     return `
     <div class="ov-ev">
       <span class="t">${esc(e.ts)}</span>
       <span class="k"><b>${esc(e.type)}</b>${esc(e.text || "")}
+        ${files ? `<div class="ov-evfs">${files}</div>` : ""}
         <span class="ev-meta">${esc(meta)}</span>
       </span>
     </div>`;
   }).join("");
 
+  // 提交办结的门槛要说在前面：现在它不再是「随便填几个字」，
+  // 而是必须有一份真上传的文件，不说清楚会让人反复被拒。
   const form = acts ? `
     <div class="ov-form">
       <textarea id="ovText" placeholder="办理说明 / 退回理由（提交办结要写清如何达到办结标准）"></textarea>
       <div class="ov-form-row">
         <input id="ovPct" type="number" min="0" max="100" placeholder="进度 %（反馈进展时填）">
-        <input id="ovEv" placeholder="佐证材料，逗号分隔">
+        <button type="button" class="mini" id="ovEvPick">＋ 上传佐证</button>
+        <input type="file" id="ovEvFile" multiple hidden
+               accept=".jpg,.jpeg,.png,.gif,.bmp,.webp,.heic,.pdf,.ofd,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.wps,.et,.dps,.txt,.csv,.zip,.rar,.7z,.mp4,.mov,.avi,.wmv,.mp3,.m4a">
       </div>
+      <div class="ov-evbox" id="ovEvList"></div>
+      <input id="ovEv" placeholder="补充说明（只能口头交代的写这里；仅备注，不构成佐证）">
       <div class="ov-btns">${acts}</div>
-      <div class="hint" style="margin:6px 0 0">提交办结要求：至少一条进展 + 办结说明 + 佐证材料，缺一样会被台账拒绝并说明原因。</div>
+      <div class="hint" style="margin:6px 0 0">提交办结要求：至少一条进展 + 办结说明 + <b>已上传的佐证原件</b>，缺一样会被台账拒绝并说明原因。</div>
     </div>` : `<div class="mt-warn info">这件事项已办结，没有可执行的操作。</div>`;
 
   $("#ovMain").innerHTML = `
@@ -11824,6 +11888,156 @@ function renderOvDetail(raw) {
     ${nodeHtml}
     ${form}
     <div class="ov-events">${events || `<div class="hint" style="margin:0">没有事件记录。</div>`}</div>`;
+
+  // 待提交的佐证只认「传上来了但还没随任何一次报送提交」的那些。
+  // 从服务端读而不是只放内存里：刷新页面、换台机器看到的都是同一批。
+  OVX.files = (it.evidence_files || []).filter((f) => !f.used);
+  OVX.evNeed = (it.allowed_actions || []).includes("提交办结");
+  renderOvEv();
+  const pick = $("#ovEvPick");
+  if (pick) pick.onclick = () => $("#ovEvFile")?.click();
+  const input = $("#ovEvFile");
+  if (input) input.onchange = () => { const fs = Array.from(input.files || []); input.value = ""; if (fs.length) ovUpload(fs); };
+}
+
+/* 佐证原件的人话大小。不用 toFixed(1) 一律两位：一张 800KB 的照片显示成
+   「0.78MB」比「800KB」难核对得多。 */
+function evSize(n) {
+  const b = Number(n) || 0;
+  if (b < 1024) return `${b}B`;
+  if (b < 1024 * 1024) return `${Math.round(b / 1024)}KB`;
+  return `${(b / 1024 / 1024).toFixed(1)}MB`;
+}
+
+/* 待提交的佐证芯片。已报送的那些不在这里 —— 它们在下面的事件流里，
+   每条记录旁边挂着自己那份原件，翻历史时才看得清「当时报的是什么」。 */
+function renderOvEv() {
+  const box = $("#ovEvList");
+  if (!box) return;
+  const files = OVX.files || [];
+  if (!files.length) {
+    box.innerHTML = `<span class="ov-evhint">${OVX.evNeed ? "还没有佐证原件 —— 提交办结至少要传一份" : "还没有佐证原件（可选）"}</span>`;
+    return;
+  }
+  box.innerHTML = files.map((f) => `
+    <span class="ov-evf" title="${esc(f.name)} · ${esc(evSize(f.size))}">
+      <a data-evget="${esc(f.id)}" data-item="${esc(OVX.sel || "")}" data-evname="${esc(f.name)}" href="/api/oversight/${encodeURIComponent(OVX.sel || "")}/evidence/${encodeURIComponent(f.id)}">${esc(f.name)}</a>
+      <i>${esc(evSize(f.size))}</i>
+      <button type="button" class="x" data-evdel="${esc(f.id)}" title="删掉这份">✕</button>
+    </span>`).join("");
+}
+
+/* 上传。逐份算成功/失败：一次选 5 张照片，1 张超限不该让另外 4 张也白传。 */
+async function ovUpload(files) {
+  if (!OVX.sel) return toast("先选一条事项");
+  const MAXB = 9 * 1024 * 1024;
+  const payload = [];
+  const tooBig = [];
+  for (const f of files) {
+    if (f.size > MAXB) { tooBig.push(f.name); continue; }
+    const buf = await f.arrayBuffer();
+    payload.push({ name: f.name, data: b64Of(buf) });
+  }
+  if (tooBig.length) toast(`${tooBig.slice(0, 2).join("、")}${tooBig.length > 2 ? " 等" : ""} 超过 9MB，没有上传`);
+  if (!payload.length) return;
+  toast(`正在上传 ${payload.length} 份…`);
+  const d = await (await fetch(`/api/oversight/${encodeURIComponent(OVX.sel)}/evidence`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ files: payload }),
+  })).json().catch(() => ({ ok: false, error: "上传请求失败" }));
+  if (!d.ok) {
+    if (handleWriteDeny(d)) return;
+    return;
+  }
+  OVX.files = (d.evidence_files || []).filter((f) => !f.used);
+  renderOvEv();
+  const dup = (d.items || []).filter((x) => x.dedup).length;
+  const bad = (d.failed || []).length;
+  toast(`已上传 ${(d.items || []).length - dup} 份${dup ? `，${dup} 份已在库里` : ""}${bad ? `，${bad} 份没传上：${d.failed[0].error}` : ""}`);
+}
+
+async function ovDelEvidence(eid) {
+  if (!OVX.sel) return;
+  const d = await (await fetch(`/api/oversight/${encodeURIComponent(OVX.sel)}/evidence/${encodeURIComponent(eid)}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  })).json().catch(() => ({ ok: false, error: "删除请求失败" }));
+  if (!d.ok) return handleWriteDeny(d);
+  OVX.files = (d.evidence_files || []).filter((f) => !f.used);
+  renderOvEv();
+  toast("已删除这份佐证");
+}
+
+/* 下载走 fetch 而不是让浏览器直接跳链接：链接带不上 X-Session，
+   登录后按分管范围收窄的人会拿到 404。取回 blob 再触发保存，文件名照旧。 */
+async function ovDownload(itemId, eid, name) {
+  try {
+    const r = await fetch(`/api/oversight/${encodeURIComponent(itemId)}/evidence/${encodeURIComponent(eid)}`, {
+      headers: authHeaders(),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      // 原件未登录会被 401（台账摘要可以匿名看，扫描件不行）：直接弹登录框，
+      // 而不是让人对着「下载失败（401）」发呆
+      if (d.need_login) return handleWriteDeny(d);
+      return toast(d.error || `下载失败（${r.status}）`);
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name || "佐证材料";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  } catch (e) {
+    toast("下载失败，请检查网络");
+  }
+}
+
+// 补挂历史原件的文件选择器。为什么不复用表单里的 #ovEvFile：已办结事项的
+// 整个操作表单都不渲染（「没有可执行的操作」），而补凭证恰恰是已办结最需要的
+// 那件事。所以这里单独挂一个，只要补挂按钮在，它就在。
+function ovBfPicker() {
+  let el = document.getElementById("ovBfFile");
+  if (!el) {
+    el = document.createElement("input");
+    el.type = "file";
+    el.id = "ovBfFile";
+    el.hidden = true;
+    el.accept = ".jpg,.jpeg,.png,.gif,.bmp,.webp,.heic,.pdf,.ofd,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.wps,.et,.dps,.txt,.csv,.zip,.rar,.7z,.mp4,.mov,.mp3,.m4a";
+    el.addEventListener("change", ovBfUpload);
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+async function ovBfUpload(e) {
+  const file = e.target.files && e.target.files[0];
+  const bf = OVX.bf;
+  e.target.value = "";
+  if (!file || !bf || !OVX.sel) return;
+  if (file.size > 9 * 1024 * 1024) return toast("单个文件不能超过 9MB");
+  const b64 = await new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result || "").split(",")[1] || "");
+    r.onerror = () => rej(new Error("read_failed"));
+    r.readAsDataURL(file);
+  }).catch(() => "");
+  if (!b64) return toast("没能读取这个文件");
+  const d = await (await fetch(`/api/oversight/${encodeURIComponent(OVX.sel)}/backfill`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ index: bf.index, note: bf.note, file: { name: file.name, data: b64 } }),
+  })).json();
+  if (!d.ok) return handleWriteDeny(d);
+  OVX.bf = null;
+  toast(`已把「${d.name}」挂到 ${d.event_ts} 的「${d.event_type}」上`);
+  await refreshOversight();
+  if (d.item) renderOvDetail(d.item);
+  refreshDash();
 }
 
 // 写操作被拒时统一处理：未登录/无 session → 弹登录框；越权 → toast 原因。
@@ -11843,13 +12057,19 @@ async function ovAct(action) {
   const text = ($("#ovText")?.value || "").trim();
   const evRaw = ($("#ovEv")?.value || "").trim();
   const pctRaw = ($("#ovPct")?.value || "").trim();
+  // 佐证两类一起送：已上传的原件（id）+ 手填的备注（名字）。后端按 `ev_` 前缀
+  // 分流，备注只当说明、不算佐证 —— 判定规则只有一份，不在前端复制一遍。
+  const evidence = [
+    ...(OVX.files || []).map((f) => f.id),
+    ...evRaw.split(/[,，、;；\n]/).map((s) => s.trim()).filter(Boolean),
+  ];
   const d = await (await fetch(`/api/oversight/${encodeURIComponent(OVX.sel)}/action`, {
     method: "POST",
     headers: authHeaders(),
     body: JSON.stringify({
       action, text,
       percent: pctRaw === "" ? null : Number(pctRaw),
-      evidence: evRaw,
+      evidence,
     }),
   })).json();
   if (!d.ok) return handleWriteDeny(d);
@@ -11870,7 +12090,12 @@ async function ovUrgeBatch() {
     body: JSON.stringify({ ids }),
   })).json();
   if (!d.ok) return handleWriteDeny(d);
-  toast(`已催办 ${d.count} 条${d.failed.length ? `，${d.failed.length} 条跳过` : ""}`);
+  // 主送/抄送分开报：批量催办最容易被当成「群发所有人」，
+  // 发起的人自己得先看清催了几家主办、几家协办。
+  const rel = [];
+  if (d.primary_units) rel.push(`主送 ${d.primary_units} 家`);
+  if (d.cc_units) rel.push(`抄送 ${d.cc_units} 家`);
+  toast(`已催办 ${d.count} 条${rel.length ? `（${rel.join(" · ")}）` : ""}${d.failed.length ? `，${d.failed.length} 条跳过` : ""}`);
   await refreshOversight();
   if (OVX.sel) await showOvItem(OVX.sel);
   refreshDash();
@@ -11913,7 +12138,8 @@ async function boot() {
   await loadWorkspace();
   // 登录态：启动时问一次后端，决定右上角显示「已登录」还是「演示视角·未登录」。
   // 不阻塞首屏；未登录时读操作照常（演示全量），写操作会被拦并引导登录。
-  refreshAuth().then(() => renderIdMenu()).catch(() => {});
+  // 拿到角色后顺手决定落哪一屏：单位账号直接进工作台，不必自己去找页签。
+  refreshAuth().then((w) => { renderIdMenu(); defaultView(w); }).catch(() => {});
 
   // 模型配置 + 最近一次会话（没有会话就停在空态，不自动建空记录）
   await loadModels();
@@ -11986,6 +12212,16 @@ function switchView(which) {
   document.querySelectorAll(".cp-tabs .desk-tab").forEach((t) => {
     t.classList.toggle("on", isDesk && t.dataset.desk === DESK_CUR);
   });
+}
+
+/* 登录后落哪一屏：单位账号进工作台，其余进城市罗盘。
+   局长打开系统，第一眼不该是全市 GDP —— 罗盘上没有一个数是他能改的，
+   而工作台第一块就是「本单位的账」。显式带 hash 的直达链接优先：
+   收藏了 #oversight 的人不希望一登录就被顶回工作台。 */
+function defaultView(who) {
+  if (location.hash) return;
+  // role=bureau 就是「一个单位」：14 个单位账号和生态环境局那个演示身份都是它
+  if (who && who.role === "bureau") switchView("desk");
 }
 
 /* ---------- 知识库 ----------
@@ -12790,6 +13026,30 @@ document.addEventListener("click", (e) => {
 
   const ovact = e.target.closest("[data-ovact]");
   if (ovact) return ovAct(ovact.dataset.ovact);
+
+  // 给「仅备注」补原件：先记住是哪条事件、哪个备注，选完文件再调 backfill。
+  const bf = e.target.closest("[data-ovbf]");
+  if (bf) {
+    OVX.bf = { index: Number(bf.dataset.ovbf), note: bf.dataset.note || "" };
+    const picker = ovBfPicker();
+    picker.value = "";
+    return picker.click();
+  }
+
+  // 佐证原件：点名字下载，点 ✕ 删除。放在 [data-ovact] 之后，
+  // 两者不会同时命中（芯片在表单里，不在按钮上）。
+  const evget = e.target.closest("[data-evget]");
+  if (evget) {
+    e.preventDefault();
+    // 名字取 data-evname，不能用 textContent —— 芯片里还挂着大小（「698B」），
+    // 拼起来会存成「销号台账.pdf698B」这种文件。
+    return ovDownload(evget.dataset.item || OVX.sel, evget.dataset.evget, evget.dataset.evname);
+  }
+  const evdel = e.target.closest("[data-evdel]");
+  if (evdel) {    e.preventDefault();
+    if (!confirm("删掉这份佐证？原件会从服务器上删除。")) return;
+    return ovDelEvidence(evdel.dataset.evdel);
+  }
 
   // 知识库条目：事项跳台账详情，会议跳会议记录
   const kbref = e.target.closest("[data-kbref]");

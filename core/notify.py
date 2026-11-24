@@ -115,6 +115,15 @@ RULES: tuple[dict[str, Any], ...] = (
         "why": "进度数据不动，通常不是没事，是没人报",
     },
     {
+        "id": "ov_urge",
+        "kind": "oversight",
+        "label": "被催办",
+        "level": "high",
+        "to": "unit",
+        "when": "被催办后当天一次；再催一次算一条新提醒（同一事项当天仍只出现一条）",
+        "why": "催办是市里对单位提的要求，必须送到经办人手里，而不是只写进台账",
+    },
+    {
         "id": "meet_soon",
         "kind": "meeting",
         "label": "会议即将开始",
@@ -307,17 +316,23 @@ def _note(
     ref: dict[str, str] | None = None,
     at: str = "",
     extra: dict[str, Any] | None = None,
+    level: str | None = None,
+    label: str | None = None,
 ) -> dict[str, Any]:
     rule = _RULE_BY_ID[rule_id]
+    # level 默认取规则表的值。只有一处会覆盖：事项本来就逾期/今日到期时被催办，
+    # 不能因为「今天多了一条催办」就从「需要立刻处理」掉到「今天要跟进」——
+    # 催办说明有人盯着，不说明没那么急。
+    lv = level or rule["level"]
     return {
         # id 里带 bucket（日期 / 期次 / 会议 id）：同一天同一件事只有一个 id，
         # 第二天 bucket 变了就成了一条新提醒 —— 不用额外写「昨天发过没有」。
         "id": f"{rule_id}:{subject}:{bucket}",
         "rule": rule_id,
-        "rule_label": rule["label"],
+        "rule_label": label or rule["label"],
         "kind": rule["kind"],
-        "level": rule["level"],
-        "level_rank": _LEVEL_RANK[rule["level"]],
+        "level": lv,
+        "level_rank": _LEVEL_RANK[lv],
         "to": rule["to"],
         "title": title,
         "body": body,
@@ -331,8 +346,124 @@ def _note(
     }
 
 
+def _actor_name(actor: str) -> str:
+    """事件里的 actor 换成人能读的称呼。
+
+    台账里两种写法都有：走登录的操作写的是身份 id（`u-zhujian` / `secretary`），
+    种子数据写的是「市政府办 李敏」这种人名。认得出就换名字，认不出原样给出 ——
+    展示层不猜、也不编。
+    """
+    p = people.find(actor)
+    return str(p.get("name") or actor) if p else actor
+
+
+def _urged_today(person: dict[str, Any], now: datetime) -> dict[str, dict[str, Any]]:
+    """今天被催办、且不是本人催的事项：id → 台账行（行里带 last_urge）。
+
+    为什么在 `ov.scan()` 之外单独扫一遍：scan 的桶只装风险（逾期/临期/停滞…），
+    而催办可以落在任何未办结的事项上 —— 一件「状态正常」的事被催了，也必须
+    进收件箱，否则就是「催了没人知道」。
+    """
+    today = now.date().isoformat()
+    units, manual = schedule_mod.scope_of(person)
+    out: dict[str, dict[str, Any]] = {}
+    for it in ov.list_items():
+        if it.get("status") == ov.CLOSED:
+            continue
+        urge = it.get("last_urge") or {}
+        if not urge or not str(urge.get("ts") or "").startswith(today):
+            continue
+        if not schedule_mod.item_visible(it, units, manual):
+            continue
+        # 自己催的自己不用再收一条：收件箱不该变成「我发过什么」的台账
+        if _actor_name(str(urge.get("actor") or "")) == str(person.get("name") or ""):
+            continue
+        out[it["id"]] = it
+    return out
+
+
+def _relation(it: dict[str, Any], units: Any) -> str:
+    """这条事项对「当前这个人」是什么关系：主送 / 抄送 / 督办。
+
+    主送＝本人所在（或分管）单位就是主办单位，这件事欠的是他的账；
+    抄送＝只落在协办单位里，要配合但不是第一责任人；
+    督办＝两边都不沾（市长、秘书这类全市视角，以及分管单位没被涉及的分管领导），
+    他看到的是「谁在被催」，不是「我要办」。
+
+    为什么要分：一件事主办、协办常常三四个单位，同一段催办原文原样群发，
+    协办单位会以为自己被点名主责，主办单位又会以为有人在替他扛。
+    """
+    host = str(it.get("assignee") or "")
+    co = {str(x) for x in (it.get("co_assignees") or [])}
+    us = {str(x) for x in (units or ())}
+    if host and host in us:
+        return "主送"
+    if us & co:
+        return "抄送"
+    return "督办"
+
+
+def _urge_note(it: dict[str, Any], now: datetime, relation: str = "主送") -> dict[str, Any]:
+    """把「今天被催办」变成一条能点回台账的提醒。
+
+    去重桶里带催办次数：同一天被催第二次会生成新 id（再提醒一次），而不是被
+    上一条的「已读」吃掉 ——「催了没看」和「看了没办」是两件事，不能合并。
+    """
+    urge = it["last_urge"]
+    host = str(it.get("assignee") or "")
+    co = [str(x) for x in (it.get("co_assignees") or [])]
+    actor = _actor_name(str(urge.get("actor") or ""))
+    said = str(urge.get("text") or "").strip()
+    # 抬头按关系写，而不是一律「某某单位等」：抄送单位看到的必须先是
+    # 「主办是谁」，否则他会把这条当成自己的主责件。
+    if relation == "抄送":
+        lead = f"【抄送·协办】主办单位 {host}"
+    else:
+        lead = host + ("等" if co else "")
+    body = f"{lead} · {actor} 催办：{said}" if said else f"{lead} · {actor} 催办"
+    # 风险理由一起带上：催办说的是「有人盯着」，不该把「已逾期 23 天」抹掉
+    reasons = [r for r in (it.get("risk_reasons") or []) if r != "已办结"]
+    if reasons:
+        body += f"（当前：{'；'.join(reasons)}）"
+    urgent = it.get("risk") in (ov.RISK_OVERDUE, ov.RISK_TODAY)
+    if relation == "抄送":
+        level, label = "normal", "被催办（抄送）"   # 抄送件不亮红灯
+    elif relation == "督办":
+        # 全市视角不是在「被催」，而是看见别人催了谁。写成「被催办」会让人
+        # 以为有人在催他 —— 一条会让人误判自己的消息，比没有这条更糟。
+        level = "urgent" if urgent else None
+        label = "已催办"
+    else:
+        # 逾期件被催仍按「需要立刻处理」：催办是加压，不是降级
+        level, label = ("urgent" if urgent else None), None
+    return _note(
+        "ov_urge",
+        it["id"],
+        f"{now.date().isoformat()}#{urge.get('count') or 1}",
+        it["title"],
+        body,
+        ref={"type": "oversight", "id": it["id"]},
+        at=str(urge.get("ts") or ""),
+        extra={
+            "assignee": it["assignee"],
+            "co_assignees": co,
+            "relation": relation,
+            "urge_actor": actor,
+            "remind_count": urge.get("count") or 1,
+            "deadline": it["deadline"],
+            "days_left": it["days_left"],
+            "progress": it["progress"],
+        },
+        # 逾期件被催仍按「需要立刻处理」：催办是加压，不是降级。
+        # 抄送单位不跟着亮红灯 —— 它不是第一责任人，把协办件标成紧急，
+        # 只会让「紧急」这个词贬值。
+        level=level,
+        label=label,
+    )
+
+
 def _oversight_notes(person: dict[str, Any], now: datetime) -> list[dict[str, Any]]:
-    """一条在办事项最多出一条提醒，取最严重的那种。
+    """一条在办事项最多出一条提醒，取最严重的那种；今天被催过的改说「被催办」。
 
     直接读 `ov.scan()` 的桶，不在这里重算「逾期几天」——
     重算就会有第二个口径，而台账那个才是权威。
@@ -341,6 +472,7 @@ def _oversight_notes(person: dict[str, Any], now: datetime) -> list[dict[str, An
     wake = now.replace(hour=WAKE_HOUR, minute=WAKE_MINUTE, second=0, microsecond=0)
     units, manual = schedule_mod.scope_of(person)
     sc = ov.scan(max(SOON_DAYS))
+    urged = _urged_today(person, now)
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
 
@@ -349,6 +481,12 @@ def _oversight_notes(person: dict[str, Any], now: datetime) -> list[dict[str, An
             if it["id"] in seen or not schedule_mod.item_visible(it, units, manual):
                 continue
             seen.add(it["id"])
+            # 今天被催过的：用「被催办」换掉同一天的状态提醒。一件事一天只出一条，
+            # 但那条应该是「有人要你办」，而不是「它逾期了」—— 后者收件人早就知道。
+            urged_row = urged.get(it["id"])
+            if urged_row is not None:
+                out.append(_urge_note(urged_row, now, _relation(urged_row, units)))
+                continue
             ref = {"type": "oversight", "id": it["id"]}
             who = it["assignee"] + ("等" if it.get("co_assignees") else "")
 
@@ -431,6 +569,15 @@ def _oversight_notes(person: dict[str, Any], now: datetime) -> list[dict[str, An
                         extra={"idle_days": it["idle_days"], "progress": it["progress"]},
                     )
                 )
+
+    # 状态正常、但今天被催办的事项：不在任何风险桶里，照样要送到。
+    # 不补这一段，催办就只在「被催的恰好是逾期件」时才看得见 —— 而实际催得最多
+    # 的往往正是那些不逾期、也没停滞、但进度不动的事。
+    for iid, row in urged.items():
+        if iid in seen:
+            continue
+        seen.add(iid)
+        out.append(_urge_note(row, now, _relation(row, units)))
     return out
 
 

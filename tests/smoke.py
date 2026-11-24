@@ -294,7 +294,26 @@ def test_people() -> None:
 
     import people
 
-    check("四个预设身份", len(people.all_people()) == 4, str([p["id"] for p in people.all_people()]))
+    ids = [p["id"] for p in people.all_people()]
+    check("四个演示身份仍在", {"mayor", "vmayor", "bureau", "secretary"} <= set(ids), str(ids)[:90])
+    # 单位账号：台账里的 assignee 只是字符串，没有账号就没人收得到催办、没人签收。
+    # 这条守的是「每个单位都能被投递」，漏一个就等于那个单位永远收不到消息。
+    import directory
+
+    missing = [u for u in directory.UNITS if not directory.accounts_of_unit(u)]
+    check("每个单位都有账号", not missing, str(missing))
+    bad = [
+        pid
+        for unit, pids in directory.UNIT_ACCOUNT.items()
+        for pid in pids
+        if (people.find(pid) or {}).get("units") != [unit]
+    ]
+    check("单位账号只挂本单位", not bad, str(bad))
+    check(
+        "单位账号角色是委办局",
+        all(directory.role_of(pid) == directory.ROLE_BUREAU for pids in directory.UNIT_ACCOUNT.values() for pid in pids),
+        "",
+    )
     check("未知身份回落默认", people.resolve("ghost") == "mayor", people.resolve("ghost"))
     check("未知身份读到默认关注", people.watch_of("ghost") == people.DEFAULT_WATCH["mayor"], str(people.watch_of("ghost")))
 
@@ -390,6 +409,19 @@ def test_people() -> None:
     r = people.set_layout("bureau", ["weather"])
     check("未知板块被拒", r.get("ok") is False and "没有这个板块" in (r.get("error") or ""), str(r))
     people.set_layout("bureau", list(people.DEFAULT_LAYOUT))
+
+    # 单位账号没有关注指标：缺省不能把空的「我的关注」摆第一，
+    # 否则局长登录进来第一眼是白板，而他要办的账在第三块。
+    check(
+        "单位工作台缺省先放跟进事项",
+        people.layout_of("u-zhujian") == ["follow", "feed"],
+        str(people.layout_of("u-zhujian")),
+    )
+    check(
+        "有指标的演示身份仍三块全显示",
+        people.layout_of("mayor") == list(people.DEFAULT_LAYOUT),
+        str(people.layout_of("mayor")),
+    )
 
 
 def test_alerts() -> None:
@@ -2535,12 +2567,118 @@ def test_notify() -> None:
     missing = [r["id"] for r in notify.RULES if src.count(f'"{r["id"]}"') < 2]
     check("每条规则都有生成分支", not missing, str(missing))
 
+    # ── 催办送达 ──────────────────────────────────────────────────────
+    # 放在最后跑：这一段落会往台账里添一条事项，前面的条数断言不能受影响。
+    # 要说清的事：催办不只是写进台账，责任单位登录后必须真的收到。
+    r = ov.create_item(
+        title="催办送达测试",
+        assignee="市住建局",
+        deadline=(ov.today() + timedelta(days=3)).isoformat(),
+        standard="测试催办能否送到责任单位并点回台账",
+    )
+    tid = r.get("item_id")
+    check("新建催办测试事项", bool(tid), str(r)[:80])
+    if tid:
+        ov.advance(tid, "签收", "市住建局")
+        ov.advance(tid, "催办", "secretary", text="请明天中午前反馈进展")
+        unit_view = notify.build("u-zhujian", now=now)
+        hit = [n for n in unit_view["notes"] if n["ref"].get("id") == tid]
+        check("单位收到催办提醒", len(hit) == 1 and hit[0]["rule"] == "ov_urge", str([n["rule"] for n in hit]))
+        check(
+            "催办原文与催办人进正文",
+            bool(hit) and "请明天中午前反馈进展" in hit[0]["body"] and "市长秘书" in hit[0]["body"],
+            (hit[0]["body"] if hit else "")[:90],
+        )
+        check("催办提醒能点回台账", bool(hit) and hit[0]["ref"] == {"type": "oversight", "id": tid}, "")
+        # 自己催的不回自己：否则收件箱会变成「我发过什么」的台账。
+        # 这里只看有没有「被催办」这条 —— 秘书本来就该看到它的临期状态（ov_soon）。
+        mine = [n["rule"] for n in notify.build("secretary", now=now)["notes"] if n["ref"].get("id") == tid]
+        check("催办不回到催办人", "ov_urge" not in mine, str(mine))
+        # 一件事当天仍只出一条：被催的逾期件不能既出「逾期」又出「被催办」
+        ovids = [n["ref"]["id"] for n in unit_view["notes"] if n["ref"].get("type") == "oversight"]
+        check("催办不重复占两条", len(ovids) == len(set(ovids)), str(ovids)[:80])
+        # 逾期件被催仍算「需要立刻处理」：催办是加压，不是降级
+        late = [x for x in ov.list_items() if x["risk"] == "逾期"]
+        if late:
+            one = late[0]
+            ov.advance(one["id"], "催办", "secretary", text="逾期件催办")
+            seen = [n for n in notify.build("mayor", now=now)["notes"] if n["ref"].get("id") == one["id"]]
+            check(
+                "逾期件被催不降级",
+                len(seen) == 1 and seen[0]["rule"] == "ov_urge" and seen[0]["level"] == "urgent",
+                str([(n["rule"], n["level"]) for n in seen]),
+            )
+
+    # ── 主送 / 抄送 ────────────────────────────────────────────────────
+    # 一件事主办 + 协办常有三个单位。同一段催办原文原样群发，协办单位会以为
+    # 自己被点名主责，主办单位又会以为有人在替他扛。所以收件人的「关系」
+    # 要写进提醒本身：谁主送、谁只是抄送，级别也不一样。
+    r2 = ov.create_item(
+        title="主送抄送测试",
+        assignee="市住建局",
+        deadline=(ov.today() + timedelta(days=3)).isoformat(),
+        standard="测试协办单位收到的是抄送而不是主送",
+        co_assignees=["市城管局"],
+    )
+    tid2 = r2.get("item_id")
+    check("新建主送抄送测试事项", bool(tid2), str(r2)[:80])
+    if tid2:
+        ov.advance(tid2, "催办", "secretary", text="两家一起把卡点写清")
+        primary = [n for n in notify.build("u-zhujian", now=now)["notes"] if n["ref"].get("id") == tid2]
+        cc = [n for n in notify.build("u-chengguan", now=now)["notes"] if n["ref"].get("id") == tid2]
+        check("主办单位收到主送", len(primary) == 1 and primary[0]["rule_label"] == "被催办", str([(n["rule_label"]) for n in primary]))
+        check(
+            "主办单位看到的是主责抬头",
+            bool(primary) and "【抄送" not in primary[0]["body"] and primary[0]["body"].startswith("市住建局"),
+            (primary[0]["body"] if primary else "")[:90],
+        )
+        check(
+            "协办单位标注抄送",
+            len(cc) == 1 and cc[0]["rule_label"] == "被催办（抄送）",
+            str([(n["rule_label"]) for n in cc]),
+        )
+        check(
+            "抄送正文写明主办单位",
+            bool(cc) and "【抄送·协办】主办单位 市住建局" in cc[0]["body"],
+            (cc[0]["body"] if cc else "")[:90],
+        )
+        check(
+            "抄送不亮红灯",
+            bool(cc) and cc[0]["level"] != "urgent" and cc[0]["extra"].get("relation") == "抄送",
+            str([(n["level"], n["extra"].get("relation")) for n in cc]),
+        )
+        check(
+            "主送件仍是高等级",
+            bool(primary) and primary[0]["level"] == "high" and primary[0]["extra"].get("relation") == "主送",
+            str([(n["level"], n["extra"].get("relation")) for n in primary]),
+        )
+        # 全市视角看到的是第三视角：谁在被催，不是「我要办」
+        boss = [n for n in notify.build("mayor", now=now)["notes"] if n["ref"].get("id") == tid2]
+        check(
+            "市长看到的是督办视角",
+            len(boss) == 1 and boss[0]["extra"].get("relation") == "督办" and "【抄送" not in boss[0]["body"],
+            str([(n["extra"].get("relation"), n["body"][:24]) for n in boss]),
+        )
+        check(
+            "督办视角不写成「被催办」",
+            bool(boss) and boss[0]["rule_label"] == "已催办",
+            (boss[0]["rule_label"] if boss else ""),
+        )
+
     html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
     check("顶栏铃铛接上面板", 'tool.dataset.tool === "bell") return openNtModal' in html, "")
     check("提醒面板有规则表", "ntRuleBody" in html and "什么时候提醒什么" in html, "")
     check("未配通道如实标注", "未配通道" in html, "")
     check("提醒定时轮询", "setInterval" in html and "loadNotify()" in html, "")
     check("提醒类名统一 nt- 前缀", ".nt-item{" in html and not re.search(r"^\.item\{", html, re.M), "")
+    # 单位账号登录后落到工作台，而不是全市 GDP 那块罗盘
+    check("单位登录默认进工作台", "function defaultView" in html and 'who.role === "bureau"' in html, "")
+    check("直达链接不被默认视图顶掉", "if (location.hash) return;" in html, "")
+    # 佐证材料从「手打文件名」改成「上传原件」：输入框的那个提示语必须消失，
+    # 否则界面还在教人用已经被状态机拒绝的填法。
+    check("佐证改成上传原件", "佐证材料，逗号分隔" not in html and "ovEvPick" in html, "")
+    check("佐证可下载可删除", "data-evget" in html and "data-evdel" in html, "")
+    check("备注明确不是佐证", "仅备注，不构成佐证" in html, "")
 
 
 def test_saved() -> None:
@@ -2687,11 +2825,14 @@ def test_meetplan() -> None:
     check("没说上下午按下午算且写明", d3["held_at"].endswith("15:00")
           and any("按下午" in a for a in d3["assumptions"]), d3["held_at"])
 
-    # 单位不在台账里：原样留着并说明，不硬塞进清单 ——
-    # 系统不该假装认识一个它从来没有的单位
-    d4 = mp.parse("约个会，参会单位：市财政局", today=today, person={"post": "市长"})
-    check("台账没有的单位不硬塞", d4["unknown_units"] == ["市财政局"]
-          and "市财政局" not in d4["attendees"], str(d4["attendees"]) + str(d4["unknown_units"]))
+    # 系统里根本没有的单位：原样留着并说明，不硬塞进清单 ——
+    # 系统不该假装认识一个它从来没有的单位。
+    # 注意这里不能用「市财政局」：单位账号补齐后，directory.UNITS 里的十五个单位
+    # 全都有了账号，roster() 自然认得它们（这正是第一步要的效果）。要用清单外
+    # 的单位才测得到「不认识」这条路径。
+    d4 = mp.parse("约个会，参会单位：市体育局", today=today, person={"post": "市长"})
+    check("系统没有的单位不硬塞", d4["unknown_units"] == ["市体育局"]
+          and "市体育局" not in d4["attendees"], str(d4["attendees"]) + str(d4["unknown_units"]))
     check("没对上的单位要提示", any("台账里没出现过" in n for n in d4["notes"]), str(d4["notes"])[:80])
 
     # ---- 落库 ----
@@ -4823,6 +4964,26 @@ def test_authz_scope() -> None:
     ok, why = authz.can(sec, authz.MEETING_EDIT)
     check("秘书不能改会议主档", ok is False, why)
 
+    # ── 4. 补挂历史凭证：改的是已经发生过的记录，按事项状态分三档 ──
+    # 待审核一律不补（批的和看到的会是两批材料）；已办结只给市级
+    # （责任单位给自己补事后凭证，等于自己给自己做背书）；办理中同上传口径。
+    ok, why = authz.can(
+        sec, authz.OVERSIGHT_BACKFILL, {"units": ("市财政局",), "status": "待审核"}
+    )
+    check("秘书也不能给待审核件补凭证", ok is False and "待审核" in why, f"{ok} {why}")
+
+    ok, why = authz.can(bureau, authz.OVERSIGHT_BACKFILL, {"units": ("市生态环境局",), "status": "已办结"})
+    check("单位不能给已办结件补凭证", ok is False and "市领导" in why, f"{ok} {why}")
+
+    ok, why = authz.can(sec, authz.OVERSIGHT_BACKFILL, {"units": ("市财政局",), "status": "已办结"})
+    check("秘书能给已办结件补凭证", ok is True, why)
+
+    ok, why = authz.can(bureau, authz.OVERSIGHT_BACKFILL, {"units": ("市生态环境局",), "status": "办理中"})
+    check("单位能给自己在办的事补凭证", ok is True, why)
+
+    ok, why = authz.can(bureau, authz.OVERSIGHT_BACKFILL, {"units": ("市财政局",), "status": "办理中"})
+    check("单位不能替别人补凭证", ok is False and "分管" in why, f"{ok} {why}")
+
 
 def test_http(port: int | None = None) -> None:
     port = port or int(os.environ.get("OCGOV_PORT") or 8090)
@@ -4903,9 +5064,18 @@ def test_http(port: int | None = None) -> None:
     try:
         ppl = get("/api/people")
         ids = [p.get("id") for p in (ppl.get("people") or [])]
-        check("/api/people 四个身份", len(ids) == 4 and "secretary" in ids and ppl.get("demo") is True, str(ppl)[:80])
+        # 18 = 4 个演示身份 + 14 个单位账号。单位账号必须出现在这份清单里，
+        # 否则登录框的下拉里根本选不到它 —— 账号建了等于没建。
+        check(
+            "/api/people 含演示身份与单位账号",
+            len(ids) == 18
+            and "secretary" in ids
+            and all(u in ids for u in ("u-zhujian", "u-market", "u-edu", "u-gov"))
+            and ppl.get("demo") is True,
+            str(ids)[:120],
+        )
     except urllib.error.HTTPError as e:
-        check("/api/people 四个身份", False, f"code={e.code}（服务跑的是旧代码？）")
+        check("/api/people 含演示身份与单位账号", False, f"code={e.code}（服务跑的是旧代码？）")
 
     try:
         exs = get("/api/experts")
@@ -5619,6 +5789,180 @@ def test_http(port: int | None = None) -> None:
 
         code, d = post("/api/oversight/urge", {"ids": []}, auth=True)
         check("空催办列表返回 400", code == 400, f"{code} {str(d)[:70]}")
+
+        # 批量催办要把「主送几家、抄送几家」报出来：不报的话，发起的人
+        # 以为自己群发了一遍，其实催的只是主办单位。
+        code, d = post("/api/oversight/urge", {"ids": ["nope-9999"]}, auth=True)
+        check(
+            "批量催办报主送/抄送单位数",
+            code == 200 and d.get("primary_units") == 0 and d.get("cc_units") == 0,
+            f"{code} {str(d)[:70]}",
+        )
+
+        # ---- 给历史事件补挂原件 ----
+        # 这是唯一会改动「已经发生过的记录」的接口：匿名必须挡在门外，
+        # 补完不改状态，但要留一条「补录佐证」痕迹。
+        code, d = post(
+            "/api/oversight/DB2026-0018/backfill",
+            {
+                "index": 0,
+                "note": "开工项目清单.xlsx",
+                "file": {"name": "开工项目清单.xlsx", "data": base64.b64encode(b"%PDF-1.4 x").decode()},
+            },
+        )
+        check("匿名不能补挂历史凭证", code in (401, 403), f"{code} {str(d)[:60]}")
+
+        # 详情要告诉前端「当前这个人能不能补」：判定同时看角色和事项状态，
+        # 前端自己按角色猜，迟早出现「按钮亮着，点下去 403」。
+        anon = (get("/api/oversight/DB2026-0018").get("item") or {}).get("backfill") or {}
+        check("匿名时详情不给补挂按钮", anon.get("allowed") is False, str(anon)[:60])
+
+        def get_auth(path: str):
+            with urllib.request.urlopen(
+                urllib.request.Request(base + path, headers=AUTH), timeout=10
+            ) as r:
+                return json.loads(r.read().decode("utf-8"))
+
+        one = get_auth("/api/oversight/DB2026-0018").get("item") or {}
+        cap = one.get("backfill") or {}
+        check("登录后详情给补挂能力", cap.get("allowed") is True, str(cap)[:70])
+        idx = next(
+            (
+                i
+                for i, e in enumerate(one.get("events") or [])
+                if any(x.get("note_only") for x in e.get("evidence") or [])
+            ),
+            -1,
+        )
+        if idx < 0:
+            print("  SKIP  种子事项已无「仅备注」条目（上一轮补挂过了）")
+        else:
+            note = next(x["name"] for x in one["events"][idx]["evidence"] if x.get("note_only"))
+            code, d = post(
+                "/api/oversight/DB2026-0018/backfill",
+                {"index": idx, "note": note, "file": {"name": note, "data": base64.b64encode(b"%PDF-1.4 ok").decode()}},
+                auth=True,
+            )
+            check("登录后能补挂历史凭证", code == 200 and d.get("ok") is True, f"{code} {str(d)[:80]}")
+            check(
+                "补挂后状态不变",
+                (d.get("item") or {}).get("status") == "已办结",
+                str((d.get("item") or {}).get("status")),
+            )
+            check(
+                "补挂痕迹写进事件流",
+                (d.get("item") or {}).get("events", [{}])[-1].get("type") == "补录佐证",
+                str(((d.get("item") or {}).get("events") or [{}])[-1].get("type")),
+            )
+            code, d = post(
+                "/api/oversight/DB2026-0018/backfill",
+                {"index": idx, "note": note, "file": {"name": note, "data": base64.b64encode(b"%PDF-1.4 again").decode()}},
+                auth=True,
+            )
+            check("同一条备注不能补第二次", code == 409, f"{code} {str(d)[:70]}")
+
+        # ---- 佐证原件：上传 → 下载 → 删除 ----
+        # 这条链路以前不存在：佐证只是一个手打的文件名，没有任何文件落地。
+        live = [i for i in book["items"] if i["status"] in ("待签收", "办理中")]
+        if live:
+            tid = live[0]["id"]
+            blob = b"%PDF-1.4 smoke-evidence"
+            payload = {"files": [{"name": "烟测佐证.pdf", "data": base64.b64encode(blob).decode()}]}
+
+            code, d = post(f"/api/oversight/{tid}/evidence", payload)
+            check("匿名上传佐证被拒", code in (401, 403), f"{code} {str(d)[:60]}")
+
+            code, d = post(f"/api/oversight/{tid}/evidence", payload, auth=True)
+            eid = (((d.get("items") or [{}])[0]) or {}).get("id") or ""
+            check("佐证原件能上传", code == 200 and bool(eid), f"{code} {str(d)[:70]}")
+            check(
+                "上传后回到待提交清单",
+                any(f["id"] == eid and not f["used"] for f in (d.get("evidence_files") or [])),
+                str(d.get("evidence_files"))[:80],
+            )
+
+            if eid:
+                # 原件必须登录才能取。台账摘要匿名可读是演示需要，但扫描件、
+                # 现场照片、回执上常带经办人姓名和电话 —— 不是一个敏感度。
+                # 另外「id 猜不到」这层保护等于零：id 就写在事件 JSON 里。
+                try:
+                    urllib.request.urlopen(f"{base}/api/oversight/{tid}/evidence/{eid}", timeout=10)
+                    anon_code = 200
+                except urllib.error.HTTPError as e:
+                    anon_code = e.code
+                check("匿名下载佐证被拒", anon_code == 401, f"匿名下载返回 {anon_code}")
+
+                dreq = urllib.request.Request(f"{base}/api/oversight/{tid}/evidence/{eid}", headers=AUTH)
+                with urllib.request.urlopen(dreq, timeout=10) as r:
+                    got = r.read()
+                    disp = str(r.headers.get("Content-Disposition") or "")
+                    nosniff = str(r.headers.get("X-Content-Type-Options") or "")
+                check("下载拿到的是原字节", got == blob, f"{len(got)} bytes")
+                check("下载标成附件", "attachment" in disp.lower(), disp[:70])
+                check("下载带 nosniff", nosniff.lower() == "nosniff", nosniff)
+
+                # 换一条不相干的事项取同一份文件：不能靠改 URL 跨事项读别人的材料
+                other = next((i["id"] for i in book["items"] if i["id"] != tid), "")
+                try:
+                    urllib.request.urlopen(
+                        urllib.request.Request(f"{base}/api/oversight/{other}/evidence/{eid}", headers=AUTH),
+                        timeout=10,
+                    )
+                    crossed = False
+                except urllib.error.HTTPError as e:
+                    crossed = e.code == 404
+                check("佐证不能跨事项读取", crossed, "换事项编号居然也能下到")
+
+            code, d = post(
+                f"/api/oversight/{tid}/evidence",
+                {"files": [{"name": "x.exe", "data": base64.b64encode(b"MZ").decode()}]},
+                auth=True,
+            )
+            check("接口层拒收可执行文件", code == 409 and d.get("ok") is False, f"{code} {str(d)[:70]}")
+
+            # 登录了但不是这条事项的责任单位：403 + 说清原因，而不是「未登录」
+            # （bureau 身份 = 市生态环境局，所以要挑一件不归它管的事项）
+            if bsid:
+                not_mine = next(
+                    (i["id"] for i in book["items"]
+                     if i["assignee"] != "市生态环境局" and "市生态环境局" not in (i.get("co_assignees") or [])),
+                    tid,
+                )
+                breq2 = urllib.request.Request(
+                    f"{base}/api/oversight/{not_mine}/evidence",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Authorization": f"Bearer {bsid}", "Content-Type": "application/json"},
+                    method="POST",
+                )
+                try:
+                    with urllib.request.urlopen(breq2, timeout=10) as r:
+                        code, d = r.status, json.loads(r.read().decode("utf-8"))
+                except urllib.error.HTTPError as e:
+                    code, d = e.code, json.loads(e.read().decode("utf-8") or "{}")
+                check(
+                    "不能替非分管单位上传佐证",
+                    code == 403 and "佐证" in (d.get("error") or ""),
+                    f"{code} {str(d)[:70]}",
+                )
+
+            if eid:
+                dreq = urllib.request.Request(
+                    f"{base}/api/oversight/{tid}/evidence/{eid}", headers={**AUTH}, method="DELETE"
+                )
+                with urllib.request.urlopen(dreq, timeout=10) as r:
+                    dd = json.loads(r.read().decode("utf-8"))
+                check("未报送的佐证能删除", dd.get("ok") is True, str(dd)[:70])
+                # 删除后再取：登录用户拿到的是 404（文件确实不在了），
+                # 而不是被 401 挡住 —— 两件事要分得开
+                try:
+                    urllib.request.urlopen(
+                        urllib.request.Request(f"{base}/api/oversight/{tid}/evidence/{eid}", headers=AUTH),
+                        timeout=10,
+                    )
+                    gone = False
+                except urllib.error.HTTPError as e:
+                    gone = e.code == 404
+                check("删掉后下载 404", gone, "")
     else:
         print("  SKIP  督办流转/催办用例需要登录（未设 OCGOV_PASSWORD）")
 
@@ -5682,7 +6026,9 @@ def test_oversight_flow() -> None:
     r = ov.advance(iid, "提交办结", "市测试局", text="已办完")
     check("无进展记录不能提交办结", r.get("ok") is False and "进展" in str(r.get("error")), str(r)[:70])
 
-    r = ov.advance(iid, "反馈进展", "市测试局", text="完成一半", percent=50)
+    # 这条进展故意带一个「手填的备注」：老台账里全是这种（只有名字、没有文件），
+    # 下面「已办结后补凭证」的用例要的就是它。
+    r = ov.advance(iid, "反馈进展", "市测试局", text="完成一半", percent=50, evidence=["现场记录.docx"])
     check("反馈进展保持办理中", bool(r.get("ok")) and r.get("to_status") == ov.WORKING, str(r)[:70])
     check("进展百分比可读回", (ov.detail(iid) or {}).get("progress") == 50, str((ov.detail(iid) or {}).get("progress")))
     check("进度越界被夹到 0-100", ov.advance(iid, "反馈进展", "市测试局", text="超额", percent=300).get("ok") is True
@@ -5691,8 +6037,54 @@ def test_oversight_flow() -> None:
     r = ov.advance(iid, "提交办结", "市测试局", text="已完成")
     check("缺佐证不能提交办结", r.get("ok") is False and "佐证" in str(r.get("error")), str(r)[:70])
 
+    # 手填文件名不算佐证。这条是「佐证材料」这一版改动的核心：以前打上
+    # 「回执.pdf」就算附了佐证，可系统里没有这份文件，领导确认办结时点开是空的。
     r = ov.advance(iid, "提交办结", "市测试局", text="已完成", evidence=["回执.pdf"])
+    check(
+        "手填文件名不算佐证",
+        r.get("ok") is False and "备注" in str(r.get("error")),
+        str(r.get("error"))[:90],
+    )
+
+    import attach  # 佐证原件仓库，和 audit 一样按需导入，避免和测试主流程耦合
+
+    ev1, err1 = attach.put(iid, "回执.pdf", b"%PDF-1.4 fake receipt", by="市测试局", at="2026-11-24 10:00")
+    check("佐证原件能上传", bool(ev1) and str((ev1 or {}).get("id") or "").startswith("ev_"), str(ev1 or err1)[:80])
+    again, _e = attach.put(iid, "回执副本.pdf", b"%PDF-1.4 fake receipt", by="市测试局")
+    check(
+        "同一份文件按内容去重",
+        bool(again) and again.get("dedup") is True and again.get("id") == (ev1 or {}).get("id"),
+        str(again)[:80],
+    )
+    bad, bad_err = attach.put(iid, "setup.exe", b"MZ", by="市测试局")
+    check("可执行文件被拒收", bad is None and "不支持" in bad_err, str(bad_err)[:60])
+
+    r = ov.advance(iid, "提交办结", "市测试局", text="已完成", evidence=[(ev1 or {}).get("id") or ""])
     check("提交办结进入待审核", bool(r.get("ok")) and r.get("to_status") == ov.REVIEW, str(r)[:70])
+    last = ((ov.detail(iid) or {}).get("events") or [{}])[-1]
+    check(
+        "事件里落的是原件引用",
+        bool((last.get("evidence") or [{}])[0].get("id")) and last["evidence"][0]["name"] == "回执.pdf",
+        str(last.get("evidence"))[:90],
+    )
+    check(
+        "已报送的佐证不能删",
+        ov.remove_evidence(iid, (ev1 or {}).get("id") or "").get("ok") is False,
+        "",
+    )
+    check(
+        "待审核不能再补佐证",
+        ov.add_evidence(iid, "补充照片.jpg", b"\xff\xd8fake").get("ok") is False,
+        "",
+    )
+    # 补挂历史凭证也一并挡住：审核的人看的正是已提交的那一份，
+    # 中途往历史事件里塞一份原件，批的和看到的就不是一批材料了。
+    check(
+        "待审核不能补挂历史凭证",
+        ov.backfill_evidence(iid, 0, "现场记录.docx", filename="现场记录.docx", content=b"%PDF-1.4 x").get("ok")
+        is False,
+        "",
+    )
 
     r = ov.advance(iid, "退回", "市政府办", text="")
     check("退回必须写理由", r.get("ok") is False, str(r)[:70])
@@ -5700,18 +6092,85 @@ def test_oversight_flow() -> None:
     r = ov.advance(iid, "退回", "市政府办", text="佐证只有回执，缺现场照片")
     check("退回回到办理中", bool(r.get("ok")) and r.get("to_status") == ov.WORKING, str(r)[:70])
 
+    # 退回后能补：新传一份，冲掉一份还没报送的（这条路径是「传错了重来」）
+    ev2, _e2 = attach.put(iid, "现场照片.jpg", b"\xff\xd8\xff\xe0fake", by="市测试局", at="2026-11-24 11:00")
+    ev3, _e3 = attach.put(iid, "传错的.png", b"\x89PNGfake", by="市测试局", at="2026-11-24 11:01")
+    check("未报送的佐证可以删", ov.remove_evidence(iid, (ev3 or {}).get("id") or "").get("ok") is True, "")
+    pending = [f["id"] for f in (ov.detail(iid) or {}).get("evidence_files") or [] if not f["used"]]
+    check(
+        "待提交清单只列没报送的",
+        pending == [(ev2 or {}).get("id")],
+        str(pending)[:80],
+    )
+
     before = ov.get(iid).status
     r = ov.advance(iid, "催办", "市政府办")
     check("催办不改状态", bool(r.get("ok")) and ov.get(iid).status == before, str(r)[:70])
     check("催办计入次数", ov.get(iid).remind_count == 1, str(ov.get(iid).remind_count))
     check("催办不算进展", ov.get(iid).events[-1].type == "催办", ov.get(iid).events[-1].type)
 
-    ov.advance(iid, "提交办结", "市测试局", text="已补齐", evidence=["回执.pdf", "现场照片.zip"])
+    ov.advance(
+        iid, "提交办结", "市测试局", text="已补齐",
+        evidence=[(ev1 or {}).get("id") or "", (ev2 or {}).get("id") or ""],
+    )
     r = ov.advance(iid, "确认办结", "市政府办")
     check("确认办结进入已办结", bool(r.get("ok")) and r.get("to_status") == ov.CLOSED, str(r)[:70])
     check("已办结没有可执行操作", ov.allowed_actions(ov.get(iid)) == [], str(ov.allowed_actions(ov.get(iid))))
     check("已办结不能再催办", ov.advance(iid, "催办", "市政府办").get("ok") is False, "")
     check("已办结风险等级为正常", ov.assess(ov.get(iid)).level == ov.RISK_NONE, ov.assess(ov.get(iid)).level)
+
+    # ── 历史凭证补挂 ──
+    # 老台账的佐证是手打的名字（「现场记录.docx」），系统里没有文件，点开是空的。
+    # 补挂这件事要守住三条：只补备注不改结论、必须留痕、不刷新停滞计时。
+    det = ov.detail(iid) or {}
+    idx = next(
+        (
+            i
+            for i, e in enumerate(det.get("events") or [])
+            if any(x.get("note_only") and x["name"] == "现场记录.docx" for x in e.get("evidence") or [])
+        ),
+        -1,
+    )
+    check("事件里存在可补的备注", idx >= 0, str(idx))
+    if idx >= 0:
+        activity_before = ov.get(iid).last_activity
+        r = ov.backfill_evidence(
+            iid, idx, "现场记录.docx", filename="现场记录.docx", content=b"%PDF-1.4 site notes", actor="市长秘书"
+        )
+        check("已办结事项能补挂凭证", r.get("ok") is True, str(r)[:90])
+        check("补挂不改状态", ov.get(iid).status == ov.CLOSED, ov.get(iid).status)
+        check(
+            "补挂不刷新停滞计时",
+            ov.get(iid).last_activity == activity_before,
+            f"{activity_before} -> {ov.get(iid).last_activity}",
+        )
+        check("补挂留下一条痕迹", ov.get(iid).events[-1].type == "补录佐证", ov.get(iid).events[-1].type)
+        check(
+            "痕迹里写明补的是哪条",
+            "「进展」" in (ov.get(iid).events[-1].text or ""),
+            (ov.get(iid).events[-1].text or "")[:70],
+        )
+        check(
+            "同一条备注不能补两次",
+            ov.backfill_evidence(iid, idx, "现场记录.docx", filename="x.pdf", content=b"y").get("ok") is False,
+            "",
+        )
+        got = ((ov.detail(iid) or {}).get("events") or [{}])[idx]
+        check(
+            "补上的原件成了真引用",
+            bool((got.get("evidence") or [{}])[0].get("id")) and not got["evidence"][0].get("note_only"),
+            str(got.get("evidence"))[:90],
+        )
+        check(
+            "补上的原件不能当成未报送删掉",
+            ov.remove_evidence(iid, got["evidence"][0]["id"]).get("ok") is False,
+            "",
+        )
+        check(
+            "备注名对不上就拒绝",
+            ov.backfill_evidence(iid, idx, "不存在.docx", filename="a.pdf", content=b"b").get("ok") is False,
+            "",
+        )
 
     # 派生量不能被外部写进来：没有哪个字段能直接把风险设成"逾期"
     check("风险是派生量不是字段", "risk" not in ov.Item.__dataclass_fields__, "")

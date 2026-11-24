@@ -23,6 +23,13 @@ from typing import Any
 DATA_DIR = Path(os.environ.get("OCGOV_DATA") or (Path(__file__).resolve().parents[2] / "data"))
 STORE = DATA_DIR / "oversight-state.json"
 
+try:  # 同目录模块：core/oversight 已在 sys.path 上（见 app/main.py 的注册）
+    import attach
+except ImportError:  # pragma: no cover - 只有以包方式导入时才会走到
+    from . import attach  # type: ignore[no-redef]
+
+
+
 # 台账是进程内共享的 dict，而 HTTP 是多线程的。一次流转要做「读状态 → 判守卫 →
 # 改状态 → 追加事件 → 落盘」，中间被别的线程插进来就会出现两条签收、状态回退。
 # 用可重入锁把整段包住；advance 内部会调 get()/assess()，可重入才不会自锁。
@@ -68,13 +75,24 @@ class Event:
     """事项事件流的一条。进展、流转、催办都记在这里，按时间顺排。"""
 
     ts: str
-    type: str            # 创建 / 签收 / 进展 / 提交办结 / 确认办结 / 退回 / 催办
+    type: str            # 创建 / 签收 / 进展 / 提交办结 / 确认办结 / 退回 / 催办 / 补录佐证
     actor: str
     text: str = ""
     from_status: str | None = None
     to_status: str | None = None
     percent: int | None = None
-    evidence: list[str] = field(default_factory=list)
+    # 佐证材料。每项是 {"id": "ev_x", "name": "…", "size": n}（上传的原件），
+    # 或 {"id": "", "name": "…", "note_only": True}（手填的备注）。
+    # 老存档里是纯字符串，`__post_init__` 统一补齐成这个形状 —— 否则前端和
+    # 守卫要各写一遍「这到底是文件还是备注」的判断。
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.evidence = [
+            x if isinstance(x, dict)
+            else {"id": "", "name": str(x), "size": 0, "note_only": True}
+            for x in (self.evidence or [])
+        ]
 
 
 @dataclass
@@ -112,8 +130,13 @@ class Item:
 
     @property
     def last_activity(self) -> datetime:
-        """最后一条非催办事件的时间。催办不算进展，否则永远"不停滞"。"""
-        real = [e for e in self.events if e.type != "催办"]
+        """最后一条「真的办了什么」的事件时间。
+
+        排除两类：**催办**（天天催办的事项不该永远"不停滞"，那是拿催办把问题刷绿），
+        **补录佐证**（补一份事后凭证不是办事进展 —— 停滞 34 天的事项，补一张照片
+        就变回 0 天，等于用补凭证抹掉拖延痕迹）。
+        """
+        real = [e for e in self.events if e.type not in ("催办", "补录佐证")]
         if not real:
             return self.issued_dt
         return datetime.fromisoformat(max(e.ts for e in real))
@@ -202,8 +225,20 @@ TRANSITIONS: dict[str, tuple[set[str], str | None, bool]] = {
 }
 
 
-def _guard(item: Item, action: str, reason: str, evidence: list[str], text: str) -> str | None:
-    """返回拒绝原因；通过则返回 None。所有业务规则集中在这里。"""
+def _guard(
+    item: Item,
+    action: str,
+    reason: str,
+    evidence: list[dict[str, Any]],
+    text: str,
+    stale: list[str] | None = None,
+) -> str | None:
+    """返回拒绝原因；通过则返回 None。所有业务规则集中在这里。
+
+    `evidence` 已经过 `_resolve_evidence`：上传成功的带 id，手填的只有名字。
+    `stale` 是「调用方报了 id、但仓库里找不到」的那些 —— 传上来之前被删、
+    或者根本不是这条事项的文件。
+    """
     if action not in TRANSITIONS:
         return f"未知操作「{action}」，可用的是：{'、'.join(TRANSITIONS)}"
 
@@ -221,7 +256,23 @@ def _guard(item: Item, action: str, reason: str, evidence: list[str], text: str)
         progress = [e for e in item.events if e.type == "进展"]
         if not progress:
             return "提交办结前至少要有一条进展记录——否则无法说明办了什么。"
-        if not evidence:
+        # 佐证必须是**上传的原件**。之前只判「非空」，于是手打一句
+        # 「销号台账.xlsx」就算附了佐证 —— 领导点开核对时什么都没有。
+        # 备注留着不删（有的材料确实只能口头说明），但不能当佐证用。
+        if any(x.get("id") for x in evidence):
+            pass
+        elif stale:
+            return (
+                f"有 {len(stale)} 份佐证的原件已不存在（可能被删掉了），"
+                "请重新上传后再提交办结 —— 引用一份没有的文件，等于没有佐证。"
+            )
+        elif evidence:
+            names = "、".join(f"「{str(x.get('name') or '')}」" for x in evidence[:3])
+            return (
+                f"佐证材料要上传原件：手填的{names}只是备注，不构成佐证。"
+                "点「上传佐证」把文件传上来，再提交办结。"
+            )
+        else:
             return f"提交办结必须附佐证材料（对应办结标准：{item.standard}）。"
         if not text.strip():
             return "提交办结要写办结说明，说明如何达到办结标准。"
@@ -230,6 +281,50 @@ def _guard(item: Item, action: str, reason: str, evidence: list[str], text: str)
         return "进展内容不能为空。"
 
     return None
+
+
+def _resolve_evidence(
+    item_id: str, raw: list[Any] | None
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """把调用方给的佐证清单落到这条事项上。
+
+    入参是混合的，因为三个入口各传各的：
+    - HTTP 界面：上传得到的 `ev_xxxxxx` id + 输入框里手填的备注；
+    - 智能体（`core/agent.py`）：从台账详情里读到的同一批 id；
+    - 老脚本 / curl：直接写文件名。
+
+    处理规则：`ev_` 开头的一律当 id 去仓库取，取不到记进 stale（不静默变成
+    一条叫 `ev_ab12cd` 的备注 —— 那会让人以为文件在）；其余当备注。
+    名字以**仓库里存的为准**，不信调用方传过来的：客户端可以把一份照片的
+    显示名改成「竣工验收报告.pdf」，台账上就会出现一份不存在的报告。
+    """
+    entries: list[dict[str, Any]] = []
+    stale: list[str] = []
+    seen: set[str] = set()
+    for x in raw or []:
+        if isinstance(x, dict):
+            eid = str(x.get("id") or "").strip()
+            name = str(x.get("name") or "").strip()
+        else:
+            s = str(x or "").strip()
+            eid, name = (s, "") if s.startswith("ev_") else ("", s)
+        if eid:
+            got = attach.get(item_id, eid)
+            if got is None:
+                stale.append(eid)
+                continue
+            meta, _path = got
+            if eid in seen:
+                continue
+            seen.add(eid)
+            entries.append({"id": meta["id"], "name": meta["name"], "size": int(meta.get("size") or 0)})
+        elif name:
+            key = f"note:{name}"
+            if key in seen:
+                continue
+            seen.add(key)
+            entries.append({"id": "", "name": attach.clean_name(name), "size": 0, "note_only": True})
+    return entries, stale
 
 
 def advance(
@@ -259,8 +354,8 @@ def advance(
         if text and not reason:
             reason = text
 
-        evidence = evidence or []
-        reject = _guard(item, action, reason, evidence, text)
+        evidence, stale = _resolve_evidence(item_id, evidence)
+        reject = _guard(item, action, reason, evidence, text, stale)
         if reject:
             return {
                 "ok": False,
@@ -476,6 +571,10 @@ def list_items(
 
 
 def _brief(item: Item, risk: Risk) -> dict[str, Any]:
+    # 最近一次催办：投递侧（notify）要判断「今天有没有人催过这一条」，而事件流
+    # 只在 detail() 里。在这里给一份，省得 notify 自己翻一遍 events —— 同一个
+    # 口径算两遍，迟早一边改了另一边没改。
+    urges = [e for e in item.events if e.type == "催办"]
     return {
         "id": item.id,
         "title": item.title,
@@ -494,6 +593,12 @@ def _brief(item: Item, risk: Risk) -> dict[str, Any]:
         "last_progress_at": item.last_activity.strftime("%Y-%m-%d %H:%M"),
         "last_event_at": item.events[-1].ts if item.events else None,
         "allowed_actions": allowed_actions(item),
+        # 谁、什么时候、说了什么。count 用于「同一天催两次要提醒两次」的去重桶。
+        "last_urge": (
+            {"ts": urges[-1].ts, "actor": urges[-1].actor, "text": urges[-1].text, "count": len(urges)}
+            if urges
+            else None
+        ),
         # 来源两件套：材料里要写「这件是谁交办的」，会前材料还要按会议编号反查
         "source": item.source,
         "source_ref": item.source_ref,
@@ -516,8 +621,217 @@ def detail(item_id: str, scope: set[str] | None = None) -> dict[str, Any] | None
         "issued_at": item.issued_at,
         "standard": item.standard,
         "risk_detail": risk.to_dict(),
-        "events": [asdict(e) for e in item.events],
+        # 事件里的佐证补上文件信息（原名、大小、是否还在）。补在这一层而不是
+        # 存进事件，是因为文件可以被删、也可以被重新上传，事物流水不该跟着变。
+        "events": [
+            {**asdict(e), "evidence": attach.describe(item.id, e.evidence)}
+            for e in item.events
+        ],
+        # 已收下但还没随任何一次报送提交的文件（前端拿来渲染「待提交的佐证」）
+        "evidence_files": evidence_files(item),
     }
+
+
+def evidence_files(item: Item) -> list[dict[str, Any]]:
+    """这条事项收过的原件，带 `used`（是否已被某条事件引用）。
+
+    `used=False` 的是「传上来了、还没提交」——它们只存在仓库里，台账上看不到。
+    刷新页面后这些文件仍然在，所以前端不必把上传结果只放在内存里。
+    """
+    used: set[str] = set()
+    for e in item.events:
+        for x in e.evidence:
+            if isinstance(x, dict) and x.get("id"):
+                used.add(str(x["id"]))
+    out: list[dict[str, Any]] = []
+    for meta in attach.list_of(item.id):
+        out.append(
+            {
+                "id": meta["id"],
+                "name": meta.get("name") or "",
+                "size": int(meta.get("size") or 0),
+                "type": meta.get("type") or "",
+                "at": meta.get("at") or "",
+                "by": meta.get("by") or "",
+                "used": meta["id"] in used,
+            }
+        )
+    return out
+
+
+# ── 佐证材料：收原件 / 删原件 ─────────────────────────────────────────────
+def add_evidence(item_id: str, filename: str, content: bytes, *, actor: str = "") -> dict[str, Any]:
+    """收一份佐证原件。写操作的前置条件（状态、权限）由调用方判，这里只判状态。
+
+    为什么状态要在这里判：`待审核` 时审核的正是「已提交的那份材料」，这时候
+    换掉一份文件，审核的人批的和看到的就不是一份东西了。这一条不论从哪个入口
+    （界面、脚本、以后的接口）进来都必须成立，所以放在核心而不是 HTTP 层。
+    """
+    with _LOCK:
+        item = get(item_id)
+        if item is None:
+            return {"ok": False, "code": "not_found", "error": f"没有编号为 {item_id} 的事项。"}
+        if item.status == CLOSED:
+            return {"ok": False, "code": "closed", "error": "这条事项已办结，不能再补佐证材料。"}
+        if item.status == REVIEW:
+            return {
+                "ok": False,
+                "code": "locked",
+                "error": "待审核中不能更换佐证：审核的是已提交的那份材料。要补请等退回后再传。",
+            }
+        meta, err = attach.put(item_id, filename, content, by=actor, at=_now().strftime("%Y-%m-%d %H:%M"))
+        if meta is None:
+            return {"ok": False, "code": "rejected", "error": err}
+        return {"ok": True, "file": meta, "evidence_files": evidence_files(item)}
+
+
+def remove_evidence(item_id: str, eid: str) -> dict[str, Any]:
+    """删一份还没报送过的原件。
+
+    已经被事件引用过的不许删：删掉之后那条「提交办结」就指向一份不存在的文件，
+    台账从此无法自证。要换材料只能等退回后重新报送。
+    """
+    with _LOCK:
+        item = get(item_id)
+        if item is None:
+            return {"ok": False, "code": "not_found", "error": f"没有编号为 {item_id} 的事项。"}
+        for e in item.events:
+            if any(isinstance(x, dict) and str(x.get("id") or "") == eid for x in e.evidence):
+                return {
+                    "ok": False,
+                    "code": "in_use",
+                    "error": (
+                        f"这份佐证已经随 {e.ts} 的「{e.type}」报送过，不能删 —— "
+                        "删了那条记录就没有依据了。要换请在退回后重新报送。"
+                    ),
+                }
+        removed = attach.remove(item_id, eid)
+        if not removed:
+            return {"ok": False, "code": "not_found", "error": "没有这份佐证材料（可能已经删掉了）。"}
+        return {"ok": True, "removed": True, "evidence_files": evidence_files(item)}
+
+
+def backfill_evidence(
+    item_id: str,
+    index: int,
+    note: str,
+    eid: str = "",
+    *,
+    filename: str = "",
+    content: bytes = b"",
+    actor: str = "",
+) -> dict[str, Any]:
+    """给一条历史事件里的「仅备注」补挂原件。
+
+    解决的是这样一类存量问题：早期佐证是一个手打的文件名（`["销号台账.xlsx"]`），
+    系统里没有文件。那些记录今天点开仍然是空的，而它们恰恰是最需要凭证的部分 ——
+    领导确认办结、事后倒查，看的都是这些。
+
+    三条边界：
+    - **只补备注，不改结论**：换掉的是一个名字条目，事件的 ts / type / 文本 /
+      状态流转一律不动。补进去的原件由仓库按 sha1 校验，名字以仓库为准。
+    - **必须留痕**：补完追加一条「补录佐证」事件，写明给哪条、补了什么、谁补的。
+      偷偷把历史改干净，比留着一份没有凭证的记录更糟。
+    - **不改状态**：这不是流转动作，`status` 一个字都不动。已办结的补完还是已办结。
+
+    两个入口：`eid`（从已上传的待提交清单里挑一份）或 `filename` + `content`
+    （当场传）。为什么支持后者：**已办结的事项 `add_evidence` 一律拒收**，
+    只能走「带文件直接补」这一条路 —— 否则「已办结允许补」就是一句空话。
+
+    权限由调用方判（`authz.OVERSIGHT_BACKFILL`）；这里只兜「待审核不许动」，
+    理由和 `add_evidence` 里那条一样。
+    """
+    with _LOCK:
+        item = get(item_id)
+        if item is None:
+            return {"ok": False, "code": "not_found", "error": f"没有编号为 {item_id} 的事项。"}
+        if item.status == REVIEW:
+            return {
+                "ok": False,
+                "code": "locked",
+                "error": "待审核中不能补挂佐证：审核的是已提交的那份材料，等批完或退回后再补。",
+            }
+        if not isinstance(index, int) or isinstance(index, bool) or not (0 <= index < len(item.events)):
+            return {"ok": False, "code": "bad_event", "error": "找不到要补挂的那条事件（列表可能已刷新，请重开详情）。"}
+
+        ev = item.events[index]
+        note = attach.clean_name(note)
+        if not note:
+            return {"ok": False, "code": "bad_note", "error": "没有指定要补哪一条备注。"}
+
+        # 只认「同一个名字、且还是备注」的条目。同名只可能有一条（_resolve_evidence
+        # 按 note:name 去过重），所以不会补错。
+        target = next(
+            (x for x in ev.evidence if x.get("note_only") and str(x.get("name")) == note),
+            None,
+        )
+        if target is None:
+            already = next((x for x in ev.evidence if str(x.get("name")) == note), None)
+            if already is not None:
+                return {
+                    "ok": False,
+                    "code": "already",
+                    "error": f"「{note}」已经挂上原件了，不用再补。",
+                }
+            return {
+                "ok": False,
+                "code": "no_note",
+                "error": f"{ev.ts} 的「{ev.type}」里没有叫「{note}」的备注。",
+            }
+
+        if content:
+            meta, err = attach.put(
+                item_id, filename or note, content, by=actor, at=_now().strftime("%Y-%m-%d %H:%M")
+            )
+            if meta is None:
+                return {"ok": False, "code": "rejected", "error": err}
+            eid = meta["id"]
+        else:
+            got = attach.get(item_id, eid)
+            if got is None:
+                return {"ok": False, "code": "file_missing", "error": "这份原件不在了（可能已被删掉），请重新上传。"}
+            meta, _path = got
+
+        ts = _now().strftime("%Y-%m-%d %H:%M")
+        entry = {"id": meta["id"], "name": meta["name"], "size": int(meta.get("size") or 0)}
+        target.clear()
+        target.update(entry)
+        item.events.append(
+            Event(
+                ts=ts,
+                type="补录佐证",
+                actor=actor,
+                text=(
+                    f"给 {ev.ts} 的「{ev.type}」补挂原件：{note} → {meta['name']}"
+                    f"（{_human_size(int(meta.get('size') or 0))}）"
+                ),
+                # 新事件必须带上这份原件：否则它可能被当成「没报送过」而被删掉，
+                # 补完的历史又会指向一份不存在的文件。
+                evidence=[dict(entry)],
+            )
+        )
+        _save()
+        return {
+            "ok": True,
+            "item_id": item_id,
+            "event_index": index,
+            "event_ts": ev.ts,
+            "event_type": ev.type,
+            "eid": meta["id"],
+            "name": meta["name"],
+            "note": note,
+            "at": ts,
+        }
+
+
+def _human_size(n: int) -> str:
+    """给台账正文用的文件大小。事件流里「1024」不如「1.0KB」好读。"""
+    if n <= 0:
+        return "0B"
+    for unit, base in (("GB", 1024**3), ("MB", 1024**2), ("KB", 1024)):
+        if n >= base:
+            return f"{n / base:.1f}{unit}"
+    return f"{n}B"
 
 
 # ── 催办扫描 ──────────────────────────────────────────────────────────────

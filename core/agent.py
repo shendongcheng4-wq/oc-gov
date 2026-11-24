@@ -260,7 +260,11 @@ def tools_schema(*, team: bool = False) -> list[dict[str, Any]]:
                         "evidence": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "提交办结要附的佐证（文件名或说明），至少一条",
+                            "description": (
+                                "提交办结要附的佐证：填台账里**已上传**的佐证材料 id"
+                                "（台账详情 evidence_files 里的 id，形如 ev_1a2b3c），"
+                                "不能用文件名代替"
+                            ),
                         },
                     },
                     "required": ["item_id", "action"],
@@ -702,11 +706,27 @@ def _run_tool(
                 f"{action}必须写清{need}，否则责任单位不知道该做什么。写进 text 再来一次。",
                 {"kind": "proposal", "error": "need_text"},
             )
-        if action == "提交办结" and not evidence:
-            return (
-                "提交办结要附佐证材料（evidence 至少一条），否则不算办结。",
-                {"kind": "proposal", "error": "need_evidence"},
-            )
+        if action == "提交办结":
+            # 佐证只认**已经上传到这条事项的原件 id**。模型看不见照片，也不能替
+            # 用户凭空造一份「竣工验收报告.pdf」—— 所以这里不接受文件名，只接受
+            # 台账详情 evidence_files 里真实存在的 id。认了就退回去让模型去问用户。
+            files = one.get("evidence_files") or []
+            known = {str(f.get("id") or ""): f for f in files}
+            unknown = [e for e in evidence if e not in known]
+            if unknown:
+                have = "、".join(f"{f['name']}（{f['id']}）" for f in files) or "（一份都还没上传）"
+                return (
+                    f"没有这些佐证原件：{'、'.join(unknown)}。佐证必须是已经上传到这条事项的文件，"
+                    f"不能用文件名代替。这条事项已上传的是：{have}。"
+                    "需要新材料的话，请用户先在台账详情里点「上传佐证」，再让我重新发起。",
+                    {"kind": "proposal", "error": "bad_evidence"},
+                )
+            if not evidence:
+                return (
+                    "提交办结要附佐证原件，这条事项现在一份都还没上传。"
+                    "请用户先在台账详情里点「上传佐证」把文件传上来，再让我发起提交办结。",
+                    {"kind": "proposal", "error": "need_evidence"},
+                )
         try:
             proposal = proposals_mod.create(
                 kind="advance",

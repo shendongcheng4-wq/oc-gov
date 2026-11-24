@@ -107,6 +107,51 @@ def mentioned_in(text: str, unit: str) -> bool:
     return any(alias in s and full == name for alias, full in UNIT_ALIAS.items())
 
 
+# 单位 → 单位账号（`people.PEOPLE` 里的 id）。一个单位可以有多个账号（局长 + 经办），
+# 现在各留一个。投递和授权都从这里查「这个单位谁能接」：
+#   - 催办要知道发给谁（`accounts_of_unit`）；
+#   - 反向要知道某个登录身份代表哪个单位（`unit_of_account`）。
+#
+# 市生态环境局沿用既有身份 `bureau` —— 它本来就是该局的局长身份，再开一个
+# `u-env` 会出现同一单位两个账号，事件流里分不清是谁签的。
+#
+# **这张表必须覆盖 UNITS 里的每一个单位**：漏一个，那个单位的事项就永远没人
+# 收得到（催办只能写进台账），而界面上看不出来 —— 所以 tests/smoke.py 有一条
+# 「每个单位都有账号」的断言守着。
+UNIT_ACCOUNT: dict[str, tuple[str, ...]] = {
+    "市政府办": ("u-gov",),
+    "市发改委": ("u-drc",),
+    "市教育局": ("u-edu",),
+    "市公安局交警支队": ("u-tpa",),
+    "市民政局": ("u-civil",),
+    "市财政局": ("u-fin",),
+    "市自然资源局": ("u-natres",),
+    "市生态环境局": ("bureau",),
+    "市住建局": ("u-zhujian",),
+    "市城管局": ("u-chengguan",),
+    "市交通运输局": ("u-transport",),
+    "市水务局": ("u-water",),
+    "市应急管理局": ("u-emergency",),
+    "市市场监管局": ("u-market",),
+    "市大数据局": ("u-data",),
+}
+
+
+def accounts_of_unit(unit: str) -> tuple[str, ...]:
+    """这个单位的收件人是谁。没登记就返回空 —— 投递侧据此如实说「该单位没有
+    账号，消息只留在台账」，而不是假装发出去了一条。
+    """
+    return UNIT_ACCOUNT.get((unit or "").strip(), ())
+
+
+def unit_of_account(pid: str) -> str | None:
+    """这个身份代表哪个单位。全市身份（市长 / 秘书）返回 None。"""
+    for unit, pids in UNIT_ACCOUNT.items():
+        if pid in pids:
+            return unit
+    return None
+
+
 # 四档角色。顺序即继承方向：leader 蕴含 secretary，secretary 蕴含 dept-leader，
 # dept-leader 蕴含 bureau。
 ROLE_LEADER = "leader"
@@ -153,6 +198,10 @@ PERSON_ROLE: dict[str, str] = {
     "vmayor": ROLE_DEPT_LEADER,
     "bureau": ROLE_BUREAU,
 }
+# 单位账号一律 bureau：只管本单位、且只有本单位。写在这里而不是靠 role_of 的
+# 「未知身份回落 bureau」兜底 —— 兜底是防越权的保险丝，不该被当成正式映射用；
+# 将来给某个单位配「分管副局长」时，只改这一行的值，判定侧不用动。
+PERSON_ROLE.update({pid: ROLE_BUREAU for pids in UNIT_ACCOUNT.values() for pid in pids})
 
 # 预设身份 → 分管单位（主办+协办都算「分管范围」里的单位）。
 # 与 people.PEOPLE[].units 保持同源：这里是从 people 导入，而不是另写一份。
