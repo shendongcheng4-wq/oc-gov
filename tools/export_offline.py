@@ -17,6 +17,11 @@
    不能让请求打到「未收录接口」，那会显示成「服务端出错了」。
 3. **不联网**。垫片拦的是 `window.fetch`，命中即返回本地快照，未命中也不外发。
 
+**按身份各存一份**：四个身份的可见范围不一样（市长的全市、局长的本单位、
+秘书的交办），只烤一个人的数据，切过去看到的就是别人的屏幕 —— 这份快照
+最容易骗人的地方就在这里。所以 `people` 段按 X-Person-Id 分人存，
+四份完全一样的（罗盘、指标、督办这些全市口径）抽到 `common` 里只存一遍。
+
 导出物照样要带**生成合成内容标识**（GB 45438—2025，强制性国标）：界面里
 那些回答是 AI 生成的，换成单文件 html 之后一样是。显式标识写在页脚，
 隐式标识写进 `<meta>`；和 docx / Markdown 出口用同一句话。
@@ -78,7 +83,7 @@ def _items(doc) -> list:
     表现是"会话面板空白"，不报错，最难查。"""
     if not isinstance(doc, dict):
         return []
-    for key in ("items", "threads", "meetings", "list"):
+    for key in ("items", "threads", "meetings", "people", "list", "rows"):
         val = doc.get(key)
         if isinstance(val, list):
             return val
@@ -97,6 +102,40 @@ SHIM = r"""<script>
   var META = SNAP.__meta__;
   window.__OFFLINE__ = META;
   var MISS = (window.__offlineMiss = []);
+  /* 快照分两层：common 是四个身份看到完全一样的那些（罗盘、指标、督办），
+     people 是各人一份的（日程、工作台、会话、指示）。取的时候先看本人那份，
+     没有再落 common —— 反过来会让市长的数据盖住秘书的。 */
+  var COMMON = SNAP.common || {};
+  var BYPERSON = SNAP.people || {};
+
+  /* 前端把身份放在 X-Person-Id 头里（authHeaders / 裸 fetch 两种写法都有），
+     偶发还会塞进 Request 对象。三种都认，认不出就退回快照导出的那个身份。 */
+  function headerOf(raw, init, name) {
+    var h = (init && init.headers) || null;
+    if (h) {
+      if (typeof h.get === "function") { var v = h.get(name); if (v) return String(v); }
+      for (var k in h) { if (String(k).toLowerCase() === name.toLowerCase()) return String(h[k]); }
+    }
+    if (raw && typeof raw === "object" && raw.headers && typeof raw.headers.get === "function") {
+      var rv = raw.headers.get(name);
+      if (rv) return String(rv);
+    }
+    return "";
+  }
+  function personOf(raw, init) {
+    var pid = headerOf(raw, init, "X-Person-Id");
+    if (!pid) {
+      /* 登录后前端换用 X-Session，但离线的会话是假的 —— 靠登录框选的人
+         记在 localStorage 里，这里读一把就够了。 */
+      try { pid = localStorage.getItem("ocgov.person") || ""; } catch (e) { pid = ""; }
+    }
+    if (pid && BYPERSON[pid]) return pid;
+    return META.person;
+  }
+  function pick(pid, key) {
+    var mine = BYPERSON[pid] || {};
+    return mine[key] || COMMON[key];
+  }
 
   /* 这几条路径的查询串只是"筛一下"或"默认值"，拿不带查询串的版本答不会
      变成假数据；/api/knowledge 的 q= 是真的检索，不在名单里 —— 拿全量清单
@@ -148,15 +187,16 @@ SHIM = r"""<script>
     var path = apiPath(raw);
     if (!path) return Promise.resolve(new Response("", { status: 204 }));
 
-    var rec = SNAP[method + " " + path + query(raw)];
-    if (!rec && QUERY_OK[path]) rec = SNAP[method + " " + path];
-    if (rec && rec !== META) return Promise.resolve(body(rec));
+    var pid = personOf(input, init);
+    var rec = pick(pid, method + " " + path + query(raw));
+    if (!rec && QUERY_OK[path]) rec = pick(pid, method + " " + path);
+    if (rec) return Promise.resolve(body(rec));
 
     if (method !== "GET") {
       return Promise.resolve(plain("离线快照只读：这份文件不能提交修改，要改请回工作台。"));
     }
-    MISS.push(method + " " + path + query(raw));
-    if (window.console) console.warn("[offline] 快照未收录：", method, path, query(raw));
+    MISS.push(pid + " " + method + " " + path + query(raw));
+    if (window.console) console.warn("[offline] 快照未收录：", pid, method, path, query(raw));
     return Promise.resolve(plain(MISS_MSG[path] || ("离线快照没有收录这个接口：" + path)));
   };
 
@@ -184,6 +224,7 @@ SHIM = r"""<script>
     s.className = "offline-badge";
     s.textContent = "离线快照";
     s.title = "数据截至 " + META.generated + "（指标期次 " + META.period + "）。"
+            + "四个身份各存了一份快照，切身份看到的是那个人自己的数据。"
             + "不含模型，不能问数；写操作不可用。";
     bar.appendChild(s);
   };
@@ -211,14 +252,17 @@ TAIL = r"""<script>
 
 
 # ---------------------------------------------------------------- 取数
-def collect(port: int, person: str, with_threads: bool, max_threads: int) -> tuple[dict, dict]:
+def _collect_one(
+    port: int, person: str, with_threads: bool, max_threads: int
+) -> tuple[dict, dict]:
+    """按某一个身份把该取的接口全取一遍。"""
     records: dict[str, dict] = {}
     stats: dict[str, int] = {}
 
     def take(path: str, label: str, method: str = "GET") -> dict | None:
         status, ctype, text = _fetch(port, path, person, method)
         if status != 200:
-            print(f"  ! {label:<28} HTTP {status}  {text[:120]}")
+            print(f"  ! [{person}] {label:<28} HTTP {status}  {text[:120]}")
             return None
         key = f"{method} {path}"
         if key in records:
@@ -235,7 +279,7 @@ def collect(port: int, person: str, with_threads: bool, max_threads: int) -> tup
     take("/api/health", "健康检查")
     take("/api/focus", "民情焦点")
     take("/api/workspace", "个人工作台")
-    people = take("/api/people", "身份名录")
+    take("/api/people", "身份名录")
     take("/api/auth/whoami", "登录态")
     take("/api/experts", "参谋名单")
     take("/api/models", "模型配置")
@@ -292,16 +336,58 @@ def collect(port: int, person: str, with_threads: bool, max_threads: int) -> tup
             if tid:
                 take(f"/api/threads/{tid}", "会话正文")
 
+    return records, {"ov": ov or {}, "stats": stats}
+
+
+def collect(
+    port: int, people: list[str], with_threads: bool, max_threads: int
+) -> tuple[dict, dict, dict]:
+    """四个人各取一份，再把四份完全一样的抽出来只存一遍。
+
+    为什么要分人：日程、工作台、会话、指示都是按身份算的。只烤一个人，
+    切到秘书看到的还是市长的日历 —— 这种"看起来对、其实是别人"的错，
+    在这份文件里没法自查。
+    """
+    raw: dict[str, dict] = {}
+    ov: dict = {}
+    stats: dict[str, int] = {}
+    for i, person in enumerate(people):
+        print(f"  取数：{person}")
+        raw[person], info = _collect_one(port, person, with_threads, max_threads)
+        if i == 0:
+            ov = info["ov"]
+        for k, v in info["stats"].items():
+            stats[k] = stats.get(k, 0) + v
+
+    keys: set[str] = set()
+    for recs in raw.values():
+        keys |= set(recs)
+
+    common: dict[str, dict] = {}
+    by_person: dict[str, dict] = {p: {} for p in people}
+    for key in sorted(keys):
+        bodies = [raw[p].get(key) for p in people]
+        present = [b for b in bodies if b]
+        same = len(present) == len(people) and len({b["b"] for b in present}) == 1
+        if same:
+            common[key] = present[0]
+        else:
+            for p in people:
+                if raw[p].get(key):
+                    by_person[p][key] = raw[p][key]
+
     meta = {
         "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "period": (ov or {}).get("period") or "—",
-        "disclosed_on": (ov or {}).get("disclosed_on") or "",
-        "city": (ov or {}).get("city") or "",
-        "person": person,
+        "period": ov.get("period") or "—",
+        "disclosed_on": ov.get("disclosed_on") or "",
+        "city": ov.get("city") or "",
+        "person": people[0],
+        "people": people,
         "threads": with_threads,
-        "endpoints": len(records),
+        "endpoints": len(keys),
+        "common_endpoints": len(common),
     }
-    return records, meta
+    return common, by_person, meta
 
 
 # ---------------------------------------------------------------- 拼装
@@ -320,8 +406,8 @@ AIGC_FOOT = (
 )
 
 
-def build_html(records: dict, meta: dict) -> str:
-    snap = {"__meta__": meta, **records}
+def build_html(common: dict, by_person: dict, meta: dict) -> str:
+    snap = {"__meta__": meta, "common": common, "people": by_person}
     blob = json.dumps(snap, ensure_ascii=False, separators=(",", ":"))
     # 内联进 <script> 的两个致命序列：`</script>` 提前闭合、行分隔符当换行
     blob = blob.replace("</", "<\\/").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
@@ -346,7 +432,8 @@ def build_html(records: dict, meta: dict) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description="导出离线的单文件 AI 市长工作台（不含模型）")
     ap.add_argument("--out", default="", help="输出路径，默认 dist/ai-mayor-offline-<时间>.html")
-    ap.add_argument("--person", default="", help="按哪个身份取数，默认后端认定的当前身份")
+    ap.add_argument("--person", default="", help="只烤这个身份（默认四个身份全烤）")
+    ap.add_argument("--people", default="", help="逗号分隔的身份 id，如 mayor,secretary")
     ap.add_argument("--no-threads", action="store_true", help="不导出历史会话（外发前建议加）")
     ap.add_argument("--max-threads", type=int, default=12, help="最多带几条会话正文")
     args = ap.parse_args()
@@ -354,21 +441,29 @@ def main() -> None:
     httpd = _boot()
     port = httpd.server_address[1]
     try:
-        # 身份：先问接口，问不到就用默认
-        who = ""
+        # 身份名单以接口为准：加一个身份不用改这里
+        ids: list[str] = []
         try:
-            _s, _c, txt = _fetch(port, "/api/people", args.person or "mayor")
-            who = str((json.loads(txt).get("current") or {}).get("id") or "")
+            _s, _c, txt = _fetch(port, "/api/people", "mayor")
+            ids = [str(p.get("id")) for p in _items(json.loads(txt)) if p.get("id")]
         except Exception:  # noqa: BLE001
             pass
-        person = args.person or who or "mayor"
+        if args.people:
+            want = [x.strip() for x in args.people.split(",") if x.strip()]
+        elif args.person:
+            want = [args.person]
+        else:
+            want = ids or ["mayor"]
+        people = [p for p in want if p in ids] if ids else want
+        if not people:
+            raise SystemExit(f"身份都不在名录里：{want}（名录：{ids}）")
 
-        print(f"取数中（身份 {person}，端口 {port}）…")
-        records, meta = collect(port, person, not args.no_threads, args.max_threads)
+        print(f"取数中（身份 {','.join(people)}，端口 {port}）…")
+        common, by_person, meta = collect(port, people, not args.no_threads, args.max_threads)
     finally:
         httpd.shutdown()
 
-    page = build_html(records, meta)
+    page = build_html(common, by_person, meta)
 
     out = Path(args.out) if args.out else (ROOT / "dist" / f"ai-mayor-offline-{datetime.now():%Y%m%d-%H%M}.html")
     if not out.is_absolute():
@@ -378,12 +473,14 @@ def main() -> None:
 
     size = out.stat().st_size / 1024
     print(f"\n已导出 {out}")
-    print(f"  {size:,.0f} KB · {meta['endpoints']} 个接口 · 指标期次 {meta['period']} · 数据截至 {meta['generated']}")
+    print(f"  {size:,.0f} KB · {meta['endpoints']} 个接口（{meta['common_endpoints']} 个四身份共用）"
+          f" · 指标期次 {meta['period']} · 数据截至 {meta['generated']}")
+    print(f"  身份：{'、'.join(people)}　各存一份，切身份看到的是那个人自己的日程与工作台。")
     if not args.no_threads:
         print("  含历史会话正文：外发前请过一眼，或加 --no-threads 重导。")
     print("  双击打开即可，不需要服务、不需要模型、不联网。")
-    print("  能做的：看罗盘与看板、点开指标查口径/走势/来源、翻督办台账与知识库、切身份与主题。")
-    print("  不能做的：问数（不含模型）、任何写入（签收/催办/建会/保存）。")
+    print("  能做的：看罗盘与看板、点开指标查口径/走势/来源、翻督办台账与知识库、切身份看各自日程、切主题。")
+    print("  不能做的：问数（不含模型）、任何写入（签收/催办/下发交办/保存）。")
 
 
 if __name__ == "__main__":
