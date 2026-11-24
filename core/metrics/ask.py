@@ -616,6 +616,65 @@ def _order_guard(
     }
 
 
+def _order_guidance(
+    question: str, *, team: bool, planner: str, trace: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """交办句落到「指标和知识库都没命中」时，别答成「没有这个指标」。
+
+    为什么单列一条：默认拒答把原因说成「指标字典里没有」。领导听到的却是「这件事
+    系统办不了」—— 而拟办是办得了的，缺的只是交办权，或者这一轮对话层没跑通。
+    两种原因要说的下一句完全不同（「去选秘书团」/「等模型起来再说一遍」），
+    不能共用一句「没有对应的指标」。
+
+    只在**两处都落空**时用：命中指标说明问的是数，命中记录说明问的是事，那两条
+    路各有各的答复，不该被这里抢走。返回 None 表示这句话不是交办句。
+    """
+    try:
+        import directives as directives_mod  # noqa: PLC0415  交办那层的判据只有一份
+
+        if not directives_mod.looks_like_order(question):
+            return None
+    except Exception:  # noqa: BLE001 判据坏了不该影响拒答本身
+        return None
+
+    merged = list(trace)
+    merged.append(
+        {
+            "step": len(merged) + 1,
+            "tool": "refuse.order",
+            "call": "交办句不按「没有这个指标」拒答",
+            "status": "ok",
+            "summary": "认得出是交办句，改为说明该去哪儿拟办",
+        }
+    )
+    if team:
+        headline = "这句是交办，不是查数；但这一轮没生成拟办卡。"
+        detail = (
+            "拟办由对话层拆分：模型没起来、或这一轮没跑完，这一步就会落空。"
+            "等模型恢复后把原话再发一次就行 —— 已经选着「AI秘书团」，不用换模式。"
+        )
+    else:
+        headline = "这句是交办，不是查数 —— 拟办要选「AI秘书团」。"
+        detail = (
+            "这一轮没开交办权，所以只查了指标和记录。分工上，单参谋负责解读，"
+            "不往下派活：责任单位、时限、验收标准都是要签字的东西。切到「AI秘书团」"
+            "后把这句话再说一遍，就会出一张拟办卡；卡上点「下发」才真正派下去。"
+        )
+    return {
+        "refused": False,
+        "question": question,
+        "planner": planner,
+        "intent": "directive",
+        "headline": headline,
+        "detail": detail,
+        "did_you_mean": [],
+        "suggestions": [],
+        "sources": [],
+        "notes": [],
+        "trace": merged,
+    }
+
+
 def _codes_from_result(result: dict[str, Any]) -> list[str]:
     """从 sources 的接口路径反推本轮用了哪些指标。
 
@@ -1318,6 +1377,11 @@ def _ask_impl(
 
     # 拒答：不编
     if not hits:
+        # 交办句在指标库和知识库里必然都落空（「让秘书把材料整理好」不是一个指标）。
+        # 先认它一句、说清该去哪儿办，别把「这轮没开交办权」答成「系统办不了」。
+        hinted = _order_guidance(question, team=team, planner=planner, trace=trace)
+        if hinted is not None:
+            return hinted
         c = (kb_miss or {}).get("index_counts") or {}
         scope_txt = (
             f"指标字典里没有对应的指标；知识库现有 {kb_miss.get('index_size')} 条记录"

@@ -1,4 +1,4 @@
-"""授权判定：单一收口，三档角色 + 行级资源。
+"""授权判定：单一收口，四档角色 + 行级资源。
 
 借鉴 Octop `users/permissions.py` 的 `user_has_permission(user, key)` 单一收口
 思路，但粒度不同：Octop 判的是「能不能进这个功能页」，oc-gov 判的是
@@ -8,8 +8,10 @@
 
 1. **显式授权，默认拒绝**。任何没被明确允许的 (action, resource) 一律 deny，
    不做「默认全开」。
-2. **角色继承**。leader ⊃ dept-leader ⊃ bureau，用 `directory.role_at_least`
-   判，父角色自动拥有子角色的全部权限。
+2. **角色继承**。leader ⊃ secretary ⊃ dept-leader ⊃ bureau，用
+   `directory.role_at_least` 判，父角色自动拥有子角色的全部权限。
+   秘书这一档是「看全市、能辅政、不拍板」：读口同市长，但确认办结、退回、
+   改全局配置这些「代领导签字」的动作仍拦着。
 3. **责任单位是行级锚点**。读/写督办、指标、知识库，都按 `assignee ∪
    co_assignees` 落在不在本人的分管单位集合里来判。
 4. **写操作额外收紧**。签收/进展/办结只能由「本单位主办」的角色做，
@@ -47,6 +49,7 @@ OVERSIGHT_URGE = "oversight.urge"         # 催办
 MEETING_COMMIT = "meeting.commit"          # 会议落库
 MEETING_EDIT = "meeting.edit"              # 删会议、改议定事项（会进日程/提醒，市级动作）
 MEETING_NOTICE = "meeting.notice"          # 导出会议通知到本机（发文口径由市领导定）
+TASK_ASSIGN = "task.assign"                # 把活直接交办到某个人（如市长 → 秘书）
 
 # 配置类：改一次影响所有人，不是「某个单位的数据」。
 # 判定的输入只有角色，不看 units —— 单位口径对这些动作没有意义。
@@ -69,17 +72,16 @@ _ACTION_LABEL: dict[str, str] = {
     CONFIG_PLUGIN: "改插件开关",
     NOTIFY_DISPATCH: "群发提醒",
     MEETING_EDIT: "改会议记录",
-    MEETING_NOTICE: "导出会议通知",
 }
 
 # 只认角色的动作：市领导独占。
+# 会议通知（MEETING_NOTICE）不在这里：发通知是秘书的本职，见下面的单独分支。
 _LEADER_ONLY: tuple[str, ...] = (
     CONFIG_MODEL,
     CONFIG_EXPERT,
     CONFIG_PLUGIN,
     NOTIFY_DISPATCH,
     MEETING_EDIT,
-    MEETING_NOTICE,
 )
 
 # 动作 → 它对应的督办流转 action（oversight.advance 的 action 名）。
@@ -182,6 +184,11 @@ def can(
         # 分管单位的事项** —— 和签收/催办同口径。早先这里只判角色不判单位，
         # 结果是常务副市长能退回环保局的办结单（他连看都看不到那一条），
         # 权限比"看得到才退得回"还宽，属于逻辑倒挂。
+        #
+        # 秘书不算「审方」：他排在 dept-leader 之上（全市），如果只按等级判，
+        # 就会出现「秘书能退任何单位的单」。退回是代领导签批，明确不给。
+        if scope.get("role") == directory.ROLE_SECRETARY:
+            return False, "退回要领导签批：秘书可以催办，不能替领导退单。"
         if not _role_ok(scope, directory.ROLE_DEPT_LEADER):
             return False, "退回需要领导。"
         if not units:
@@ -197,10 +204,26 @@ def can(
         return False, "不能催办非分管单位的事项。"
 
     if action == MEETING_COMMIT:
-        # 会议落库是市级动作（会进日程、进提醒），只有市领导能建。
+        # 会议落库是市级动作（会进日程、进提醒）。秘书替市长排会正是本职，
+        # 所以这一条给到 secretary 及以上；删会/改议定事项（MEETING_EDIT）
+        # 仍只给市领导 —— 那动的是主档。
+        if _role_ok(scope, directory.ROLE_SECRETARY):
+            return True, ""
+        return False, "会议落库需要市领导或秘书。"
+
+    if action == MEETING_NOTICE:
+        # 发会议通知：定时间地点、发出去、收参会回执，本来就是秘书干的活。
+        if _role_ok(scope, directory.ROLE_SECRETARY):
+            return True, ""
+        return False, "导出会议通知需要市领导或秘书。"
+
+    if action == TASK_ASSIGN:
+        # 把活直接派给某个人（而不是单位）：不写台账、不走签收，收到的人按日程办。
+        # 只给市领导 —— 秘书能替市长排会、发通知，但不能替市长给别人派活；
+        # 分管领导也一样，他能派的是自己分管的单位（OVERSIGHT_CREATE）。
         if _role_ok(scope, directory.ROLE_LEADER):
             return True, ""
-        return False, "会议落库需要市领导。"
+        return False, "给人直接交办需要市领导。"
 
     # ── 配置类：不分单位，只看角色 ──
     if action in _LEADER_ONLY:

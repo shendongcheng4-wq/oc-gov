@@ -10,8 +10,9 @@ oc-gov 之前有两处手写「单位 → 人」的映射，各维护各的、�
 1. **单位全称**（`UNITS`）：台账 `assignee` / `co_assignees` 用的正式名，
    授权判定、知识库 domain、督办统计都以它为准。简称派生在
    `knowledge.unit_variants`，这里不重复做。
-2. **角色**（`ROLES`）：三档 —— leader（市领导）/ dept-leader（分管领导）
-   / bureau（委办局），天然有继承关系 leader ⊃ dept-leader ⊃ bureau。
+2. **角色**（`ROLES`）：四档 —— leader（市领导）/ secretary（秘书）/
+   dept-leader（分管领导）/ bureau（委办局），继承方向
+   leader ⊃ secretary ⊃ dept-leader ⊃ bureau。
 3. **人 → 角色 → 分管单位**（`PEOPLE_ROLE` + `PEOPLE_UNITS`）：
    从 people.py 的三个预设身份派生，是授权的输入。
 
@@ -106,16 +107,19 @@ def mentioned_in(text: str, unit: str) -> bool:
     return any(alias in s and full == name for alias, full in UNIT_ALIAS.items())
 
 
-# 三档角色。顺序即继承方向：leader 蕴含 dept-leader，dept-leader 蕴含 bureau。
+# 四档角色。顺序即继承方向：leader 蕴含 secretary，secretary 蕴含 dept-leader，
+# dept-leader 蕴含 bureau。
 ROLE_LEADER = "leader"
+ROLE_SECRETARY = "secretary"
 ROLE_DEPT_LEADER = "dept-leader"
 ROLE_BUREAU = "bureau"
 
-ROLES: tuple[str, ...] = (ROLE_LEADER, ROLE_DEPT_LEADER, ROLE_BUREAU)
+ROLES: tuple[str, ...] = (ROLE_LEADER, ROLE_SECRETARY, ROLE_DEPT_LEADER, ROLE_BUREAU)
 
 # 角色中文名，界面与审计里显示用。
 ROLE_LABELS: dict[str, str] = {
     ROLE_LEADER: "市领导",
+    ROLE_SECRETARY: "秘书",
     ROLE_DEPT_LEADER: "分管领导",
     ROLE_BUREAU: "委办局",
 }
@@ -123,19 +127,29 @@ ROLE_LABELS: dict[str, str] = {
 # 角色继承：一个角色拥有的权限，包含它自己 + 所有「更窄」的角色。
 # leader 是顶点（管全市），bureau 是叶子（只管本单位）。
 # 用「角色是否在某个集合里」判继承，见 authz._role_at_least。
-ROLE_RANK: dict[str, int] = {ROLE_LEADER: 2, ROLE_DEPT_LEADER: 1, ROLE_BUREAU: 0}
+#
+# 秘书排在分管领导之上、市领导之下：秘书跟的是市长这条线，读口要覆盖全市
+# （备会、盯台账时看不全等于没法干活），但「确认办结 / 改全局配置 / 删会议改
+# 议定事项」仍是市领导的动作，由 authz 的 leader-only 分支挡住。
+ROLE_RANK: dict[str, int] = {
+    ROLE_LEADER: 3,
+    ROLE_SECRETARY: 2,
+    ROLE_DEPT_LEADER: 1,
+    ROLE_BUREAU: 0,
+}
 
 
 def role_at_least(role: str, minimum: str) -> bool:
-    """role 的权限等级 >= minimum。leader(2) 满足一切，bureau(0) 只满足自己。"""
+    """role 的权限等级 >= minimum。leader(3) 满足一切，bureau(0) 只满足自己。"""
     return ROLE_RANK.get(role, -1) >= ROLE_RANK.get(minimum, -1)
 
 
 # 预设身份 → 角色。这是「演示身份」向「授权角色」的唯一映射点。
-# 将来接真实账号，只需把登录用户映射到这三档之一，授权判定不用动。
+# 将来接真实账号，只需把登录用户映射到这四档之一，授权判定不用动。
 # id 与 people.PEOPLE 保持一致。
 PERSON_ROLE: dict[str, str] = {
     "mayor": ROLE_LEADER,
+    "secretary": ROLE_SECRETARY,
     "vmayor": ROLE_DEPT_LEADER,
     "bureau": ROLE_BUREAU,
 }
@@ -177,7 +191,7 @@ def person_scope(pid: str) -> dict[str, Any]:
         # 全市与否**只看角色**，不看 units 是否为空。
         # 早先用「units 为空」推全市，是个隐式约定：给任何身份配上空 units
         # 就等于悄悄给了他全市数据（新建身份时忘填 units 就会踩，而且不报错）。
-        # leader 的空 units 表达的是「不按单位过滤」，和「这个人没有分管单位」
-        # 是两件事，必须分开判。
-        "is_citywide": role == ROLE_LEADER,
+        # leader / secretary 的空 units 表达的是「不按单位过滤」，和「这个人
+        # 没有分管单位」是两件事，必须分开判。
+        "is_citywide": role in (ROLE_LEADER, ROLE_SECRETARY),
     }

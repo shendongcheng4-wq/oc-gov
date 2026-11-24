@@ -274,6 +274,8 @@ def tools_schema(*, team: bool = False) -> list[dict[str, Any]]:
                 "description": (
                     "把领导一句话（或一份上级来文）拟办成可交办的指示：拆成 1-6 条，"
                     "每条写清办什么、谁办、什么时候办完、办到什么程度算办完。"
+                    "「谁办」可以是单位，也可以是个人 —— 领导说「让秘书把这个材料整理好，"
+                    "26 号前放我桌上」同样用它，不要因为没点单位就当成聊天。"
                     "**不会下发** —— 生成一张可编辑的拟办卡，用户点了「下发」才落成督办"
                     "事项，所以不必先问「要不要下发」。领导说了几件事，就把原话整段传进来。"
                 ),
@@ -483,6 +485,8 @@ def tools_schema(*, team: bool = False) -> list[dict[str, Any]]:
 _DIRECTIVE_HINT = (
     "   领导口述要往下派（「让住建局 11 月 15 日前把 46 个小区全部开工，城管局把泊位补上」）\n"
     "   就用 draft_directive：原话整段传进去，系统拆条目、认单位、算时限，出一张拟办卡。\n"
+    "   派给个人的活（「让秘书 26 号前把三季度分析材料整理好放我桌上」）也走它 ——\n"
+    "   没点单位不等于不是交办，别答成一段闲聊或台账摘录。\n"
     "   **不要自己编责任单位**，也不要替领导加码——拆不出来的留空，卡片上会标红等人工补。\n"
     "   下发是人的动作（点按钮 + 登录身份），你只负责拟。\n"
 )
@@ -734,16 +738,7 @@ def _run_tool(
                 str(built.get("error") or "没拟出拟办事项。把要办的事再说具体一点。"),
                 {"kind": "directive", "error": "empty"},
             )
-        lines = []
-        for t in built.get("tasks") or []:
-            lines.append(
-                f"{t['no']}. {t['title']}｜{t['assignee'] or '单位待定'}"
-                f"｜{t['deadline'] or '时限待定'}｜{t['standard'] or '验收标准待定'}"
-            )
-        text = "已生成拟办草稿（%d 条，还没下发）：\n" % len(built["tasks"]) + "\n".join(lines)
-        if built.get("issues"):
-            text += "\n要人补的：" + "；".join(built["issues"][:3])
-        return text, {"kind": "directive", "payload": built}
+        return _directive_text(built), {"kind": "directive", "payload": built}
 
     if name == "scan_directives":
         import directives  # noqa: PLC0415
@@ -765,11 +760,15 @@ def _run_tool(
                 f"逾期 {d['overdue']}；现在{'、'.join(d['phase'])}"
             )
             for t in d["tasks"]:
-                if t["status"] != "已办结":
-                    bits.append(
-                        f"  · {t['title']}（{t['assignee']}）{t['status']}，"
-                        f"时限 {t['deadline']}，剩 {t['days_left']} 天，{t['risk']}"
-                    )
+                if t["status"] in ("已办结", "已办"):
+                    continue
+                who = t.get("assignee") or t.get("assignee_name") or "待定"
+                left = t.get("days_left")
+                left_s = f"剩 {left} 天" if isinstance(left, int) else "无时限"
+                bits.append(
+                    f"  · {t['title']}（{who}）{t['status']}，"
+                    f"时限 {t['deadline'] or '未定'}，{left_s}，{t['risk']}"
+                )
         return "\n".join(bits), {"kind": "directive_scan", "rows": rows}
 
     if name == "draft_meeting":
@@ -1852,6 +1851,36 @@ def run(
     # 走到这里说明没拿到模型结论：有工具结果就用工具原文，没有就交回原链路。
     if not parts:
         return None
+
+    # 拟办草稿优先于指标。以前只认 metric，于是「卡已经拆出来了、模型最后一句没
+    # 说出来」的那一轮，parts 里的 directive 被直接丢掉，退回到问数链路 —— 用户
+    # 看到的是一段 GDP 数字，以为拟办没成功，其实草稿一直在手里。宁可交一张
+    # 措辞朴素的卡，也不能把已经生成的东西弄丢。
+    dir_part = _first_directive(parts)
+    if dir_part:
+        built = dir_part.get("payload") or {}
+        text = _directive_text(built)
+        if last_error:
+            text += (
+                f"\n（这一轮模型没有给出结论：{last_error[:80]}。"
+                "上面这张卡是按原话拆的，字段请过一眼再下发。）"
+            )
+        # 用 _assemble 而不是 _finish：这段话是系统按草稿字段拼的，不带模型
+        # 主张，也不该过数字闸 —— 闸会把「2026-11-26」当成查不到出处的数字，
+        # 整句剔掉，卡还在、正文却只剩一句"模型没给结论"。
+        result = _assemble(
+            question=question,
+            text=text,
+            parts=parts,
+            trace=trace,
+            model=model_name,
+            usage=usage,
+        )
+        result["planner"] = "agent_tool"
+        if degraded:
+            result["degraded"] = degraded
+        return result
+
     metric = _first_metric(parts)
     if metric:
         fallback = dict(metric)
@@ -1881,6 +1910,32 @@ def run(
             person_id=person_id,
         )
     return None
+
+
+def _directive_text(built: dict[str, Any]) -> str:
+    """把一份拟办草稿念成一句话。工具返回和兜底收口共用这一段，措辞才不会两样。"""
+    lines = []
+    for t in built.get("tasks") or []:
+        who = t.get("assignee") or t.get("assignee_name") or "单位待定"
+        lines.append(
+            f"{t['no']}. {t['title']}｜{who}"
+            f"｜{t['deadline'] or '时限待定'}｜{t['standard'] or '验收标准待定'}"
+        )
+    text = "已生成拟办草稿（%d 条，还没下发）：\n" % len(built.get("tasks") or []) + "\n".join(lines)
+    if built.get("issues"):
+        text += "\n要人补的：" + "；".join(built["issues"][:3])
+    return text
+
+
+def _first_directive(parts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    return next(
+        (
+            p
+            for p in parts
+            if p.get("kind") == "directive" and (p.get("payload") or {}).get("tasks")
+        ),
+        None,
+    )
 
 
 def _tool_summary(part: dict[str, Any], text: str) -> str:

@@ -1,6 +1,6 @@
 """演示身份层：让「个人工作台」真的是个人的。
 
-现在没有登录，但「每个人有自己的关注」这件事必须按人存。做法是三个预设身份顶替
+现在没有登录，但「每个人有自己的关注」这件事必须按人存。做法是几个预设身份顶替
 真实账号，配置一律按 `person_id` 落盘：
 
     data/workspaces.json
@@ -10,8 +10,9 @@
 将来接真实账号时，只需要把 `person_id` 换成登录用户 id：数据结构不用动，
 `watch_of()` / `set_watch()` 的签名不用动，改的只有「pid 从哪来」这一层。
 
-三个身份的默认关注是刻意分开的，这样切换时能看出「确实换人了」——
-如果三个人默认一模一样，等于没做隔离。
+四个身份的默认关注是刻意分开的，这样切换时能看出「确实换人了」——
+如果几个人默认一模一样，等于没做隔离。秘书是后来加的：他替市长跟线，
+关注的是「今天该盯哪几件」，所以挑的是进度与办结类指标，而不是总量。
 """
 
 from __future__ import annotations
@@ -78,13 +79,31 @@ PEOPLE: tuple[dict[str, str], ...] = (
         "note": "盯空气质量和群众投诉",
         "units": ["市生态环境局"],
     },
+    {
+        "id": "secretary",
+        "name": "市长秘书",
+        "avatar": "秘",
+        "post": "秘书",
+        "scope": "市长办公室",
+        "note": "替市长盯台账、备会议、起文稿",
+        # 秘书不挂分管单位：他不管哪个局，但要跟全市这条线（授权侧的
+        # 「全市」由 directory 按角色给，不看这个空列表）。
+        "units": [],
+        # 一句话里怎么称呼这个人 —— 个人交办要靠它认人（「让秘书把这个材料
+        # 整理好」）。只登记明确可被点名的称谓，不拿 name/post 去模糊匹配：
+        # 「局长」能匹配到生态环境局局长，那样一句「让局长去办」就会错派。
+        # 「秘书团」是 AI 参谋团，不是人，认人时按下面的 _NOT_PERSON 排除。
+        "mentions": ("秘书", "市长秘书"),
+    },
 )
 
-# 三个身份的关注范围刻意不同：市长看总量，常务看投资工业，局长看空气与投诉。
+# 四个身份的关注范围刻意不同：市长看总量，常务看投资工业，局长看空气与投诉，
+# 秘书看「这几天要盯的进度与办结」。
 DEFAULT_WATCH: dict[str, list[str]] = {
     "mayor": ["GDP_TOTAL", "GY_VA_GROWTH", "BUDGET_REV", "TZ_12345_CLOSURE", "FAI_GROWTH", "AQI_GOOD_DAYS"],
     "vmayor": ["FAI_GROWTH", "FAI_PROGRESS", "INVEST_SIGNED", "GY_VA_GROWTH", "BUDGET_REV"],
     "bureau": ["AQI_GOOD_DAYS", "TZ_12345_CLOSURE", "GY_VA_GROWTH"],
+    "secretary": ["FAI_PROGRESS", "TZ_12345_CLOSURE", "LIVELIHOOD_DONE", "GY_VA_GROWTH"],
 }
 
 DEFAULT_PERSON = "mayor"
@@ -109,6 +128,51 @@ def find(pid: str | None) -> dict[str, str] | None:
 def resolve(pid: str | None) -> str:
     """未知身份一律回落到市长，不让一个过期的 localStorage 把接口打成 500。"""
     return pid if find(pid) else DEFAULT_PERSON
+
+
+def _label_hits(text: str, label: str) -> bool:
+    """这句话里点到这个词了吗 —— 排除「秘书团」这种被当成机构名用的情况。
+
+    「秘书团」是 AI 参谋团，不是那位秘书；不排除的话，一句「让秘书团看看这个数」
+    会被认成「给秘书派活」。
+    """
+    start = 0
+    while True:
+        idx = text.find(label, start)
+        if idx < 0:
+            return False
+        after = text[idx + len(label): idx + len(label) + 1]
+        if after != "团":
+            return True
+        start = idx + len(label)
+
+
+def find_by_mention(text: str) -> dict[str, Any] | None:
+    """一句话里点到的那位「个人」（能接交办的人）。认不出返回 None。
+
+    只认显式登记的 `mentions`，不拿姓名/职务做模糊匹配 —— 「局长」会匹配到
+    生态环境局局长，那样一句「让局长去办」就派错了人。长称谓优先：句子里同时
+    出现「秘书」和「市长秘书」时，认更具体的那个。
+    """
+    s = (text or "").strip()
+    if not s:
+        return None
+    best: dict[str, Any] | None = None
+    best_len = 0
+    for p in PEOPLE:
+        for label in p.get("mentions") or ():
+            if label and len(label) >= best_len and _label_hits(s, str(label)):
+                best, best_len = dict(p), len(label)
+    return best
+
+
+def assignable() -> list[dict[str, str]]:
+    """能接收个人交办的身份（前端下拉 / 模型提示词用）。"""
+    return [
+        {"id": str(p["id"]), "name": str(p.get("name") or ""), "post": str(p.get("post") or "")}
+        for p in PEOPLE
+        if p.get("mentions")
+    ]
 
 
 def _doc() -> dict[str, Any]:

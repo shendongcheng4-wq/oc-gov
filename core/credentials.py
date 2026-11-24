@@ -16,6 +16,8 @@
         重新生成，或改用环境变量。
 3. **按身份存**，不是全局一个口令。将来接真实账号时，这里就是「账号表」的
    雏形 —— 把 `people.PEOPLE` 的 id 换成登录名，校验逻辑不用动。
+   名单里**新增**身份时，启动会给它补一条随机口令并打印一次：否则新身份会卡在
+   「没有记录 → 一律拒绝」上，而界面上只是「口令错」，看不出是没初始化。
 
 落盘：`data/credentials.json`，结构
   {"_meta": {"env_fp": "..."},
@@ -73,12 +75,16 @@ def _records(doc: dict) -> dict:
     return {k: v for k, v in doc.items() if isinstance(v, dict) and v.get("salt") and v.get("hash")}
 
 
-def bootstrap(ids: list[str]) -> str | None:
-    """启动时把口令记录对齐到当前配置。返回需要打印的一次性口令（仅全新安装）。
+def bootstrap(ids: list[str]) -> dict[str, str]:
+    """启动时把口令记录对齐到当前配置。返回**新生成**的口令 {身份 id: 明文}。
 
-    - 配了 OCGOV_PASSWORD：口令变了就重新派生全部记录（环境变量是权威值）。
-    - 没配但有记录：什么都不做，尊重已有的。
-    - 都没有：随机生成一个，写哈希，把明文返回给调用方打印一次。
+    - 配了 `OCGOV_PASSWORD`：口令变了就按它重新派生全部记录（环境变量是权威值）；
+      没变但名单里多了身份，就只给新的那条补记录。两种情况都不返回明文 ——
+      明文就是环境变量本身，使用者本来就知道。
+    - 没配但有记录：已有记录一律不动，**只给新增身份补随机口令**并返回。
+      早先这里「有记录就整体跳过」，结果是新加的身份永远登不进去
+      （verify 查不到记录 → 拒绝），而且启动日志里也不说为什么。
+    - 都没有（全新安装）：给所有身份生成同一个一次性密码，全部返回。
     """
     doc = _doc()
     env = _env_password()
@@ -90,16 +96,33 @@ def bootstrap(ids: list[str]) -> str | None:
             fresh: dict = {pid: _record(env) for pid in ids}
             fresh[_META] = {"env_fp": fp}
             store.write(STORE_NAME, fresh)
-        return None
+            return {}
+        missing = [pid for pid in ids if pid not in _records(doc)]
+        if missing:
+            for pid in missing:
+                doc[pid] = _record(env)
+            store.write(STORE_NAME, doc)
+        return {}
 
-    if _records(doc):
-        return None
+    records = _records(doc)
+    if not records:
+        generated = secrets.token_urlsafe(9)
+        fresh = {pid: _record(generated) for pid in ids}
+        fresh[_META] = {"env_fp": ""}
+        store.write(STORE_NAME, fresh)
+        return {pid: generated for pid in ids}
 
-    generated = secrets.token_urlsafe(9)
-    fresh = {pid: _record(generated) for pid in ids}
-    fresh[_META] = {"env_fp": ""}
-    store.write(STORE_NAME, fresh)
-    return generated
+    missing = [pid for pid in ids if pid not in records]
+    if not missing:
+        return {}
+
+    out: dict[str, str] = {}
+    for pid in missing:
+        pwd = secrets.token_urlsafe(9)
+        doc[pid] = _record(pwd)
+        out[pid] = pwd
+    store.write(STORE_NAME, doc)
+    return out
 
 
 def verify(person: str, password: str) -> bool:

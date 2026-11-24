@@ -286,7 +286,7 @@ def test_workspace() -> None:
 
 
 def test_people() -> None:
-    """「每个人」这层：三个身份、各自一份关注、互不影响。
+    """「每个人」这层：几个身份、各自一份关注、互不影响。
 
     这里刻意不用 HTTP：身份是数据层的事，接个新入口（MCP/CLI）也得走同一套规则。
     """
@@ -294,16 +294,18 @@ def test_people() -> None:
 
     import people
 
-    check("三个预设身份", len(people.all_people()) == 3, str([p["id"] for p in people.all_people()]))
+    check("四个预设身份", len(people.all_people()) == 4, str([p["id"] for p in people.all_people()]))
     check("未知身份回落默认", people.resolve("ghost") == "mayor", people.resolve("ghost"))
     check("未知身份读到默认关注", people.watch_of("ghost") == people.DEFAULT_WATCH["mayor"], str(people.watch_of("ghost")))
 
-    # 三个身份的关注范围设计上就不同，否则"换人"看不出来
+    # 几个身份的关注范围设计上就不同，否则"换人"看不出来
     mayor = [c["code"] for c in wb.workspace("mayor")["watch"]]
     vm = [c["code"] for c in wb.workspace("vmayor")["watch"]]
     bu = [c["code"] for c in wb.workspace("bureau")["watch"]]
+    sec = [c["code"] for c in wb.workspace("secretary")["watch"]]
     check("市长与常务看的不一样", mayor != vm, f"{mayor} / {vm}")
     check("常务与局长看的不一样", vm != bu, f"{vm} / {bu}")
+    check("秘书的关注是另一份", sec and len(set(sec) - set(mayor + vm + bu)) > 0, f"{sec}")
     check("返回里带身份信息", wb.workspace("vmayor")["person"]["id"] == "vmayor", "")
 
     # 存一份、读回来
@@ -1353,7 +1355,7 @@ def test_experts() -> None:
     check("总参谋排在最后收口", exp[-1] == "chief", str(exp))
     check("展开不产生重复", len(exp) == len(set(exp)), str(exp))
     check(
-        "团模式不展开（否则团就变成全会）",
+        "手动选多位不展开（展开只归单选总参谋）",
         ex.expand_for_chief(["chief", "economy", "investment"]) == ["chief", "economy", "investment"],
         "",
     )
@@ -1405,7 +1407,8 @@ def test_experts() -> None:
         last_prompt[-200:],
     )
 
-    # 团模式下总参谋同样收口（名单前 3 位本来就含它），但只带那两位，不额外展开
+    # 手动选 3 位时总参谋同样收口（名单里含它），但只带那两位，不额外展开。
+    # 这条验的是 interpret 本身；团模式已经一位参谋都不召唤了（见 write_policy 那组）。
     team_prompts: list[str] = []
     old_t4 = ex.llmclient.chat_text
     old_a4 = ex.llmclient.available
@@ -1422,9 +1425,9 @@ def test_experts() -> None:
     finally:
         ex.llmclient.chat_text = old_t4
         ex.llmclient.available = old_a4
-    check("团模式仍是 3 段，不额外展开", len(v_team) == 3, f"{len(v_team)} 段")
-    check("团模式总参谋也排最后", v_team[-1]["id"] == "chief", str([v["id"] for v in v_team]))
-    check("团模式总参谋看得到同僚", "招商这块要盯签约转化" in (team_prompts[-1] if team_prompts else ""), "")
+    check("3 位参谋就出 3 段，不额外展开", len(v_team) == 3, f"{len(v_team)} 段")
+    check("3 位里总参谋也排最后", v_team[-1]["id"] == "chief", str([v["id"] for v in v_team]))
+    check("总参谋看得到同僚", "招商这块要盯签约转化" in (team_prompts[-1] if team_prompts else ""), "")
 
     # 展开了却不放开上限，收口就只剩半张桌子 —— 这条钉住的是 cap 与 expand 的配合
     check(
@@ -1577,6 +1580,10 @@ def test_experts() -> None:
     check("默认态不留「不召唤」占位", '>不召唤</b>' not in html and '"不召唤"' not in html, "")
     check("空态不占位（:empty 隐藏）", ".es-name:empty" in html and ".es-state:empty" in html, "")
     check("全组叫 AI秘书团", 'return "AI秘书团"' in html and 'item("__all", "团", "AI秘书团"' in html, "")
+    # 团模式一位参谋都不召唤：后端也会拒（_expert_ids 直接返回空），但前端更不该发 ——
+    # 发了就是三次没人看的模型调用，而且用户会在「秘书团」名下看到三张参谋卡。
+    cur_src = html.split("function currentExperts()")[1][:420]
+    check("团模式不召唤参谋", 'if (!EXP.cur || EXP.cur === "__all") return [];' in cur_src, cur_src[:120])
     check("再点一次可取消", "EXP.cur = !eid || EXP.cur === eid ? null : eid" in html, "")
     # 取消不能只有「再点一次」这一条 hidden 路径（只写在 item 的 title 里）。
     # 菜单第一行必须有一个显式的、回到「不用参谋」的出口，否则看起来就是单选题。
@@ -1612,13 +1619,21 @@ def test_experts() -> None:
     check("总参谋单独成一个模式，不是 team",
           'EXP.cur === "chief"' in mode_src and '"chief" : "single"' in mode_src, mode_src[:200])
     check("没匹配不许当问题发出去", 'return toast("没有这个参谋' in html, "")
+    # 模式要记在本地：拟办权挂在「AI秘书团」上，刷新一次就丢的话，用户下一次直接
+    # 打字会被当成问数答「没有对应的指标」，看上去像系统退化了。
+    check(
+        "参谋模式刷新后还记得",
+        'localStorage.getItem("ocgov.expert")' in html
+        and 'localStorage.setItem("ocgov.expert"' in html,
+        "",
+    )
 
     # 总参谋把六位都叫上时是 7 段并排，结论被埋在里面。收口卡提前、其余折起来。
     # 这里钉四件事，任何一条丢了都会退回「一屏卡片」：
     #   1. 有折叠条这个控件；2. 收口卡被单独摘出来放到最前；
     #   3. 其余卡**仍然渲染**（收缩的是显示，不是内容 —— 折叠成"只看收口"、
     #      顺手不调用分管参谋，就等于让总参谋把同一份数值再猜一遍）；
-    #   4. 3 张以内不折（团模式铺得开，多一次点击纯属添堵）。
+    #   4. 3 张以内不折（手动选 3 位铺得开，多一次点击纯属添堵）。
     check("收口卡提前、其余折叠",
           'data-evfold' in html and 'evCards.find((c) => c.id === "chief" && c.ok)' in html, "")
     check("折叠只收显示，卡片一张不少",
@@ -1918,7 +1933,7 @@ def test_wemeet() -> None:
                         CALLS_BOX["transcript_args"] = args
                         return envelope({"minutes": {"paragraphs": [
                             {"start_time": 0, "speaker_info": {"user_name": "张局长"},
-                             "sentences": [{"text": "请市住建局牵头管线迁改，11 月 20 日前完成。"}]},
+                             "sentences": [{"text": f"请市住建局牵头管线迁改，{due_phrase}前完成。"}]},
                             {"start_time": 62000, "speaker_info": {"user_name": "李主任"},
                              "sentences": [{"text": "同意，按这个办。"}]},
                         ]}})
@@ -1928,8 +1943,13 @@ def test_wemeet() -> None:
                 return self._send({"jsonrpc": "2.0", "id": msg.get("id"),
                                    "error": {"code": -32601, "message": f"no method {method}"}}, status=404)
 
+        # 时限必须相对今天算：写死「11 月 20 日」的话，演示钟一走过那天，commit 就会
+        # 因「时限早于今天」被拒，后面「已落督办就拒绝换原文」就成了假通过。
+        due = date.today() + timedelta(days=10)
+        due_iso = due.isoformat()
+        due_phrase = f"{due.month} 月 {due.day} 日"
         TXT = ("以下为腾讯会议录制转写原文：\n"
-               "[00:00:00] 张局长：请市住建局牵头管线迁改，11 月 20 日前完成。\n"
+               f"[00:00:00] 张局长：请市住建局牵头管线迁改，{due_phrase}前完成。\n"
                "[00:01:02] 李主任：同意，按这个办。")
         srv = ThreadingHTTPServer(("127.0.0.1", 0), McpStub)
         port = srv.server_address[1]
@@ -2023,7 +2043,7 @@ def test_wemeet() -> None:
 
         parsed = {"model_ref": "test/fake", "warnings": [], "items": [{
             "title": "完成管线迁改", "assignee": "市住建局", "deadline": None,
-            "standard": "管线全部入地", "quote": "请市住建局牵头管线迁改，11 月 20 日前完成。",
+            "standard": "管线全部入地", "quote": f"请市住建局牵头管线迁改，{due_phrase}前完成。",
             "confidence": "low", "verify": {"status": "needs_review", "issues": []},
         }]}
         mt_ledger.save_parse(plan["id"], parsed)
@@ -2036,8 +2056,8 @@ def test_wemeet() -> None:
         locked_meeting = mt_ledger.create("已交办的会", "", held_at="2026-11-18 09:00", kind="plan")
         mt_ledger.set_transcript(locked_meeting["id"], text)
         mt_ledger.save_parse(locked_meeting["id"], {"model_ref": "t/f", "warnings": [], "items": [{
-            "title": "完成管线迁改", "assignee": "市住建局", "deadline": "2026-11-20",
-            "standard": "管线全部入地", "quote": "请市住建局牵头管线迁改，11 月 20 日前完成。",
+            "title": "完成管线迁改", "assignee": "市住建局", "deadline": due_iso,
+            "standard": "管线全部入地", "quote": f"请市住建局牵头管线迁改，{due_phrase}前完成。",
             "confidence": "low", "verify": {"status": "ok", "issues": []},
         }]})
         locked_m = mt_ledger.get(locked_meeting["id"])
@@ -3330,6 +3350,36 @@ def test_agent() -> None:
         agent_mod.llmclient.available = old_avail2
     check("主循环：可被用户停止", stopped, "")
 
+    # ⑤ 拟办之后模型没给出结论：卡不能跟着整轮一起丢。
+    # 现场就是这么错的：模型先调 draft_directive、又去查了一次 GDP，那一轮没跑完，
+    # 兜底只认 metric，于是用户问「让秘书办件事」，看到的是一段 GDP 数字。
+    order = "让秘书 11 月 26 日前把三季度经济运行分析材料整理好，放到我桌上"
+    old_split = dr._model_split
+    dr._model_split = lambda *a, **k: None  # 只验兜底，别让规则拆解去调真模型
+    stub4 = _StubLLM([
+        {"tool_calls": [_call("d1", "draft_directive", {"text": order})]},
+        {"text": ""},  # 模型这一轮什么都说不出来
+    ])
+    agent_mod.llmclient.chat_tools = stub4
+    agent_mod.llmclient.available = lambda: True
+    try:
+        loop4 = agent_mod.run(order, person_id="mayor", today=date(2026, 11, 23), team=True)
+    finally:
+        agent_mod.llmclient.chat_tools = old_tools
+        agent_mod.llmclient.available = old_avail2
+        dr._model_split = old_split
+    task4 = ((loop4 or {}).get("directive_draft") or {}).get("tasks") or []
+    check(
+        "主循环：模型没结论时拟办卡仍在",
+        bool(task4) and task4[0].get("assignee_person") == "secretary",
+        str(loop4)[:100],
+    )
+    check(
+        "主循环：这条兜底标成 agent_tool、意图是交办",
+        (loop4 or {}).get("planner") == "agent_tool" and (loop4 or {}).get("intent") == "directive",
+        f"{(loop4 or {}).get('planner')}/{(loop4 or {}).get('intent')}",
+    )
+
     # 跨会话记忆是作为 system 消息混在 history 里的，而 chat_tools 只转发
     # user/assistant —— 混着传会被静默丢掉。这条钉住「记忆真的进了 system prompt」。
     stub_mem = _StubLLM([{"text": "好。"}])
@@ -4607,8 +4657,8 @@ def test_write_policy() -> None:
     check("每个写路由都登记进闸门表", not missing, "漏登记：" + "、".join(missing))
 
     # 交办权的开关：只认前端显式的 expert_mode，不从 experts 的长度反推。
-    # 团模式固定带 3 位参谋，跟「手动点了 3 位」在后端一模一样 —— 靠数量猜必然猜错，
-    # 猜错的后果是单参谋也拿到了往下派活的权限。
+    # 团模式的 experts 是空的（秘书团不召唤参谋），跟「没选参谋」在请求里
+    # 长得一模一样 —— 靠数量猜必然猜错，猜错的后果是单参谋也拿到了派活权。
     check("团模式标记认 team / __all", srv._is_team({"expert_mode": "team"})
           and srv._is_team({"expert_mode": "__all"}), "")
     check("单参谋与不选参谋都不是团模式",
@@ -4621,6 +4671,20 @@ def test_write_policy() -> None:
     check("给了 3 位参谋但没给模式，也不算团模式",
           not srv._is_team({"experts": ["chief", "economy", "investment"]}), "")
 
+    # AI秘书团不是参谋团：一位参谋都不召唤，一张解读卡都不出。
+    # 用户的原话是「ai秘书不应该出现任何一张卡，他不是参谋」—— 秘书受令办事，
+    # 解读归参谋。传了 id 也不认：这一层返回空，后面就没有专家解读可挂。
+    check(
+        "团模式一位参谋都不召唤",
+        srv._expert_ids({"expert_mode": "team", "experts": ["chief", "economy", "investment"]}) == [],
+        str(srv._expert_ids({"expert_mode": "team", "experts": ["chief"]})),
+    )
+    check(
+        "单参谋照旧只召唤那一位",
+        srv._expert_ids({"expert_mode": "single", "experts": ["economy"]}) == ["economy"],
+        "",
+    )
+
     # 展开发生在后端：前端只发 ["chief"]，7 位 id 由 _expert_ids 补出来。
     # 顺序也钉住 —— 总参谋必须在最后，否则它是第七个角度而不是收口。
     exp_ids = srv._expert_ids({"experts": ["chief"]})
@@ -4630,7 +4694,7 @@ def test_write_policy() -> None:
         str(exp_ids),
     )
     check(
-        "团模式那 3 位原样传，不展开",
+        "手动选 3 位原样传，不展开",
         srv._expert_ids({"experts": ["chief", "economy", "investment"]})
         == ["chief", "economy", "investment"],
         "",
@@ -4738,6 +4802,27 @@ def test_authz_scope() -> None:
                       {"units": ("市财政局",)})
     check("市领导能退回任意单位", ok is True, "")
 
+    # ── 3. 秘书：看全市、能辅政，但不代领导拍板 ──
+    sec = directory.person_scope("secretary")
+    check("秘书是全市视角", sec["is_citywide"] is True, str(sec))
+    check(
+        "秘书读得到任意单位",
+        authz.can(sec, authz.READ_OVERSIGHT, {"units": ("市财政局",)})[0],
+        "",
+    )
+    check("秘书能交办", authz.can(sec, authz.OVERSIGHT_CREATE, {"units": ("市财政局",)})[0], "")
+    check("秘书能催办", authz.can(sec, authz.OVERSIGHT_URGE, {"units": ("市财政局",)})[0], "")
+    check("秘书能建会", authz.can(sec, authz.MEETING_COMMIT)[0], "")
+    check("秘书能发会议通知", authz.can(sec, authz.MEETING_NOTICE)[0], "")
+    ok, why = authz.can(sec, authz.OVERSIGHT_CONFIRM, {"units": ("市财政局",)})
+    check("秘书不能确认办结", ok is False, why)
+    ok, why = authz.can(sec, authz.OVERSIGHT_REJECT, {"units": ("市财政局",)})
+    check("秘书不能退回", ok is False and "秘书" in why, f"{ok} {why}")
+    ok, why = authz.can(sec, authz.CONFIG_MODEL)
+    check("秘书不能改模型配置", ok is False, why)
+    ok, why = authz.can(sec, authz.MEETING_EDIT)
+    check("秘书不能改会议主档", ok is False, why)
+
 
 def test_http(port: int | None = None) -> None:
     port = port or int(os.environ.get("OCGOV_PORT") or 8090)
@@ -4817,9 +4902,10 @@ def test_http(port: int | None = None) -> None:
     )
     try:
         ppl = get("/api/people")
-        check("/api/people 三个身份", len(ppl.get("people") or []) == 3 and ppl.get("demo") is True, str(ppl)[:80])
+        ids = [p.get("id") for p in (ppl.get("people") or [])]
+        check("/api/people 四个身份", len(ids) == 4 and "secretary" in ids and ppl.get("demo") is True, str(ppl)[:80])
     except urllib.error.HTTPError as e:
-        check("/api/people 三个身份", False, f"code={e.code}（服务跑的是旧代码？）")
+        check("/api/people 四个身份", False, f"code={e.code}（服务跑的是旧代码？）")
 
     try:
         exs = get("/api/experts")
@@ -5800,6 +5886,58 @@ def test_directive() -> None:
         "请市住建局11月20日前完成46个小区改造开工，开工率100%", use_model=False
     )["tasks"][0]["assignee"] == "市住建局", "")
 
+    # ── 个人交办：市长交给秘书，不进台账，进秘书的日程 ──
+    # 单位任务和任务到人是两件事：前者要单位签收、进督办统计；后者是办公室内部
+    # 的活。混进台账会把「市政府办未签收」这种假数永远挂在统计里。
+    import schedule as sch
+
+    ptext = "让秘书 11 月 28 日前把三季度经济运行分析材料整理好，放到我桌上。"
+    pt = (dr.draft(ptext, use_model=False).get("tasks") or [{}])[0]
+    check("拟办认得出个人", pt.get("assignee_person") == "secretary" and not pt.get("assignee"), str(pt))
+    check("个人交办照样换算时限", pt.get("deadline") == date(base.year, 11, 28).isoformat(), str(pt.get("deadline")))
+    check("「秘书团」不被当成人", dr.looks_like_order("让秘书团看看这个数") is False, "")
+    check("给个人的活算交办句", dr.looks_like_order("让秘书把这个材料整理好") is True, "")
+
+    before_p = len(ov._ITEMS)
+    pres = dr.issue(
+        "让秘书 11 月 28 日前把材料整理好",
+        [dict(title="整理三季度经济运行分析材料", assignee="市长秘书",
+              deadline=(base + timedelta(days=5)).isoformat(),
+              standard="不少于5000字，附主要指标对比表")],
+        person="mayor", from_name="市长", can_assign_fn=lambda: (True, ""),
+    )
+    check("个人交办下发成功", pres.get("ok") is True, str(pres)[:100])
+    check("个人交办不进督办台账", len(ov._ITEMS) == before_p, f"{before_p} → {len(ov._ITEMS)}")
+    check("个人交办没有台账编号", pres.get("item_ids") == [], str(pres.get("item_ids")))
+
+    pdid = str(pres.get("id"))
+    check("秘书查得到这条交办", any(x["directive_id"] == pdid for x in dr.assigned_to("secretary")), "")
+    check("不派给市长自己", all(x["directive_id"] != pdid for x in dr.assigned_to("mayor")), "")
+
+    aev = [e for g in sch.build("secretary", 14)["groups"] for e in g["items"] if e["kind"] == "assign"]
+    check("交办排进秘书日程", any(e["title"] == "整理三季度经济运行分析材料" for e in aev), str([e["title"] for e in aev])[:100])
+    check("日程写明是谁交办", any("市长" in e["sub"] for e in aev), str(aev[:1])[:100])
+    check("条目指回那条令", any(str(e["ref"].get("id", "")).startswith(pdid) for e in aev), "")
+    check("不排进市长自己的日程", not any(
+        e["kind"] == "assign" for g in sch.build("mayor", 14)["groups"] for e in g["items"]), "")
+
+    denied_p = dr.issue(
+        "测试",
+        [dict(title="拟个稿", assignee="秘书", deadline=(base + timedelta(days=3)).isoformat(),
+              standard="不少于800字，含三条建议")],
+        person="vmayor", can_assign_fn=lambda: (False, "给人直接交办需要市领导。"),
+    )
+    check("非市领导不能给人交办", denied_p.get("ok") is False and "市领导" in str(denied_p.get("error")), str(denied_p)[:100])
+    check("被拒时不落一条", not any(x["title"] == "拟个稿" for x in dr.assigned_to("secretary")), "")
+
+    done = dr.complete_person_task(pdid, 1, by="secretary", done=True)
+    check("本人能标已办", done.get("ok") is True and done.get("done") is True, str(done)[:90])
+    check("办完的不再排进日程", not any(
+        e.get("title") == "整理三季度经济运行分析材料"
+        for g in sch.build("secretary", 14)["groups"] for e in g["items"] if e["kind"] == "assign"), "")
+    ps = dr.summary(pdid, {"person": "secretary", "is_citywide": True, "units": ()})
+    check("个人交办办完算办结", bool(ps) and ps.get("closed") == 1 and ps.get("phase") == "已办结", str(ps)[:90])
+
     # ── 对话里那句话和令之间必须是硬链接，不能拿原文比字符串 ──
     # 领导在对话里说话 → 系统出卡 → 人点下发才建令。那一刻模型已经收工了，
     # 「这句话派生了哪条令」只能靠 id 记下来：同一句话说两遍，原文一模一样，
@@ -5893,6 +6031,28 @@ def test_directive() -> None:
     # 反向：真问句必须还能走知识库，否则这一改就成了「所有事项问题都不答」
     r2 = ask_mod.ask("住建局那件事办到哪了", person_id="mayor")
     check("真问句仍走知识库", r2.get("intent") == "knowledge", f"intent={r2.get('intent')}")
+
+    # 台账里没有相近事项的交办句（「让秘书把材料整理好」）：以前两处都落空，
+    # 被答成「这个问题没有对应的指标」—— 领导听到的是「系统办不了这件事」。
+    order_soft = "让秘书把三季度经济运行分析材料整理好，放到我桌上"
+    r3 = ask_mod.ask(order_soft, person_id="mayor", team=False)
+    check(
+        "单参谋：非台账类交办句不再答成「没有对应的指标」",
+        "AI秘书团" in str(r3.get("headline") or "")
+        and "没有对应的指标" not in str(r3.get("headline") or ""),
+        str(r3.get("headline"))[:90],
+    )
+    check(
+        "单参谋：这类答复的意图是交办，不是拒答",
+        r3.get("intent") == "directive" and r3.get("refused") is False,
+        f"intent={r3.get('intent')} refused={r3.get('refused')}",
+    )
+    r4 = ask_mod.ask(order_soft, person_id="mayor", team=True)
+    check(
+        "团模式：没拟出卡时说清是对话层没跑通，而不是让人去换模式",
+        "没生成拟办卡" in str(r4.get("headline") or ""),
+        str(r4.get("headline"))[:90],
+    )
 
 
 def test_briefdoc() -> None:

@@ -25,6 +25,19 @@
 
 「执行中/已办结」是**派生**的，不是存的：只要有任何一条任务没办结，这条令就
 没办结。存了就会出现「令已办结、任务还在办」这种自相矛盾。
+
+## 两种交办：给单位，或给个人
+
+同一条令里的任务可以派给**责任单位**（进督办台账、有签收与状态机），也可以派给
+**某个人**（市长对秘书说「把这个材料整理好，26 号前放我桌上」）。两者不是一回事：
+
+- 单位任务进台账，因为它要的是**单位 accountability**：谁签收、谁办、逾期多少天。
+- 个人任务是**办公室内部的事**，不进督办台账 —— 把一个秘书的待办塞进单位台账，
+  会把全市督办统计搅浑（它会一直算「市政府办未签收」）。
+- 个人任务只挂在 directives 里，按 `assignee_person` 归属于那个人，出现在他的
+  AI 日程上；办完由本人（或市长）标「已办」，不设签收 / 审核 / 退回那一套流程。
+
+这也是为什么个人任务**不派生**督办状态：它没有第二份真相，`done_at` 就是全部。
 """
 
 from __future__ import annotations
@@ -37,6 +50,7 @@ from typing import Any, Callable
 
 import directory
 import oversight as ov
+import people
 import store
 
 FILE = "directives"
@@ -133,13 +147,17 @@ _QUERY_MARKS = (
 
 
 def looks_like_order(text: str) -> bool:
-    """这句话像不像「让谁去干什么」，而不是「问一件事办得怎样」。"""
+    """这句话像不像「让谁去干什么」，而不是「问一件事办得怎样」。
+
+    「谁」既可以是单位，也可以是人（「让秘书把材料整理好」）。只认单位的话，
+    给秘书派的活会掉进知识库链路，被答成一段台账摘录。
+    """
     s = (text or "").strip()
     if not s:
         return False
     if any(m in s for m in _QUERY_MARKS):
         return False
-    if not _unit_in(s):
+    if not _unit_in(s) and people.find_by_mention(s) is None:
         return False
     if any(s.startswith(x) for x in _ORDER_LEADS):
         return True
@@ -338,8 +356,11 @@ _SYSTEM = """你是市政府办公室的拟办秘书。领导给一句话，或�
 办到什么程度算办完（standard）。
 
 硬规矩：
-1. assignee 只能从这份单位清单里选，一字不差：{units}
-   拆不出责任单位的，assignee 留空字符串，**不要猜**。
+1. assignee 填「谁办」，只能是两类之一：
+   - 责任单位：从这份清单里选，一字不差：{units}
+   - 个人：只在原文明确说交给某个人时（「让秘书把材料整理好」「秘书起草一版」），
+     assignee 写这个人的称谓：{persons}。个人交办同样必须给 deadline 和 standard。
+   拆不出谁来办的，assignee 留空字符串，**不要猜**。
 2. deadline 用 YYYY-MM-DD。原文没写时限，留空字符串，**不要自己编一个**。
 3. standard 必须可验证：有数量、有完成状态、有可检查的对象。「加强监管」
    「高度重视」「切实推进」这类不算，遇到就留空。
@@ -358,24 +379,48 @@ _SYSTEM = """你是市政府办公室的拟办秘书。领导给一句话，或�
 
 def _model_split(text: str, model_ref: str | None, base: date) -> dict[str, Any] | None:
     import llmclient  # noqa: PLC0415  # 没配模型时这里会抛 ModelUnavailable
+    import modelcfg  # noqa: PLC0415
 
     system = _SYSTEM.format(
         today=base.isoformat(),
         year=base.year,
         next_year=base.year + 1,
         units="、".join(directory.UNITS),
+        persons="、".join(p["name"] for p in people.assignable()) or "（无）",
     )
-    out = llmclient.chat_json(system, text, model_ref=model_ref, temperature=0.0, max_tokens=1200)
-    data = out.get("data") or {}
-    tasks = data.get("tasks")
-    if not isinstance(tasks, list):
-        return None
-    return {
-        "tasks": tasks,
-        "issues": [str(x) for x in (data.get("issues") or []) if str(x).strip()],
-        "assumptions": [str(x) for x in (data.get("assumptions") or []) if str(x).strip()],
-        "model": out.get("model"),
-    }
+    # 备用模型链：对话层和规划器都在首选不通时换下一个，拆解这一环以前没有，
+    # 于是本地模型没起的那几个小时里，拟办卡永远只有"验收标准待定"。拆解是可
+    # 重试的只读推理，换一个模型重问一次没有副作用。
+    refs: list[str] = [str(model_ref or modelcfg.active_ref() or "")]
+    for item in modelcfg.resolved():
+        ref = str(item.get("ref") or "")
+        if ref and ref not in refs:
+            refs.append(ref)
+    last_error: Exception | None = None
+    for ref in refs[:3]:
+        try:
+            out = llmclient.chat_json(
+                system, text, model_ref=ref or None, temperature=0.0, max_tokens=1200
+            )
+        except llmclient.ModelUnavailable:
+            raise
+        except Exception as exc:  # noqa: BLE001 换一个模型再试，全都不通才退回规则
+            last_error = exc
+            continue
+        data = out.get("data") or {}
+        tasks = data.get("tasks")
+        if not isinstance(tasks, list):
+            last_error = ValueError("返回里没有 tasks 数组")
+            continue
+        return {
+            "tasks": tasks,
+            "issues": [str(x) for x in (data.get("issues") or []) if str(x).strip()],
+            "assumptions": [str(x) for x in (data.get("assumptions") or []) if str(x).strip()],
+            "model": out.get("model"),
+        }
+    if last_error is not None:
+        raise last_error
+    return None
 
 
 # 同一处缺项会被说三遍：模型说一遍、规则兜底说一遍、清空猜测再补一句。卡上只留
@@ -400,11 +445,16 @@ def _dedupe_issues(issues: list[str]) -> list[str]:
     return out
 
 
-def _normalize_task(row: dict[str, Any], base: date) -> tuple[dict[str, Any] | None, list[str]]:
+def _normalize_task(
+    row: dict[str, Any], base: date, raw: str = ""
+) -> tuple[dict[str, Any] | None, list[str]]:
     """把一条拟办整理成系统认得的形状，并记下为什么不能用。
 
     这里**不抛异常、不静默修**：认不出的单位就留空并说明，过期的时限就留着让
     下发时拒。拟办是给人看的草稿，能改；下发才是硬约束。
+
+    `raw` 是指示原文：模型有时把「让秘书办」的活填成空单位，这时按原文里的人名
+    补上 —— 原文点了名就是定了，不是我们替他猜。
     """
     issues: list[str] = []
     title = _clean_title(str(row.get("title") or ""))
@@ -413,12 +463,19 @@ def _normalize_task(row: dict[str, Any], base: date) -> tuple[dict[str, Any] | N
 
     raw_unit = str(row.get("assignee") or "").strip()
     unit = directory.normalize_unit(raw_unit)
-    if raw_unit and not unit:
+    # 个人交办：assignee 写的是人的称谓（「秘书」「市长秘书」）。
+    person: dict[str, Any] | None = None
+    if not unit:
+        person = people.find_by_mention(raw_unit) if raw_unit else people.find_by_mention(raw)
+    if raw_unit and not unit and person is None:
         issues.append(f"「{title}」的责任单位「{raw_unit}」不在单位目录里，请重选")
-    elif not raw_unit:
-        issues.append(f"「{title}」没说谁办，请补责任单位")
+    elif not raw_unit and person is None:
+        issues.append(f"「{title}」没说谁办，请补责任单位或交办人")
     if unit:
         title = _trim_unit(title, unit)
+    elif person:
+        # 标题里带着「让秘书」这类前缀时去掉，人物已经单独成字段
+        title = _trim_person(title, person)
 
     raw_dl = str(row.get("deadline") or "").strip()
     deadline = parse_deadline(raw_dl, base) if raw_dl else ""
@@ -447,16 +504,35 @@ def _normalize_task(row: dict[str, Any], base: date) -> tuple[dict[str, Any] | N
         if u and u != unit and u not in co:
             co.append(u)
 
-    return (
-        {
-            "title": title,
-            "assignee": unit or "",
-            "co_assignees": co,
-            "deadline": deadline,
-            "standard": standard,
-        },
-        issues,
-    )
+    task: dict[str, Any] = {
+        "title": title,
+        "assignee": unit or "",
+        "co_assignees": co,
+        "deadline": deadline,
+        "standard": standard,
+    }
+    if person and not unit:
+        # 个人任务和单位任务长在一起，靠这两个字段分开：前端要显示是谁，
+        # 日程要按 assignee_person 认领。个人任务没有协办单位。
+        task["assignee_person"] = str(person["id"])
+        task["assignee_name"] = str(person.get("name") or person["id"])
+        task["co_assignees"] = []
+    return task, issues
+
+
+def _trim_person(title: str, person: dict[str, Any]) -> str:
+    """标题开头的「让秘书」「秘书：」去掉 —— 交办人已经是单独一列了。"""
+    labels = [str(x) for x in (person.get("mentions") or ()) if str(x)]
+    labels.sort(key=len, reverse=True)
+    out = title
+    for label in labels:
+        out = re.sub(rf"^(?:让|请|叫|安排)?\s*{re.escape(label)}[，,：:、\s]*", "", out)
+    return out or title
+
+
+def _assignee_in(text: str) -> str:
+    """一句话里的交办对象：先认单位，再认人。认不出返回空串。"""
+    return _unit_in(text) or str((people.find_by_mention(text) or {}).get("name") or "")
 
 
 def draft(
@@ -498,7 +574,7 @@ def draft(
         rows = [
             {
                 "title": _clean_title(seg),
-                "assignee": _unit_in(seg),
+                "assignee": _assignee_in(seg),
                 "deadline": parse_deadline(seg, base),
                 # 摘一句原文里能量化的话当验收标准；摘不出来就留空，等人在卡上补
                 "standard": _measure(seg),
@@ -520,8 +596,14 @@ def draft(
     for row in rows:
         if hedged:
             raw_unit = str(row.get("assignee") or "").strip()
-            fixed = directory.normalize_unit(raw_unit) or raw_unit
-            if raw_unit and not directory.mentioned_in(raw, fixed):
+            unit = directory.normalize_unit(raw_unit)
+            person = people.find_by_mention(raw_unit) if raw_unit else None
+            # 「原文点过名」既包括单位，也包括人（原文说「让秘书办」，模型填「秘书」
+            # 就不该被当成它自己编的）
+            named = bool(unit and directory.mentioned_in(raw, unit)) or bool(
+                person and people.find_by_mention(raw)
+            )
+            if raw_unit and not named:
                 row = {**row, "assignee": ""}
                 note = f"（模型原填「{raw_unit}」已清空，请确认后重选）"
                 title = _clean_title(str(row.get("title") or ""))
@@ -532,7 +614,7 @@ def draft(
                         break
                 else:
                     issues.append(f"「{title}」原文没点谁牵头" + note)
-        task, why = _normalize_task(row, base)
+        task, why = _normalize_task(row, base, raw)
         if task:
             task["no"] = len(tasks) + 1
             tasks.append(task)
@@ -567,7 +649,11 @@ def _new_id(doc: dict[str, Any], base: date) -> str:
 
 
 def validate_tasks(tasks: list[dict[str, Any]], base: date | None = None) -> tuple[list[dict[str, Any]], list[str]]:
-    """下发前的硬校验。返回（可用的任务，问题清单）。有任何一个问题就不许下发。"""
+    """下发前的硬校验。返回（可用的任务，问题清单）。有任何一个问题就不许下发。
+
+    一条任务要么有责任单位（进台账），要么有交办人（个人待办），二者必居其一。
+    都有时按单位算 —— 单位才是能被签收、被统计的那一层。
+    """
     base = base or today()
     out: list[dict[str, Any]] = []
     problems: list[str] = []
@@ -584,9 +670,14 @@ def validate_tasks(tasks: list[dict[str, Any]], base: date | None = None) -> tup
         if not title:
             problems.append(f"第 {idx} 条没写办什么")
             continue
-        unit = directory.normalize_unit(str(row.get("assignee") or ""))
+        raw_who = str(row.get("assignee") or "").strip()
+        unit = directory.normalize_unit(raw_who)
+        person: dict[str, Any] | None = None
         if not unit:
-            problems.append(f"第 {idx} 条的责任单位「{row.get('assignee') or '空'}」不在单位目录里")
+            pid = str(row.get("assignee_person") or "").strip()
+            person = people.find(pid) if pid else people.find_by_mention(raw_who)
+        if not unit and person is None:
+            problems.append(f"第 {idx} 条的责任单位/交办人「{raw_who or '空'}」认不出")
             continue
         dl = parse_deadline(str(row.get("deadline") or ""), base)
         if not dl:
@@ -610,16 +701,19 @@ def validate_tasks(tasks: list[dict[str, Any]], base: date | None = None) -> tup
                 continue
             if u != unit and u not in co:
                 co.append(u)
-        out.append(
-            {
-                "no": idx,
-                "title": title,
-                "assignee": unit,
-                "co_assignees": co,
-                "deadline": dl,
-                "standard": standard,
-            }
-        )
+        task: dict[str, Any] = {
+            "no": idx,
+            "title": title,
+            "assignee": unit or "",
+            "co_assignees": co,
+            "deadline": dl,
+            "standard": standard,
+        }
+        if person and not unit:
+            task["assignee_person"] = str(person["id"])
+            task["assignee_name"] = str(person.get("name") or person["id"])
+            task["co_assignees"] = []
+        out.append(task)
     return out, problems
 
 
@@ -643,8 +737,14 @@ def _recent_duplicate(text: str, tasks: list[dict[str, Any]]) -> str:
             continue
         if (now - issued).total_seconds() > 1800:
             continue
-        old = {(t.get("title"), t.get("assignee"), t.get("deadline")) for t in d.get("tasks") or []}
-        new = {(t.get("title"), t.get("assignee"), t.get("deadline")) for t in tasks}
+        old = {
+            (t.get("title"), t.get("assignee") or t.get("assignee_person"), t.get("deadline"))
+            for t in d.get("tasks") or []
+        }
+        new = {
+            (t.get("title"), t.get("assignee") or t.get("assignee_person"), t.get("deadline"))
+            for t in tasks
+        }
         if old and old == new:
             return str(d.get("id"))
     return ""
@@ -660,6 +760,7 @@ def issue(
     source_ref: str = "",
     origin: dict[str, str] | None = None,
     can_fn: Callable[[tuple[str, ...]], tuple[bool, str]] | None = None,
+    can_assign_fn: Callable[[], tuple[bool, str]] | None = None,
     base: date | None = None,
 ) -> dict[str, Any]:
     """把一份拟办落成「令 + N 条督办事项」。要么全成，要么一条都不留。
@@ -689,8 +790,17 @@ def issue(
 
     # 权限：逐条判，一条不过就整批不办。半份交办比不办更糟 ——
     # 责任单位收到的那几条会在办，没收到的那几条谁也不知道还没下发。
+    # 个人任务不在这里判：它不写台账，行级锚点（责任单位）根本不存在，
+    # 由调用方按角色判一次（只有市领导能把活直接派给个人）。
+    if any(t.get("assignee_person") for t in clean) and can_assign_fn is not None:
+        ok2, why2 = can_assign_fn()
+        if not ok2:
+            return {"ok": False, "error": why2, "problems": [why2]}
+
     if can_fn is not None:
         for t in clean:
+            if t.get("assignee_person"):
+                continue
             allowed, why = can_fn(tuple([t["assignee"], *t["co_assignees"]]))
             if not allowed:
                 return {
@@ -724,6 +834,11 @@ def issue(
 
         created: list[str] = []
         for t in clean:
+            if t.get("assignee_person"):
+                # 个人任务不进督办台账：它不是单位 accountability，塞进去会让
+                # 统计里凭空多出一条「未签收」，而那位秘书根本没有签收入口。
+                t["item_id"] = ""
+                continue
             res = ov.create_item(
                 title=t["title"],
                 assignee=t["assignee"],
@@ -756,7 +871,8 @@ def issue(
         "id": did,
         "status": STATUS_ISSUED,
         "issued_at": stamp,
-        "item_ids": [t["item_id"] for t in clean],
+        # 个人交办没有台账编号，不往这批里塞空串 —— 前端拿它当编号列表渲染
+        "item_ids": [t["item_id"] for t in clean if t.get("item_id")],
         "tasks": clean,
     }
 
@@ -786,6 +902,9 @@ def _visible(d: dict[str, Any], scope: dict[str, Any] | None) -> bool:
         return True
     mine = {str(u) for u in (scope.get("units") or ())}
     for t in d.get("tasks") or []:
+        # 派给我的个人交办：本人当然要看得到
+        if str(t.get("assignee_person") or "") == str(scope.get("person")):
+            return True
         if str(t.get("assignee")) in mine:
             return True
         if mine & {str(x) for x in (t.get("co_assignees") or [])}:
@@ -793,7 +912,31 @@ def _visible(d: dict[str, Any], scope: dict[str, Any] | None) -> bool:
     return False
 
 
+def _days_left(t: dict[str, Any]) -> int | None:
+    try:
+        return (date.fromisoformat(str(t.get("deadline") or "")) - today()).days
+    except ValueError:
+        return None
+
+
 def _task_state(t: dict[str, Any]) -> dict[str, Any]:
+    # 个人任务没有台账条目，状态只有两种：待办 / 已办。逾期按 deadline 现算，
+    # 不另存 —— 存了就要有人每天去翻一遍，翻漏了就是「显示正常、其实逾期」。
+    if t.get("assignee_person"):
+        done = bool(t.get("done_at"))
+        left = _days_left(t)
+        risk = "—"
+        if not done and left is not None:
+            risk = ov.RISK_OVERDUE if left < 0 else (ov.RISK_TODAY if left == 0 else ov.RISK_NONE)
+        return {
+            "item_id": "",
+            "status": "已办" if done else "待办",
+            "risk": risk,
+            "days_left": left,
+            "percent": 100 if done else 0,
+            "signed": done,
+            "done": done,
+        }
     iid = str(t.get("item_id") or "")
     item = ov.get(iid) if iid else None
     if item is None:
@@ -828,6 +971,8 @@ def summary(did: str, scope: dict[str, Any] | None = None) -> dict[str, Any] | N
                 "no": t.get("no"),
                 "title": t.get("title"),
                 "assignee": t.get("assignee"),
+                "assignee_person": t.get("assignee_person") or "",
+                "assignee_name": t.get("assignee_name") or "",
                 "co_assignees": t.get("co_assignees") or [],
                 "deadline": t.get("deadline"),
                 "standard": t.get("standard"),
@@ -836,7 +981,8 @@ def summary(did: str, scope: dict[str, Any] | None = None) -> dict[str, Any] | N
         )
     total = len(rows)
     signed = sum(1 for r in rows if r["signed"])
-    closed = sum(1 for r in rows if r["status"] == ov.CLOSED)
+    # 已办的个人任务也算办结：`done` 是它唯一的状态来源（没有台账可派生）
+    closed = sum(1 for r in rows if r["status"] == ov.CLOSED or r.get("done"))
     overdue = sum(1 for r in rows if r["risk"] == ov.RISK_OVERDUE)
     unsigned = sum(1 for r in rows if r["status"] == ov.PENDING)
     return {
@@ -914,3 +1060,90 @@ def scan(scope: dict[str, Any] | None = None, days: int = 7) -> dict[str, Any]:
         "window_days": days,
         "as_of": base.isoformat(),
     }
+
+
+# --------------------------------------------------------------------------
+# 个人交办：派给某个人的任务，进他的日程
+# --------------------------------------------------------------------------
+def assigned_to(pid: str | None) -> list[dict[str, Any]]:
+    """派给某个人的任务（含已办）。日程只排没办的，详情要能翻已办的。
+
+    只按人取、不按单位取 —— 个人任务本来就没有单位锚点。同一个人的任务可能
+    来自好几条令，所以每行都带上 `directive_id`，点开能回到令的原文。
+    """
+    who = str(pid or "")
+    if not who:
+        return []
+    out: list[dict[str, Any]] = []
+    for d in _cfg().get("items") or []:
+        if d.get("status") != STATUS_ISSUED:
+            continue
+        for t in d.get("tasks") or []:
+            if str(t.get("assignee_person") or "") != who:
+                continue
+            st = _task_state(t)
+            out.append(
+                {
+                    "directive_id": str(d.get("id") or ""),
+                    "no": t.get("no"),
+                    "title": t.get("title"),
+                    "deadline": t.get("deadline"),
+                    "standard": t.get("standard"),
+                    "from": d.get("from"),
+                    "from_name": d.get("from_name"),
+                    "text": d.get("text"),
+                    "issued_at": d.get("issued_at"),
+                    "status": st["status"],
+                    "risk": st["risk"],
+                    "days_left": st["days_left"],
+                    "done": bool(st.get("done")),
+                }
+            )
+    out.sort(key=lambda r: (str(r.get("deadline") or "9999-12-31"), str(r.get("directive_id")), str(r.get("no"))))
+    return out
+
+
+def person_task(did: str, no: int | str) -> dict[str, Any] | None:
+    """一条令里的某条个人任务（不是个人任务返回 None）。"""
+    d = get(did)
+    if d is None:
+        return None
+    for t in d.get("tasks") or []:
+        if str(t.get("no")) == str(no) and t.get("assignee_person"):
+            return {"directive": d, "task": t}
+    return None
+
+
+def complete_person_task(did: str, no: int | str, *, by: str, done: bool = True) -> dict[str, Any]:
+    """把一条个人交办标成「已办」，或撤销这个标记。
+
+    谁能操作由调用方判（本人或市领导）。这里只落 `done_at / done_by`：
+    个人任务不另设状态机，标了就是办完了，撤了就是没办 —— 没有第三种。
+    """
+    box: dict[str, Any] = {"ok": False}
+
+    def _do(doc: dict[str, Any]) -> dict[str, Any]:
+        for d in doc.get("items") or []:
+            if str(d.get("id")) != str(did):
+                continue
+            for t in d.get("tasks") or []:
+                if str(t.get("no")) != str(no) or not t.get("assignee_person"):
+                    continue
+                t["done_at"] = _now().strftime("%Y-%m-%d %H:%M") if done else ""
+                t["done_by"] = by if done else ""
+                box.update(
+                    {
+                        "ok": True,
+                        "directive_id": did,
+                        "no": t.get("no"),
+                        "title": t.get("title"),
+                        "assignee_person": t.get("assignee_person"),
+                        "done": done,
+                    }
+                )
+                return doc
+        box["error"] = "task_not_found"
+        return doc
+
+    store.update(FILE, _do, default=_empty())
+    return box

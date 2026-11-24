@@ -5,6 +5,7 @@
 - 会议 → `data/meetings.json` 的 `held_at`（有具体钟点）
 - 督办时限 → 台账里那条事项的 `deadline`
 - 待签收 / 待审核 / 逾期 / 停滞 → 台账状态机算出来的，不是这里判的
+- 领导交办 → `data/directives.json` 里派给本人的任务（只排自己的，不排单位的）
 - 数据披露 → `mockdata.DISCLOSURE_DAY`（每月 10 日披露上一个月报）
 
 所以它不做「手工建日程」这件事。手工排期等于再造一份只有自己知道的日历，
@@ -33,6 +34,7 @@ for _p in (ROOT / "core", ROOT / "core" / "metrics", ROOT / "core" / "oversight"
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
+import directives as directives_mod  # noqa: E402
 import llmclient  # noqa: E402
 import mockdata as md  # noqa: E402
 import oversight as ov  # noqa: E402
@@ -50,11 +52,23 @@ KINDS: dict[str, tuple[str, str]] = {
     "overdue": ("已逾期", "danger"),
     "nudge": ("补报进展", "warn"),
     "deadline": ("办结时限", "info"),
+    "assign": ("领导交办", "brand"),
     "disclosure": ("数据披露", "muted"),
 }
 
 # 今日事项的紧急度基准分。逾期压过会议：会可以迟到，时限过了就是过了。
-_SCORE = {"overdue": 95, "sign": 88, "review": 82, "deadline_today": 90, "nudge": 74, "meeting": 70, "disclosure": 30}
+# 领导交办的自定义排序：逾期的交办压过「待签收」（那是单位的事），但低于台账逾期。
+_SCORE = {
+    "overdue": 95,
+    "assign_overdue": 92,
+    "sign": 88,
+    "assign_today": 86,
+    "review": 82,
+    "deadline_today": 90,
+    "nudge": 74,
+    "meeting": 70,
+    "disclosure": 30,
+}
 
 _WEEK = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
@@ -205,6 +219,57 @@ def _today_action(it: dict[str, Any], today: date) -> dict[str, Any] | None:
     return None
 
 
+def _assign_events(person: dict[str, Any], today: date, horizon: date) -> list[dict[str, Any]]:
+    """领导直接交办给这个人的事（办公室内部的事，不进督办台账）。
+
+    时间只有一个锚点：交办时限。逾期的归到今天，和台账逾期同一口径 —— 挂在
+    过去的日子上，当事人翻日历永远翻不到。时限在窗口外的先不排：那不是「没有
+    这件事」，是还没到该排的时候（台账的 deadline 也是这么处理的）。
+    """
+    out: list[dict[str, Any]] = []
+    for t in directives_mod.assigned_to(person.get("id")):
+        if t.get("done"):
+            continue
+        due = _d(str(t.get("deadline") or ""))
+        if due is None:
+            continue
+        who = str(t.get("from_name") or "领导")
+        ref = {"type": "assignment", "id": f"{t['directive_id']}#{t['no']}"}
+        if due < today:
+            bits = [f"{who} 交办", f"原定 {t['deadline']} 办结，已逾 {(today - due).days} 天"]
+            if t.get("standard"):
+                bits.append(f"验收：{t['standard']}")
+            out.append(
+                _ev(
+                    "assign",
+                    today.isoformat(),
+                    str(t.get("title") or ""),
+                    " · ".join(bits),
+                    ref=ref,
+                    why=f"{who}交办的事已经逾期，先补这一件",
+                    score=_SCORE["assign_overdue"],
+                    extra={"days_left": (due - today).days, "origin_deadline": t["deadline"]},
+                )
+            )
+            continue
+        if due > horizon:
+            continue
+        left = (due - today).days
+        out.append(
+            _ev(
+                "assign",
+                due.isoformat(),
+                str(t.get("title") or ""),
+                f"{who} 交办 · 验收：{t.get('standard') or '未定'}",
+                ref=ref,
+                why=("今天到期，办完回一声" if left == 0 else f"距交办时限还有 {left} 天"),
+                score=_SCORE["assign_today"] if left == 0 else 42 + (horizon - due).days,
+                extra={"days_left": left},
+            )
+        )
+    return out
+
+
 def _events(person: dict[str, Any], days: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     now = _now()
     today = now.date()
@@ -287,6 +352,10 @@ def _events(person: dict[str, Any], days: int) -> tuple[list[dict[str, Any]], li
             )
         )
 
+    # 个人交办：市长对秘书说的「26 号前把这个材料整理好」这类，不进台账但有时间。
+    # 放在会议之后、披露之前，排序交给 _SCORE。
+    out.extend(_assign_events(person, today, horizon))
+
     # 数据披露：每月 10 日披露上一个月报。这是唯一一个「周期节点」，
     # 不挂在任何一条事项上，但确实是领导要等的时间。
     disc = _next_disclosure(today)
@@ -368,13 +437,14 @@ def build(person_id: str | None = "mayor", days: int = WINDOW_DEFAULT) -> dict[s
             "today": len(todays),
             "overdue": sum(1 for e in events if e["kind"] == "overdue"),
             "meetings": sum(1 for e in events if e["kind"] == "meeting"),
+            "assignments": sum(1 for e in events if e["kind"] == "assign"),
             "days_with_events": len(groups),
             # 今天第一条就是最该先办的：排序已经把逾期、签收、临近会议顶到前面
             "lead": todays[0]["title"] if todays else "",
         },
         # 口径写在数据里，前端照抄，不在两处各写一份文案
         "basis": ("分管单位：" + "、".join(units)) if units else "全市（不按单位筛）",
-        "rule": "日程只收已有时间的事：督办时限与状态、会议时间、统计数据披露日。没有手工排期。",
+        "rule": "日程只收已有时间的事：督办时限与状态、领导交办、会议时间、统计数据披露日。没有手工排期。",
         "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
         "mock": True,
     }

@@ -495,7 +495,13 @@ def _expert_ids(body: dict) -> list[str]:
 
     单选总参谋时由 `expand_for_chief` 展开成全部分管参谋 + 总参谋（排最后）。
     展开必须放在 [:3] **之后**：先展开再截断，7 个 id 会被这一步自己砍掉。
+
+    **AI秘书团不是参谋团，一位参谋都不召唤。** 秘书受令办事（拟办、派活、催办、
+    查指示），解读归参谋 —— 团模式下弹出三张参谋卡，用户会以为秘书在替他做判断，
+    而且那三次调用没人看。传上来也不认：这一层返回空，交办权仍按 `_is_team` 判。
     """
+    if _is_team(body):
+        return []
     raw = body.get("experts")
     if not isinstance(raw, list):
         single = str(body.get("expert") or "").strip()
@@ -507,8 +513,8 @@ def _expert_ids(body: dict) -> list[str]:
 def _is_team(body: dict) -> bool:
     """这一轮是不是「AI秘书团」（团模式）。
 
-    只看前端显式给的 `expert_mode`，不从 `experts` 的长度反推：团模式固定带前 3 位
-    参谋，跟「用户手动点了 3 位」在后端长得一模一样，靠数量猜必然猜错。
+    只看前端显式给的 `expert_mode`，不从 `experts` 的长度反推：团模式不召唤参谋
+    （`experts` 是空数组），跟「用户没选参谋」在请求里长得一模一样，靠数量猜必然猜错。
 
     交办（拟办 / 查指示办理情况）只对团模式开放 —— 见 core/agent.py 的 _DIRECTIVE_TOOLS。
     前端漏传就是 False，宁可少给权限。
@@ -587,8 +593,10 @@ WRITE_POLICY: tuple[tuple[str, str, str | None], ...] = (
     # 指示下发：一次落成「一条令 + N 条督办事项」。粗闸门只要求登录，
     # 逐条的行级判定在 handler 里做 —— 一条不过就整批不办，不留半份交办。
     ("POST", r"/api/directive", authz.GATE_SESSION),
+    # 个人交办「标记已办」：只动自己那条，行级判定（本人 / 市领导）在 handler 里。
+    ("POST", r"/api/assignment/done", authz.GATE_SESSION),
 
-    # ── 会议：市级动作，只有市领导 ──
+    # ── 会议：市级动作，市领导或秘书（秘书替领导排会、发通知是本职） ──
     ("POST", r"/api/meetings", authz.MEETING_COMMIT),
     ("POST", r"/api/meetings/[^/]+/parse", authz.MEETING_COMMIT),
     ("POST", r"/api/meetings/[^/]+/commit", authz.MEETING_COMMIT),
@@ -1299,6 +1307,9 @@ class Handler(BaseHTTPRequestHandler):
                         "ok": True,
                         "items": directives_mod.list_all(self._directive_scope()),
                         "units": directives_mod.units(),
+                        # 能接个人交办的人（现在只有市长秘书）。卡片上这一列
+                        # 既能填单位也能填人，下拉里两种情况都要有。
+                        "people": people.assignable(),
                     }
                 )
             dparts = _parts(path, "/api/directive/")
@@ -2028,6 +2039,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/directive":
                 return self._issue_directive(body)
 
+            # ---- 个人交办：标记已办 / 撤销 ----
+            if path == "/api/assignment/done":
+                return self._complete_assignment(body)
+
             # ---- AI 日程：今日简报 ----
             # 模型只写一句重点和几条理由；事项、时间全部由服务端重算，前端传什么都不作数。
             if path == "/api/schedule/brief":
@@ -2598,6 +2613,25 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(tasks, list) or not tasks:
             return self._json({"ok": False, "error": "至少要有一条交办事项。"}, 400)
 
+        # 派给个人（「让秘书 26 号前把材料整理好」）是另一道权限：不写台账、
+        # 不走签收，等于把活直接放进某人的日程。只给市领导，单独判一次 ——
+        # 混在 OVERSIGHT_CREATE 里判会漏（那是按单位判的行级授权）。
+        wants_person = any(
+            isinstance(t, dict)
+            and not directory.normalize_unit(str(t.get("assignee") or ""))
+            and (
+                people.find_by_mention(str(t.get("assignee") or ""))
+                or people.find(str(t.get("assignee_person") or ""))
+            )
+            for t in tasks
+        )
+        if wants_person:
+            okp, whyp = authz.can(scope, authz.TASK_ASSIGN)
+            if not okp:
+                audit.user_event(scope.get("person"), "access.denied",
+                                 target=authz.TASK_ASSIGN, payload={"reason": whyp})
+                return self._json({"ok": False, "error": whyp}, 403)
+
         person = scope["person"]
         # 出生地：哪次对话的哪条消息。前端从卡片上带过来，只有前端知道自己在
         # 哪条气泡里点了按钮。拿不到就是空 —— 老消息、或从别的入口进来的下发，
@@ -2615,6 +2649,7 @@ class Handler(BaseHTTPRequestHandler):
             source_ref=str(body.get("source_ref") or ""),
             origin=origin,
             can_fn=lambda units: authz.can(scope, authz.OVERSIGHT_CREATE, {"units": units}),
+            can_assign_fn=lambda: authz.can(scope, authz.TASK_ASSIGN),
         )
         audit.user_event(
             person, authz.OVERSIGHT_CREATE, target=res.get("id"),
@@ -2640,6 +2675,40 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001 回写是锦上添花，坏了不能影响已经落库的令
                 pass
         return self._json({**res, "stats": ov.stats()})
+
+    def _complete_assignment(self, body: dict) -> None:
+        """把一条个人交办标成已办（或撤销）。
+
+        只有两种人能操作：接办人本人（自己的待办自己清）、市领导（他派的活，
+        他可以说不用办了）。别人替他把活标成办完，等于把待办从日程上抹掉 ——
+        这比不让他操作危险得多。
+        """
+        scope, allowed, why = self._require(authz.GATE_SESSION)
+        if not allowed:
+            audit.user_event(scope.get("person") if scope else None, "access.denied",
+                             target="assignment.done", payload={"reason": why})
+            return self._json({"ok": False, "error": why}, 401 if scope is None else 403)
+
+        did = str(body.get("directive_id") or "").strip()
+        no = body.get("no")
+        hit = directives_mod.person_task(did, no)
+        if hit is None:
+            return self._json({"ok": False, "error": "没找到这条个人交办。"}, 404)
+
+        target = str(hit["task"].get("assignee_person") or "")
+        if scope["person"] != target and not authz.can(scope, authz.TASK_ASSIGN)[0]:
+            audit.user_event(scope["person"], "access.denied",
+                             target="assignment.done", payload={"directive": did, "no": no})
+            return self._json({"ok": False, "error": "只有接办人本人或市领导能标记这条。"}, 403)
+
+        done = body.get("done") is not False
+        res = directives_mod.complete_person_task(did, no, by=scope["person"], done=done)
+        if res.get("ok"):
+            audit.user_event(
+                scope["person"], "assignment.done" if done else "assignment.reopen",
+                target=f"{did}#{no}",
+            )
+        return self._json(res, 200 if res.get("ok") else 400)
 
     # ---------------- 认证 ----------------
     def _login(self, body: dict) -> None:
@@ -3556,9 +3625,13 @@ def main() -> None:
 
     # 口令引导：代码里没有内置口令（仓库公开，写死的默认口令等于没有口令）。
     # 环境变量 > 已有记录 > 全新安装随机生成一个、只在这里打印一次。
+    # 新加身份时这里只会打印新增的那几条（老身份的口令不动）。
     generated = credentials.bootstrap([p["id"] for p in people.all_people()])
     if generated:
-        print(f"首次启动：已生成登录口令 {generated}", flush=True)
+        fresh = "首次启动" if len(generated) == len(people.all_people()) else "新身份补口令"
+        for pid, pwd in generated.items():
+            label = (people.find(pid) or {}).get("name") or pid
+            print(f"{fresh}：已生成登录口令 {label}（{pid}） {pwd}", flush=True)
         print(
             "  请记下它。忘了可删除 data/credentials.json 重新生成，"
             "或设置环境变量 OCGOV_PASSWORD 覆盖（后者会重新派生全部口令）。",
