@@ -15,8 +15,16 @@ __pycache__/
 # 生成物：内嵌 data/ 快照的单文件工作台，数据一变整文件重写，不入库
 docs/workbench.html
 
+# 演示分镜图：由 docs/演示视频分镜单.md 经 tools/gen_storyboard.py 逐张重出，
+# 体积大（近 4M）且属于生成物；.rar 是同批图的打包，一并排除
+docs/分镜图/
+docs/分镜图.rar
+
 # 本地助手的工作区（记忆与临时文件），不属于项目代码
 .workbuddy/
+
+# 一次性调试产物（curl 回包、出图时用的 headless 浏览器 profile），可随时重跑
+.tmp_*
 
 # 离线快照导出物（每导一次整份重写，不入库）
 dist/
