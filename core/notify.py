@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import smtplib
 import sys
 import threading
@@ -159,6 +160,11 @@ _LEVEL_LABEL = {"urgent": "需要立刻处理", "high": "今天要跟进", "norm
 # 外发只发这两级。剩下的进站内信，不弹窗、不推群。
 _EXTERNAL_LEVELS = ("urgent", "high")
 
+# 通道的对外说法。内部的 webhook / smtp 是给代码和配置看的，
+# 提示语里要写成「群机器人」「邮件」——否则用户看到的是一句他不懂的话。
+_CHANNEL_NAME = {"webhook": "群机器人", "smtp": "邮件"}
+_NO_CHANNEL_MSG = "还没接群机器人或邮箱，提醒只留在工作台里"
+
 # 督办桶 → 规则。桶的顺序就是优先级：一件事项同时逾期又停滞时，只按逾期提醒。
 # 这条和日程 `_today_action()` 的合并规则一致 —— 一件事一天只能冒出来一次，
 # 冒两次用户得自己对编号。
@@ -271,9 +277,9 @@ def channels_status() -> dict[str, Any]:
         "workdays_only": bool(cfg.get("workdays_only", True)),
         "daily_limit": int(cfg.get("daily_limit") or 20),
         "note": (
-            "已配置外发通道：紧急与重要提醒会同时送出站内信和外部通道"
+            "已接上群机器人或邮箱：紧急与重要提醒会同时留在工作台并发送出去"
             if (hook_on or mail_on)
-            else "未配置外发通道：提醒只在本机可见，责任单位收不到。配置方式见「送达配置」"
+            else "还没接群机器人或邮箱：提醒只在本机可见，责任单位收不到。到「设置 → 提醒与送达」里填。"
         ),
     }
 
@@ -301,6 +307,214 @@ def config_template() -> str:
         ensure_ascii=False,
         indent=2,
     )
+
+
+# --------------------------------------------------------------------------
+# 通道配置：页面能改，不用去动文件
+# --------------------------------------------------------------------------
+# 早先只能改 config/notify.json + 重启（其实不用重启，config() 每次现读）。
+# 结果是页面上写着「未配置外发通道」，却没有一个地方能填 —— 提醒一直留在本机，
+# 而用户以为是自己没找到入口。所以补一个写入口径，规则只有三条：
+#
+# 1. **密钥字段空 = 不改**。页面回显的是打码值（`_mask`），拿打码值当新地址提交
+#    会把真地址覆盖成一串省略号，群当场失联。要清空得显式传 `null`。
+# 2. **其余字段以页面为准**（空 = 清空）。它们不是密钥，回显的是真值。
+# 3. **先校验、后落盘，整体拒绝**。写坏一个键不只是那一个通道失效：
+#    `config()` 里那个 except 会把整份文件当坏文件吃掉，回到默认值 ——
+#    四个通道一起消失，比报一个错难查得多。
+_CONFIG_LOCK = threading.Lock()
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _raw_config() -> dict[str, Any]:
+    """磁盘上那一份，**不叠环境变量**。
+
+    写回必须以它为基础：`config()` 已经把 OCGOV_NOTIFY_WEBHOOK 之类叠进来了，
+    拿它的结果写文件，等于把环境变量里的密钥抄进磁盘，以后改环境变量也不生效。
+    """
+    try:
+        if CONFIG_PATH.exists():
+            data = json.loads(CONFIG_PATH.read_text(encoding="utf-8") or "{}")
+            if isinstance(data, dict):
+                return data
+    except (json.JSONDecodeError, OSError):
+        pass
+    return {}
+
+
+def form_state() -> dict[str, Any]:
+    """「设置 → 提醒与送达」表单的回显值。密钥只回「设没设过」，不回真值。
+
+    页面拿到真值，就等于把群机器人的发消息口令放进浏览器内存和 network 面板 ——
+    这个面板是多个人共看的，打码不是顺手，是必须。
+    """
+    cfg = config()
+    hook = cfg["channels"]["webhook"]
+    mail = cfg["channels"]["smtp"]
+    return {
+        "webhook": {
+            "enabled": bool(hook.get("enabled")),
+            "format": hook.get("format") or "wecom",
+            "url_set": bool((hook.get("url") or "").strip()),
+            "url_hint": _mask(hook.get("url") or ""),
+        },
+        "smtp": {
+            "enabled": bool(mail.get("enabled")),
+            "host": mail.get("host") or "",
+            "port": int(mail.get("port") or 465),
+            "ssl": bool(mail.get("ssl", True)),
+            "user": mail.get("user") or "",
+            "to": list(mail.get("to") or []),
+            "password_set": bool(mail.get("password")),
+        },
+        "quiet_hours": list(cfg.get("quiet_hours") or []),
+        "workdays_only": bool(cfg.get("workdays_only", True)),
+        "daily_limit": int(cfg.get("daily_limit") or 20),
+        # 环境变量优先级最高：写进文件也不生效，得如实说，不能让人改完以为成了。
+        "env_override": {
+            "webhook": bool(os.environ.get("OCGOV_NOTIFY_WEBHOOK")),
+            "smtp": bool(os.environ.get("OCGOV_NOTIFY_SMTP_HOST")),
+        },
+    }
+
+
+def _text(value: Any, *, limit: int = 200) -> str:
+    return str(value or "").strip()[:limit]
+
+
+def save_config(patch: dict[str, Any]) -> dict[str, Any]:
+    """把页面填的通道配置写进 `config/notify.json`。返回 {ok, message} 或 {ok:False, error}。
+
+    写的时机没有缓存问题：`config()` 每次调用都重新读文件，所以保存后下一次
+    巡检（默认 5 分钟内）就走新通道，不用重启服务。
+    """
+    patch = patch if isinstance(patch, dict) else {}
+    raw = _raw_config()
+    channels = raw.get("channels") if isinstance(raw.get("channels"), dict) else {}
+    raw["channels"] = channels
+    hook = channels.get("webhook") if isinstance(channels.get("webhook"), dict) else {}
+    mail = channels.get("smtp") if isinstance(channels.get("smtp"), dict) else {}
+    channels["webhook"] = hook
+    channels["smtp"] = mail
+
+    # ── 群机器人 ──
+    w = patch.get("webhook")
+    if isinstance(w, dict):
+        if "url" in w:
+            url = w.get("url")
+            if url is None:
+                hook["url"] = ""
+            elif isinstance(url, str):
+                url = url.strip()
+                # 空串 = 保持原值（页面只有一个空输入框，不是清空指令）
+                if url:
+                    if not url.lower().startswith(("http://", "https://")):
+                        return {"ok": False, "error": "群机器人地址要以 http:// 或 https:// 开头"}
+                    if len(url) > 500:
+                        return {"ok": False, "error": "群机器人地址过长（超过 500 字符）"}
+                    hook["url"] = url
+            else:
+                return {"ok": False, "error": "群机器人地址格式不对"}
+        if "format" in w:
+            fmt = _text(w.get("format"), limit=20)
+            if fmt not in ("wecom", "generic"):
+                return {"ok": False, "error": "消息格式只支持 wecom（企业微信）或 generic（原样 JSON）"}
+            hook["format"] = fmt
+        if "enabled" in w:
+            hook["enabled"] = bool(w.get("enabled"))
+
+    # ── 邮件 ──
+    s = patch.get("smtp")
+    if isinstance(s, dict):
+        if "host" in s:
+            host = _text(s.get("host"), limit=120)
+            if host and not re.fullmatch(r"[A-Za-z0-9.\-]+", host):
+                return {"ok": False, "error": "SMTP 服务器只填域名或 IP，不要带 smtp:// 前缀"}
+            mail["host"] = host
+        if "port" in s and s.get("port") not in (None, ""):
+            try:
+                port = int(s.get("port"))
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "SMTP 端口要填数字"}
+            if not 1 <= port <= 65535:
+                return {"ok": False, "error": "SMTP 端口要在 1–65535 之间"}
+            mail["port"] = port
+        if "ssl" in s:
+            mail["ssl"] = bool(s.get("ssl"))
+        if "user" in s:
+            mail["user"] = _text(s.get("user"), limit=120)
+        if "password" in s:
+            pwd = s.get("password")
+            if pwd is None:
+                mail["password"] = ""
+            elif isinstance(pwd, str) and pwd.strip():
+                # 同 url：空串 = 不改，避免每次保存都把授权码抹成空
+                mail["password"] = pwd.strip()
+        if "to" in s:
+            raw_to = s.get("to")
+            if isinstance(raw_to, str):
+                items = [x for x in re.split(r"[,，;；\s]+", raw_to) if x]
+            elif isinstance(raw_to, list):
+                items = [str(x).strip() for x in raw_to if str(x).strip()]
+            elif raw_to is None:
+                items = []
+            else:
+                return {"ok": False, "error": "收件人格式不对"}
+            bad = [x for x in items if not _EMAIL.match(x)]
+            if bad:
+                return {"ok": False, "error": f"收件人不是有效邮箱：{bad[0]}"}
+            mail["to"] = items[:20]
+        if "enabled" in s:
+            mail["enabled"] = bool(s.get("enabled"))
+
+    # ── 发送策略（不分通道，全局一份）──
+    if "quiet_hours" in patch:
+        q = patch.get("quiet_hours")
+        if isinstance(q, str):
+            q = [x for x in re.split(r"[,，~\-–\s]+", q) if x]
+        if q is None:
+            q = []
+        if not isinstance(q, list):
+            return {"ok": False, "error": "静默时段格式不对"}
+        hours = [str(x).strip() for x in q if str(x).strip()]
+        if hours and len(hours) != 2:
+            return {"ok": False, "error": "静默时段要填两个时间：开始和结束"}
+        for h in hours:
+            if not _HHMM.match(h):
+                return {"ok": False, "error": f"时间要写成 HH:MM（如 22:00），收到「{h}」"}
+        raw["quiet_hours"] = hours
+    if "workdays_only" in patch:
+        raw["workdays_only"] = bool(patch.get("workdays_only"))
+    if "daily_limit" in patch and patch.get("daily_limit") not in (None, ""):
+        try:
+            limit = int(patch.get("daily_limit"))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "日限额要填数字"}
+        if not 1 <= limit <= 200:
+            return {"ok": False, "error": "日限额要在 1–200 之间"}
+        raw["daily_limit"] = limit
+
+    try:
+        with _CONFIG_LOCK:
+            CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = CONFIG_PATH.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(CONFIG_PATH)  # 同盘 rename 是原子的，读到的一半文件不会存在
+    except OSError as exc:
+        return {"ok": False, "error": f"写入 config/notify.json 失败：{exc}"}
+
+    chan = channels_status()
+    overridden = [name for name, on in (("群机器人", os.environ.get("OCGOV_NOTIFY_WEBHOOK")),
+                                        ("邮件", os.environ.get("OCGOV_NOTIFY_SMTP_HOST"))) if on]
+    if overridden:
+        message = f"已写入 config/notify.json，但{'、'.join(overridden)}被环境变量接管，实际发送以环境变量为准"
+    elif chan["mode"] == "external":
+        message = "已保存：5 分钟内自动发送就会走这条通道"
+    else:
+        message = "已保存，但还没有能送出去的通道 —— 打开开关或填完地址才算配好"
+    return {"ok": True, "message": message, "channels": {**chan, "form": form_state()},
+            "env_override": overridden}
 
 
 # --------------------------------------------------------------------------
@@ -877,18 +1091,24 @@ def dispatch(
     person = people.meta("mayor")
     pool = [n for n in _oversight_notes(person, now) if n["level"] in _EXTERNAL_LEVELS]
     if not pool:
-        return {"ok": True, "sent": 0, "skipped": "nothing", "message": "没有需要外发的督办提醒"}
+        return {"ok": True, "sent": 0, "skipped": "nothing", "message": "现在没有需要发送的提醒"}
+
+    # 通道一条都没接，就不用再看后面的闸门了：这时候说「静默时段，等结束会自动发送」
+    # 或者「同一批已发送过」都是假话 —— 等到天亮、等到明天，也一样发不出去。
+    if not (chan["webhook"]["configured"] or chan["smtp"]["configured"]):
+        return {"ok": True, "sent": 0, "skipped": "no_channel",
+                "message": _NO_CHANNEL_MSG, "pool": len(pool)}
 
     if not force:
         if _in_quiet_hours(now, cfg.get("quiet_hours") or []):
-            return {"ok": True, "sent": 0, "skipped": "quiet_hours", "message": "处于静默时段，未外发"}
+            return {"ok": True, "sent": 0, "skipped": "quiet_hours", "message": "现在是静默时段，等时段结束会自动发送"}
         if cfg.get("workdays_only", True) and now.weekday() >= 5 and not any(n["level"] == "urgent" for n in pool):
-            return {"ok": True, "sent": 0, "skipped": "weekend", "message": "周末只外发紧急提醒，本次跳过"}
+            return {"ok": True, "sent": 0, "skipped": "weekend", "message": "周末只发紧急提醒，这次跳过"}
         doc = _store()
         today = now.date().isoformat()
         sent_today = [h for h in (doc.get("outbox") or {}).get("history") or [] if str(h.get("at", "")).startswith(today)]
         if len(sent_today) >= int(cfg.get("daily_limit") or 20):
-            return {"ok": True, "sent": 0, "skipped": "daily_limit", "message": "已达今日外发上限"}
+            return {"ok": True, "sent": 0, "skipped": "daily_limit", "message": "今天已经发到上限了"}
         # 批次指纹：内容没变就不重发。只比条数不够 —— 换了一件事也是新信息。
         batch = hashlib.md5(("|".join(sorted(n["id"] for n in pool))).encode("utf-8")).hexdigest()[:10]
         last = (doc.get("outbox") or {}).get("last") or {}
@@ -914,7 +1134,7 @@ def dispatch(
             "ok": True,
             "sent": 0,
             "skipped": "no_channel",
-            "message": "未配置外发通道，提醒只写进站内信",
+            "message": _NO_CHANNEL_MSG,
             "pool": len(pool),
         }
 
@@ -954,7 +1174,7 @@ def dispatch(
         "batch": batch_id,
         "text": text,
         "message": (
-            f"已发送 {len(pool)} 条督办提醒至 {'、'.join(delivered)}"
+            f"已发送 {len(pool)} 条督办提醒到{'、'.join(_CHANNEL_NAME.get(c, c) for c in delivered)}"
             if delivered
             else f"发送失败：{failed[0]['error'] if failed else '未知原因'}"
         ),
@@ -981,7 +1201,8 @@ def test_channel(
         "其余留在工作台的提醒面板里。"
     )
     if not channels_status()[kind]["configured"]:
-        return {"ok": False, "error": "not_configured", "message": f"{kind} 通道未配置（enabled + 地址/收件人）"}
+        return {"ok": False, "error": "not_configured",
+                "message": f"{_CHANNEL_NAME[kind]}还没配好：要打开开关并填完地址/收件人"}
 
     if kind == "smtp":
         ok, err = (send_mail or _send_smtp)(cfg["channels"]["smtp"], text)

@@ -684,7 +684,12 @@ def _run_tool(
                 {"kind": "proposal", "error": "bad_action"},
             )
         scope = directory.person_scope(str(person_id or ""))
-        allowed, why = authz.can(scope, az_action, {"units": units})
+        # host = 主办（签收/进展/办结只认它），units = 主办 ∪ 协办（催办/退回用）。
+        allowed, why = authz.can(
+            scope,
+            az_action,
+            {"host": one.get("assignee") or "", "units": units, "status": one.get("status")},
+        )
         if not allowed:
             return (
                 f"这件事不能由你{action}：{why}。可以查，但要由分管这条线的人来办。",

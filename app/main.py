@@ -637,6 +637,9 @@ WRITE_POLICY: tuple[tuple[str, str, str | None], ...] = (
     # ── 群发：真的会往外发消息，只有市领导 ──
     ("POST", r"/api/notify/dispatch", authz.NOTIFY_DISPATCH),
     ("POST", r"/api/notify/test", authz.NOTIFY_DISPATCH),
+    # 改通道地址：能改这个 URL 的人，既能让真提醒发不出去，也能把提醒导到
+    # 自己建的群里。和模型 api_key 同档 —— 市领导独占。
+    ("POST", r"/api/notify/config", authz.NOTIFY_CONFIG),
 
     # ── 共享资料库：读不限，写要登录 ──
     ("POST", r"/api/rag/bases", authz.KNOWLEDGE_WRITE),
@@ -1305,7 +1308,9 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 1:
                 sess = self._session_scope()
                 _pid, scope = self._read_scope()
-                one = ov.detail(parts[0], scope=scope)
+                # 三个参数各管一件事：scope 管看不看得见（主办 ∪ 协办），
+                # auth_scope 管按钮画不画（签收/进展/办结只认主办）。
+                one = ov.detail(parts[0], scope=scope, auth_scope=sess)
                 if one is None:
                     return self._json({"ok": False, "error": "item_not_found", "item_id": parts[0]}, 404)
                 # 补挂历史凭证的按钮该不该亮，由后端算 —— 规则要看角色 + 事项状态
@@ -1356,7 +1361,14 @@ class Handler(BaseHTTPRequestHandler):
             # 每次现算，不落盘：提醒是台账状态的投影，存一份就会有「面板说逾期、
             # 台账说已办结」这种对不上的画面。已读状态另存，只影响显示。
             if path == "/api/notify":
-                return self._json(notify_mod.build(self._person()))
+                # 配置表单只发给有权改的人。对没权限的人把地址输入框摆出来，
+                # 等于让人填完一屏再被 403 打回 —— 不如直接说「要市领导」。
+                view = notify_mod.build(self._person())
+                scope = self._session_scope()
+                can_cfg = bool(scope) and authz.can(scope, authz.NOTIFY_CONFIG)[0]
+                view["channels"]["can_config"] = can_cfg
+                view["channels"]["form"] = notify_mod.form_state() if can_cfg else None
+                return self._json(view)
 
             # ---- 材料助手 ----
             # 材料是只读装配：数字带出处、事项带台账编号，服务端算好后前端只负责排版。
@@ -2021,6 +2033,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/notify/test":
                 return self._json(notify_mod.test_channel(str(body.get("channel") or "webhook")))
 
+            # ---- 消息提醒：外发通道配置 ----
+            # 写完立即生效（config() 每次现读文件），不用重启。校验在这里返回 400：
+            # 前端 handleWriteDeny 认 error 字段，能直接把哪一项填错说出来。
+            if path == "/api/notify/config":
+                result = notify_mod.save_config(body)
+                return self._json(result, 200 if result.get("ok") else 400)
+
             # ---- 督办台账 ----
             if path == "/api/oversight":
                 # 建档（交办）是写操作，必须登录 + 有权限。资源单位取 assignee ∪ co_assignees。
@@ -2428,13 +2447,18 @@ class Handler(BaseHTTPRequestHandler):
                 400,
             )
 
-        # 动作 → 授权动作名（authz.ACTION_FROM_ZH），资源单位 = 主办 ∪ 协办。
-        # 签收/进展/办结按「主办单位」判（不能替协办签收）；催办/退回按「涉及单位」判。
+        # 动作 → 授权动作名（authz.ACTION_FROM_ZH）。资源里给两样：
+        # `host` = 主办单位（签收/进展/办结/佐证只认它），`units` = 主办 ∪ 协办
+        # （催办/退回按「涉及单位」判 —— 协办催得动主办，但签不了主办的字）。
         az_action = authz.ACTION_FROM_ZH.get(action)
         if az_action is None:
             return self._json({"ok": False, "error": f"未注册的操作：{action}"}, 400)
-        resource_units = tuple([item.assignee] + list(item.co_assignees))
-        scope, allowed, why = self._require(az_action, {"units": resource_units})
+        resource = {
+            "host": item.assignee,
+            "units": tuple([item.assignee, *item.co_assignees]),
+            "status": item.status,
+        }
+        scope, allowed, why = self._require(az_action, resource)
         if not allowed:
             audit.user_event(
                 scope.get("person") if scope else None, "access.denied",
@@ -2468,21 +2492,31 @@ class Handler(BaseHTTPRequestHandler):
                          target=iid, payload={"ok": result.get("ok")})
         if not result.get("ok"):
             return self._json(result, 409)
-        return self._json({**result, "item": ov.detail(iid), "stats": ov.stats()})
+        # 详情回包一律带 `backfill`：前端拿到 item 就直接重绘，不再回读一次详情。
+        # 少了这个字段，刚做完动作的那一刻「补原件」按钮会凭空消失 —— 而它最该在
+        # 的时机恰恰是「确认办结之后」（已办结事项只能靠补挂补历史凭证）。
+        return self._json(
+            {**result, "item": self._with_backfill(ov.detail(iid, auth_scope=scope), scope), "stats": ov.stats()}
+        )
 
     # ---------------- 佐证材料原件 ----------------
     def _evidence_gate(self, iid: str) -> tuple[dict | None, dict | None]:
         """佐证的原件级鉴权。返回 (拒绝体, scope)：二者必有一个为 None。
 
-        能报进展的人才该能往上放材料：佐证是责任单位报送的东西，别人替它传一份
-        「现场照片」等于替它伪造报送材料。判定沿用 `_advance` 的资源口径
-        （主办 ∪ 协办），所以分管副市长、主办局、协办局都能传自己的那部分。
+        佐证是主办单位对外报送的材料，别人替它传一份「现场照片」等于替它伪造
+        报送材料 —— 所以和签收/报送同口径，**只认主办单位**（`host`）。
+        协办单位看得见这条账、催得动，但不往里递材料：协办报送走线下汇总，
+        台账上只有主办一个报送口。
         """
         item = ov.get(iid)
         if item is None:
             return {"ok": False, "error": "item_not_found", "item_id": iid}, None
-        units = tuple([item.assignee] + list(item.co_assignees))
-        scope, allowed, why = self._require(authz.OVERSIGHT_EVIDENCE, {"units": units})
+        resource = {
+            "host": item.assignee,
+            "units": tuple([item.assignee, *item.co_assignees]),
+            "status": item.status,
+        }
+        scope, allowed, why = self._require(authz.OVERSIGHT_EVIDENCE, resource)
         if not allowed:
             audit.user_event(
                 scope.get("person") if scope else None, "access.denied",
@@ -2664,8 +2698,14 @@ class Handler(BaseHTTPRequestHandler):
         """
         if one is None:
             return None
+        # 补挂的也是主报材料的一部分，同样只认主办单位；`units` 仍按主办 ∪ 协办给，
+        # 但 authz 在补挂这条上只读 `host`。
         units = tuple([one["assignee"]] + list(one.get("co_assignees") or []))
-        allowed, why = authz.can(scope, authz.OVERSIGHT_BACKFILL, {"units": units, "status": one.get("status")})
+        allowed, why = authz.can(
+            scope,
+            authz.OVERSIGHT_BACKFILL,
+            {"host": one["assignee"], "units": units, "status": one.get("status")},
+        )
         one["backfill"] = {"allowed": bool(allowed), "why": "" if allowed else why}
         return one
 
@@ -2836,7 +2876,12 @@ class Handler(BaseHTTPRequestHandler):
         units = tuple(
             [one.get("assignee") or ""] + [str(x) for x in (one.get("co_assignees") or [])]
         )
-        allowed, why = authz.can(scope, az_action, {"units": units})
+        # 和 _advance 同一份资源口径：host 判签收/报送（只认主办），units 判催办/退回。
+        allowed, why = authz.can(
+            scope,
+            az_action,
+            {"host": one.get("assignee") or "", "units": units, "status": one.get("status")},
+        )
         if not allowed:
             audit.user_event(
                 person, "access.denied", target=az_action,
@@ -2875,7 +2920,12 @@ class Handler(BaseHTTPRequestHandler):
         if not res.get("ok"):
             return self._json(res, 409)
         return self._json(
-            {**res, "item": ov.detail(res.get("item_id") or ""), "stats": ov.stats()}
+            {
+                **res,
+                # 同 /action：确认一条模型提议后也是原地重绘，回包必须自带 backfill。
+                "item": self._with_backfill(ov.detail(res.get("item_id") or ""), scope),
+                "stats": ov.stats(),
+            }
         )
 
     def _cancel_proposal(self, body: dict) -> None:

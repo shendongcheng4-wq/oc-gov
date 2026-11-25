@@ -28,6 +28,11 @@ try:  # 同目录模块：core/oversight 已在 sys.path 上（见 app/main.py �
 except ImportError:  # pragma: no cover - 只有以包方式导入时才会走到
     from . import attach  # type: ignore[no-redef]
 
+try:  # 授权词表在 core/ 下，同一条 sys.path
+    import authz
+except ImportError:  # pragma: no cover
+    from .. import authz  # type: ignore[no-redef]
+
 
 
 # 台账是进程内共享的 dict，而 HTTP 是多线程的。一次流转要做「读状态 → 判守卫 →
@@ -147,6 +152,14 @@ class Item:
 
     @property
     def progress_percent(self) -> int:
+        """当前进度。已提交办结（待审核 / 已办结）就是 100。
+
+        只看「进展」事件会出一个自相矛盾的数字：最后一次报送可能停在 72%，
+        可「提交办结」这个动作本身已经表示余下的都走完了。台账上出现
+        「已办结 · 进度 72%」，任务节点自然也永远算不出全部完成。
+        """
+        if self.status in (REVIEW, CLOSED):
+            return 100
         pcts = [e.percent for e in self.events if e.type == "进展" and e.percent is not None]
         return pcts[-1] if pcts else 0
 
@@ -413,15 +426,38 @@ def advance(
         }
 
 
-def allowed_actions(item: Item) -> list[str]:
-    """当前状态下可执行的操作，前端据此决定按钮是否可点。"""
+def allowed_actions(item: Item, auth_scope: dict[str, Any] | None = None) -> list[str]:
+    """当前状态下可执行的操作，前端据此决定按钮是否可点。
+
+    有两层：**状态**允不允许（TRANSITIONS），**这个人**允不允许（authz）。
+    只判前者会画出点下去必然 403 的按钮 —— 协办单位的局长打开「待签收」的
+    事项，状态上能签收，但签收只能是主办单位做的。
+
+    `auth_scope` 传 `directory.person_scope()` 的形状；不传就只按状态算
+    （列表接口、模型工具那些地方用不上按钮，也不必为每一行算一遍授权）。
+    """
     if item.status == CLOSED:
         return []
     out = []
     for action, (allowed_from, _, _) in TRANSITIONS.items():
         if item.status in allowed_from:
             out.append(action)
-    return out
+    if auth_scope is None or not out:
+        return out
+    return [a for a in out if _permitted(item, a, auth_scope)]
+
+
+def _permitted(item: Item, action: str, auth_scope: dict[str, Any]) -> bool:
+    """这个身份现在对这条事项能不能做这个流转动作。"""
+    az_action = authz.ACTION_FROM_ZH.get(action)
+    if az_action is None:  # 授权词表里没有的流转动作：不在这一层拦
+        return True
+    resource = {
+        "host": item.assignee,
+        "units": tuple([item.assignee, *item.co_assignees]),
+        "status": item.status,
+    }
+    return authz.can(auth_scope, az_action, resource)[0]
 
 
 # ── 建档与查询 ────────────────────────────────────────────────────────────
@@ -605,7 +641,17 @@ def _brief(item: Item, risk: Risk) -> dict[str, Any]:
     }
 
 
-def detail(item_id: str, scope: set[str] | None = None) -> dict[str, Any] | None:
+def detail(
+    item_id: str,
+    scope: set[str] | None = None,
+    auth_scope: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """单条详情。
+
+    `scope` 管**看不看得见**（主办 ∪ 协办），`auth_scope` 管**按钮画不画**
+    （签收/进展/办结只认主办）。两者分开传，是因为演示态（未登录）要能看全量，
+    而登录后按钮得跟着身份收窄。
+    """
     item = get(item_id)
     if item is None:
         return None
@@ -616,6 +662,7 @@ def detail(item_id: str, scope: set[str] | None = None) -> dict[str, Any] | None
     risk = assess(item)
     return {
         **_brief(item, risk),
+        "allowed_actions": allowed_actions(item, auth_scope),
         "source": item.source,
         "source_ref": item.source_ref,
         "issued_at": item.issued_at,

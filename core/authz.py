@@ -12,10 +12,13 @@
    `directory.role_at_least` 判，父角色自动拥有子角色的全部权限。
    秘书这一档是「看全市、能辅政、不拍板」：读口同市长，但确认办结、退回、
    改全局配置这些「代领导签字」的动作仍拦着。
-3. **责任单位是行级锚点**。读/写督办、指标、知识库，都按 `assignee ∪
-   co_assignees` 落在不在本人的分管单位集合里来判。
-4. **写操作额外收紧**。签收/进展/办结只能由「本单位主办」的角色做，
-   协办单位不能替主办签收。
+3. **责任单位是行级锚点**。读督办、指标、知识库，都按 `assignee ∪
+   co_assignees` 落在不在本人的分管单位集合里来判 —— 协办单位看得见、
+   催得动，这是协作所需要的。
+4. **写操作额外收紧，而且只认主办**。签收/进展/办结/佐证只能由「主办单位」
+   的角色做（`resource["host"]`），协办单位不能替主办签收、报送。行级资源里
+   同时给 `host`（主办）和 `units`（主办 ∪ 协办）就是为了这一层：读用后者，
+   写用前者。
 
 这个模块**只做判定**，不做身份解析（那是 directory 的事）、不做审计
 （那是 audit 的事）、不落数据。返回 (allowed, reason)，reason 在拒绝时
@@ -59,6 +62,7 @@ CONFIG_MODEL = "config.model"              # 模型供应商 / 当前模型 / �
 CONFIG_EXPERT = "config.expert"            # 专家名单
 CONFIG_PLUGIN = "config.plugin"            # 插件开关
 NOTIFY_DISPATCH = "notify.dispatch"        # 群发巡检 / 通道测试（真的会往外发消息）
+NOTIFY_CONFIG = "notify.config"            # 外发通道与发送策略（webhook / SMTP / 静默 / 限额）
 KNOWLEDGE_WRITE = "knowledge.write"        # 共享资料库：建库 / 上传 / 删
 
 # 身份闸门：只回答「有没有登录」，不回答「能不能动这一条」。
@@ -73,6 +77,7 @@ _ACTION_LABEL: dict[str, str] = {
     CONFIG_EXPERT: "改专家名单",
     CONFIG_PLUGIN: "改插件开关",
     NOTIFY_DISPATCH: "群发提醒",
+    NOTIFY_CONFIG: "改外发通道",
     MEETING_EDIT: "改会议记录",
 }
 
@@ -83,6 +88,7 @@ _LEADER_ONLY: tuple[str, ...] = (
     CONFIG_EXPERT,
     CONFIG_PLUGIN,
     NOTIFY_DISPATCH,
+    NOTIFY_CONFIG,
     MEETING_EDIT,
 )
 
@@ -100,6 +106,13 @@ ADVANCE_ACTION_MAP: dict[str, str] = {
 # 反向：oversight.advance 的中文动作名 → authz 动作常量。
 # _advance 拿到的是「签收/反馈进展/...」这种中文名，用这个映射找到授权动作。
 ACTION_FROM_ZH: dict[str, str] = {v: k for k, v in ADVANCE_ACTION_MAP.items()}
+
+# 拒绝原因里要点出具体动作（「签收」「提交办结」才说得清是哪一步被挡）。
+# 从 ADVANCE_ACTION_MAP 派生而不是另写一份中文：改了动作名不会两处对不上。
+_WRITE_LABEL: dict[str, str] = {
+    a: ADVANCE_ACTION_MAP[a]
+    for a in (OVERSIGHT_SIGN, OVERSIGHT_PROGRESS, OVERSIGHT_SUBMIT)
+}
 
 
 def _own_units(scope: dict[str, Any]) -> tuple[str, ...]:
@@ -130,7 +143,10 @@ def can(
 
     `scope` 来自 `directory.person_scope(pid)`。
     `resource` 是行级对象，不同动作需要不同的字段：
-      - oversight.* / metric / knowledge：`{"units": (责任单位, ...)}`
+      - oversight 读 / metric / knowledge：`{"units": (责任单位, ...)}`，
+        主办 ∪ 协办都算
+      - oversight 写（签收/进展/办结/佐证/补挂）：`{"host": 主办单位, ...}`，
+        **只认主办**；`units` 在这几个动作上不参与判定
       - meeting.*：无需 units（会议是市级动作）
 
     返回 (allowed, reason)。allowed=False 时 reason 是一句可直接给界面/审计
@@ -167,18 +183,25 @@ def can(
         return False, "只有市领导或分管领导能给分管单位建档交办。"
 
     if action in (OVERSIGHT_SIGN, OVERSIGHT_PROGRESS, OVERSIGHT_SUBMIT, OVERSIGHT_EVIDENCE):
-        # 签收/进展/办结：责任单位自己的动作。只有「本单位主办」的角色能做，
-        # 协办单位不能替主办签收。bureau 就是单位本身，dept-leader/leader 分管则能做。
+        # 签收/进展/办结/佐证：**主办单位**自己的动作，看 `host` 不看 `units`。
         #
-        # 佐证上传同口径：能报进展的人才该能往上放材料。反过来，谁都不能替
-        # 别的单位传一份「现场照片」进去 —— 那是替人伪造报送材料。
-        if not units:
-            return False, "事项缺少责任单位，无法判定签收权限。"
-        if _unit_in_scope(scope, units):
+        # 为什么要把协办挡在外面：签收是对「这件事由我这个单位主办」的承认。
+        # 协办单位签了，责任就落到错的单位头上，后面追起来一案两主。报送进展、
+        # 提交办结、上传佐证同理 —— 那都是主办对外的一个口径，协办替他递一份
+        # 「现场照片」进去，等于替人伪造报送材料。
+        #
+        # 协办不是没事可做：看得到这条账（读口按主办 ∪ 协办收窄）、催得动
+        # （OVERSIGHT_URGE 仍按 units 判）。只读 + 催办，边界清楚。
+        host = str(resource.get("host") or "").strip()
+        if not host:
+            # 显式拒绝而不是回落到 units：一回落就等于「主办协办随便谁都能签」，
+            # 正是这条规则要堵的口子。宁可让调用方报错补字段，也不要静默放宽。
+            return False, "事项缺少主办单位，无法判定签收权限。"
+        if _unit_in_scope(scope, (host,)):
             return True, ""
         if action == OVERSIGHT_EVIDENCE:
-            return False, "不能替非分管单位上传或删除佐证材料。"
-        return False, "不能替非分管单位签收或反馈进展。"
+            return False, f"这是{host}主办的事项：佐证材料由主办单位报送，协办单位不能替主办上传。"
+        return False, f"这是{host}主办的事项：{_WRITE_LABEL.get(action, '这一操作')}只能由主办单位做，协办单位不能替主办签收。"
 
     if action == OVERSIGHT_CONFIRM:
         # 确认办结是市级收口动作，只有市领导能做。
@@ -194,8 +217,9 @@ def can(
         #   批的和看到的就不是一份东西了 —— 等批完或被退回再说。
         # 已办结：只剩市级能补。责任单位给自己补一份事后凭证，等于自己给自己
         #   做背书；这条链已闭环，动它要有第三方。
-        # 办理中 / 待签收：同上传佐证口径（责任单位 + 分管领导 + 市领导）。
+        # 办理中 / 待签收：同上传佐证口径（主办单位 + 分管领导 + 市领导）。
         #   事情还没结束，经手人手上有什么就补什么，不必惊动市里。
+        #   同样只认主办：补挂进来的是主报材料的一部分，协办不能替主办往里塞。
         status = str(resource.get("status") or "")
         if status == "待审核":
             return False, "待审核中不能补挂佐证：审核的是已提交的那份材料，等批完或退回后再补。"
@@ -203,10 +227,14 @@ def can(
             if _role_ok(scope, directory.ROLE_SECRETARY) or _role_ok(scope, directory.ROLE_LEADER):
                 return True, ""
             return False, "已办结事项补挂凭证要市领导或秘书操作 —— 责任单位不能给自己补事后凭证。"
-        if not units:
+        host = str(resource.get("host") or "").strip()
+        target = (host,) if host else units
+        if not target:
             return False, "事项缺少责任单位，无法判定补挂权限。"
-        if _unit_in_scope(scope, units):
+        if _unit_in_scope(scope, target):
             return True, ""
+        if host:
+            return False, f"这是{host}主办的事项：补挂佐证由主办单位做，协办单位不能替主办补录。"
         return False, "不能替非分管单位补挂佐证材料。"
 
     if action == OVERSIGHT_REJECT:

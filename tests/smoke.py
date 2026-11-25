@@ -2567,6 +2567,53 @@ def test_notify() -> None:
     missing = [r["id"] for r in notify.RULES if src.count(f'"{r["id"]}"') < 2]
     check("每条规则都有生成分支", not missing, str(missing))
 
+    # ── 通道配置：页面能改，密钥不回落 ──────────────────────────────
+    # 这一段把 CONFIG_PATH 换到测试目录，跑完必须还原：否则后面的通道用例会读到
+    # 测试写的那份，甚至把真实配置覆盖掉。
+    # 重点盯两条 —— 页面只拿到打码值，拿它当新地址提交会把群冲掉；以及写坏一个键
+    # 不能让整份文件退回默认值（那会让已配好的通道一起消失）。
+    real_cfg = notify.CONFIG_PATH
+    test_cfg = TEST_DATA / "notify_cfg_test.json"
+    try:
+        test_cfg.unlink(missing_ok=True)
+        notify.CONFIG_PATH = test_cfg
+        os.environ.pop("OCGOV_NOTIFY_WEBHOOK", None)
+        r = notify.save_config(
+            {"webhook": {"enabled": True, "format": "wecom", "url": "https://qyapi.example.com/x?key=REAL-1"}}
+        )
+        check("页面能保存群机器人地址", r.get("ok") is True, str(r)[:80])
+        check("保存后不用重启就生效", notify.channels_status()["mode"] == "external", "")
+        notify.save_config({"webhook": {"enabled": True, "url": ""}})
+        saved = json.loads(test_cfg.read_text(encoding="utf-8"))
+        check("地址留空不覆盖原值", saved["channels"]["webhook"]["url"].endswith("REAL-1"), str(saved)[:90])
+        fs = notify.form_state()
+        check(
+            "表单回显不给真地址",
+            "REAL-1" not in fs["webhook"]["url_hint"] and fs["webhook"]["url_set"] is True,
+            fs["webhook"]["url_hint"],
+        )
+        before = test_cfg.read_text(encoding="utf-8")
+        for bad, label in (
+            ({"webhook": {"url": "qyapi.example.com/x"}}, "地址没写协议"),
+            ({"smtp": {"to": "not-a-mail"}}, "收件人不是邮箱"),
+            ({"daily_limit": 999}, "日限额越界"),
+            ({"quiet_hours": ["22:00"]}, "静默时段只给一个时间"),
+        ):
+            r = notify.save_config(bad)
+            check(f"非法配置整体拒绝（{label}）", r.get("ok") is False and bool(r.get("error")), str(r)[:70])
+        check("被拒时文件不动", test_cfg.read_text(encoding="utf-8") == before, "")
+        os.environ["OCGOV_NOTIFY_WEBHOOK"] = "https://env.example/x?key=ENVONLY"
+        r = notify.save_config({"webhook": {"enabled": True, "format": "wecom"}})
+        check("环境变量的密钥不抄进文件", "ENVONLY" not in test_cfg.read_text(encoding="utf-8"), "")
+        check("环境变量接管要如实说", "环境变量" in (r.get("message") or ""), str(r.get("message"))[:80])
+    finally:
+        os.environ.pop("OCGOV_NOTIFY_WEBHOOK", None)
+        notify.CONFIG_PATH = real_cfg
+        try:
+            test_cfg.unlink()
+        except OSError:
+            pass
+
     # ── 催办送达 ──────────────────────────────────────────────────────
     # 放在最后跑：这一段落会往台账里添一条事项，前面的条数断言不能受影响。
     # 要说清的事：催办不只是写进台账，责任单位登录后必须真的收到。
@@ -2667,7 +2714,12 @@ def test_notify() -> None:
 
     html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
     check("顶栏铃铛接上面板", 'tool.dataset.tool === "bell") return openNtModal' in html, "")
-    check("提醒面板有规则表", "ntRuleBody" in html and "什么时候提醒什么" in html, "")
+    # 规则表从面板搬到设置后就不再出现在面板里了 —— 面板每天要看的是「今天办什么」，
+    # 每条提醒自己已经带 why。断言改成正向：面板里不能再有规则表，且送达状态要在第一屏。
+    check("面板不再挂规则表", "ntRuleBody" not in html and "什么时候提醒什么" not in html, "")
+    check("送达状态在第一屏", 'id="ntDeliver"' in html and html.index('id="ntDeliver"') < html.index('id="ntList"'), "")
+    check("设置里有提醒与送达", 'data-stab="notify"' in html and "function renderNotifySettings" in html, "")
+    check("面板的送达入口通到设置", 'openSettings("notify")' in html, "")
     check("未配通道如实标注", "未配通道" in html, "")
     check("提醒定时轮询", "setInterval" in html and "loadNotify()" in html, "")
     check("提醒类名统一 nt- 前缀", ".nt-item{" in html and not re.search(r"^\.item\{", html, re.M), "")
@@ -4984,6 +5036,62 @@ def test_authz_scope() -> None:
     ok, why = authz.can(bureau, authz.OVERSIGHT_BACKFILL, {"units": ("市财政局",), "status": "办理中"})
     check("单位不能替别人补凭证", ok is False and "分管" in why, f"{ok} {why}")
 
+    # ── 5. 协办不能替主办签收 ──────────────────────────────────────────
+    # 用户口径：「协办不能签收」。协办单位看得见、催得动，但签收是对「这件事由
+    # 我这个单位主办」的承认 —— 协办签了，责任就落到错的单位头上。
+    #
+    # 行级资源里 `host`（主办）和 `units`（主办 ∪ 协办）分开传，就是为了这一层：
+    # 读/催办看 units，签收/报送/佐证看 host。下面把四条路都钉住。
+    zj = directory.person_scope("u-zhujian")      # 市住建局，在这条上只是协办
+    cg = directory.person_scope("u-chengguan")    # 市城管局，主办
+    host_res = {"host": "市城管局", "units": ("市城管局", "市住建局")}
+
+    ok, why = authz.can(zj, authz.OVERSIGHT_SIGN, host_res)
+    check("协办不能签收", ok is False and "协办" in why, f"{ok} {why}")
+    ok, why = authz.can(cg, authz.OVERSIGHT_SIGN, host_res)
+    check("主办能签收", ok is True, why)
+    ok, why = authz.can(directory.person_scope("mayor"), authz.OVERSIGHT_SIGN, host_res)
+    check("市领导能替主办签收", ok is True, why)
+    ok, why = authz.can(
+        directory.person_scope("vmayor"),  # 分管市发改委/大数据局/住建局
+        authz.OVERSIGHT_SIGN,
+        {"host": "市住建局", "units": ("市住建局", "市交通运输局")},
+    )
+    check("分管领导能替分管的主办单位签收", ok is True, why)
+
+    # 协办不是「什么都干不了」：看得到（读口 units）、催得动（urge 也看 units）。
+    check("协办看得见这条账", authz.can(zj, authz.READ_OVERSIGHT, {"units": ("市城管局", "市住建局")})[0], "")
+    check("协办能催办", authz.can(zj, authz.OVERSIGHT_URGE, {"units": ("市城管局", "市住建局")})[0], "")
+
+    # 报送材料同理：佐证和补挂都是主办对外的一个口径。
+    ok, why = authz.can(zj, authz.OVERSIGHT_EVIDENCE, host_res)
+    check("协办不能上传佐证", ok is False and "主办" in why, f"{ok} {why}")
+    ok, why = authz.can(
+        zj, authz.OVERSIGHT_BACKFILL, {**host_res, "status": "办理中"}
+    )
+    check("协办不能替主办补挂佐证", ok is False and "主办" in why, f"{ok} {why}")
+
+    # 漏传 host 必须显式拒绝，不能回落到 units —— 一回落就等于「主办协办随便谁
+    # 都能签」，正是这条规则要堵的口子。
+    ok, why = authz.can(cg, authz.OVERSIGHT_SIGN, {"units": ("市城管局",)})
+    check("缺主办单位时拒绝判定", ok is False and "主办单位" in why, f"{ok} {why}")
+
+    # 事项详情上的按钮也要跟着身份收窄：状态允许 ≠ 这个人能做。
+    r = ov.create_item(
+        title="协办不开签收按钮",
+        assignee="市城管局",
+        deadline=(ov.today() + timedelta(days=5)).isoformat(),
+        standard="协办单位不出现签收按钮",
+        co_assignees=["市住建局"],
+    )
+    tid = r.get("item_id")
+    check("新建协办按钮测试事项", bool(tid), str(r)[:80])
+    if tid:
+        seen_zj = (ov.detail(tid, auth_scope=zj) or {}).get("allowed_actions") or []
+        seen_cg = (ov.detail(tid, auth_scope=cg) or {}).get("allowed_actions") or []
+        check("协办看到的可执行操作里没有签收", "签收" not in seen_zj and "催办" in seen_zj, str(seen_zj))
+        check("主办看到的可执行操作里有签收", "签收" in seen_cg, str(seen_cg))
+
 
 def test_http(port: int | None = None) -> None:
     port = port or int(os.environ.get("OCGOV_PORT") or 8090)
@@ -5697,6 +5805,99 @@ def test_http(port: int | None = None) -> None:
     except urllib.error.HTTPError as e:
         check("不存在的事项返回 404", e.code == 404, f"code={e.code}")
 
+    # 读收窄：同一条接口，身份不同看到的台账不同。list_items/detail 都按
+    # 「责任单位（主办 ∪ 协办）」过滤，这里把口径钉在接口层。
+    #
+    # 这一条守的是「住建身份登录后仍看见全市 6 条」那个 bug —— 服务端的收窄
+    # 一直是对的，坏在详情读口对 404 做了一次「退回匿名再读」的兜底，加上三个
+    # 列表读口根本没把 session 带上。前端不再有那条兜底，这里钉住服务端口径，
+    # 免得下次又把「匿名=演示全量」当默认行为改回去。
+    if sid:
+
+        def login_as(pid: str) -> dict:
+            try:
+                req = urllib.request.Request(
+                    base + "/api/auth/login",
+                    data=json.dumps({"person": pid, "password": pw}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    s = ((json.loads(r.read().decode("utf-8")).get("session") or {}).get("sid")) or ""
+            except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+                s = ""
+            return {"Authorization": f"Bearer {s}"} if s else {}
+
+        def get_as(path: str, hdrs: dict):
+            with urllib.request.urlopen(
+                urllib.request.Request(base + path, headers=hdrs), timeout=10
+            ) as r:
+                return json.loads(r.read().decode("utf-8"))
+
+        zj = login_as("u-zhujian")
+        if not zj:
+            print("  SKIP  收窄用例需要能登录 u-zhujian")
+        else:
+            mine = get_as("/api/oversight", zj)
+            m_items = mine.get("items") or []
+            ids = [i["id"] for i in m_items]
+            check(
+                "住建账号只看本单位台账",
+                bool(m_items)
+                and all(
+                    i.get("assignee") == "市住建局" or "市住建局" in (i.get("co_assignees") or [])
+                    for i in m_items
+                ),
+                str(ids),
+            )
+            check(
+                "住建账号看到的条数少于全市",
+                len(m_items) < len(book.get("items") or []),
+                f"{len(m_items)} vs {len(book.get('items') or [])}",
+            )
+            outside = [
+                i["id"]
+                for i in (book.get("items") or [])
+                if i.get("assignee") != "市住建局" and "市住建局" not in (i.get("co_assignees") or [])
+            ]
+            if outside:
+                try:
+                    get_as(f"/api/oversight/{outside[0]}", zj)
+                    check("他单位事项详情对住建 404", False, f"{outside[0]} 居然返回 200")
+                except urllib.error.HTTPError as e:
+                    check("他单位事项详情对住建 404", e.code == 404, f"code={e.code}")
+
+            # 协办不能签收（用户口径）。住建在这类事项上只是协办：详情不该画出
+            # 「签收」按钮，绕过界面硬发一次也必须 403 —— 按钮和接口两处都要守，
+            # 只收一处就会出现「按钮没了但 curl 还能签」。
+            co_id = next(
+                (
+                    i["id"]
+                    for i in m_items
+                    if i.get("assignee") != "市住建局"
+                    and "市住建局" in (i.get("co_assignees") or [])
+                ),
+                "",
+            )
+            if not co_id:
+                print("  SKIP  住建名下没有协办事项，跳过协办签收用例")
+            else:
+                one = get_as(f"/api/oversight/{co_id}", zj).get("item") or {}
+                acts = one.get("allowed_actions") or []
+                check("协办事项详情不画签收", "签收" not in acts, f"{co_id} {acts}")
+                req = urllib.request.Request(
+                    base + f"/api/oversight/{co_id}/action",
+                    data=json.dumps({"action": "签收"}).encode("utf-8"),
+                    headers={**zj, "Content-Type": "application/json"},
+                    method="POST",
+                )
+                try:
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        code, raw = r.status, r.read().decode("utf-8")
+                except urllib.error.HTTPError as e:
+                    code, raw = e.code, e.read().decode("utf-8")
+                check("协办签收被接口拒绝", code == 403, f"{code} {raw[:80]}")
+
     def post(path: str, payload: dict, auth: bool = False):
         # auth=True 用于走了权限闸门的接口（督办流转/催办）。不默认全带：
         # session 的身份优先于请求体里的 person，会盖掉本段按身份写的用例。
@@ -5826,6 +6027,22 @@ def test_http(port: int | None = None) -> None:
         one = get_auth("/api/oversight/DB2026-0018").get("item") or {}
         cap = one.get("backfill") or {}
         check("登录后详情给补挂能力", cap.get("allowed") is True, str(cap)[:70])
+
+        # 动作回包也要带 backfill：前端拿到 item 就地重绘，不会再读一次详情。
+        # 少了这个字段，「确认办结」完的那一屏上「补原件」按钮会凭空消失 ——
+        # 而那正是最该补历史凭证的时刻（已办结只留市级能补）。
+        mid = next((i["id"] for i in book["items"] if i["status"] == "办理中"), "")
+        if not mid:
+            print("  SKIP  没有办理中的事项，跳过动作回包用例")
+        else:
+            code, d = post(f"/api/oversight/{mid}/action", {"action": "催办"}, auth=True)
+            bf_act = (d.get("item") or {}).get("backfill")
+            bf_get = (get_auth(f"/api/oversight/{mid}").get("item") or {}).get("backfill")
+            check(
+                "动作回包与详情给同一份补挂能力",
+                code == 200 and isinstance(bf_act, dict) and bf_act == bf_get,
+                f"{code} act={bf_act} get={bf_get}",
+            )
         idx = next(
             (
                 i
@@ -6031,8 +6248,6 @@ def test_oversight_flow() -> None:
     r = ov.advance(iid, "反馈进展", "市测试局", text="完成一半", percent=50, evidence=["现场记录.docx"])
     check("反馈进展保持办理中", bool(r.get("ok")) and r.get("to_status") == ov.WORKING, str(r)[:70])
     check("进展百分比可读回", (ov.detail(iid) or {}).get("progress") == 50, str((ov.detail(iid) or {}).get("progress")))
-    check("进度越界被夹到 0-100", ov.advance(iid, "反馈进展", "市测试局", text="超额", percent=300).get("ok") is True
-          and (ov.detail(iid) or {}).get("progress") == 100, str((ov.detail(iid) or {}).get("progress")))
 
     r = ov.advance(iid, "提交办结", "市测试局", text="已完成")
     check("缺佐证不能提交办结", r.get("ok") is False and "佐证" in str(r.get("error")), str(r)[:70])
@@ -6061,6 +6276,13 @@ def test_oversight_flow() -> None:
 
     r = ov.advance(iid, "提交办结", "市测试局", text="已完成", evidence=[(ev1 or {}).get("id") or ""])
     check("提交办结进入待审核", bool(r.get("ok")) and r.get("to_status") == ov.REVIEW, str(r)[:70])
+    # 最后一次报送可能停在 50%，但「提交办结」意味着余下的都走完了。
+    # 这里若跟着进展走，台账会出现「已办结 · 进度 50%」，任务节点也永远算不出全部完成。
+    check(
+        "提交办结后进度按 100 算",
+        (ov.detail(iid) or {}).get("progress") == 100,
+        str((ov.detail(iid) or {}).get("progress")),
+    )
     last = ((ov.detail(iid) or {}).get("events") or [{}])[-1]
     check(
         "事件里落的是原件引用",
@@ -6091,6 +6313,14 @@ def test_oversight_flow() -> None:
 
     r = ov.advance(iid, "退回", "市政府办", text="佐证只有回执，缺现场照片")
     check("退回回到办理中", bool(r.get("ok")) and r.get("to_status") == ov.WORKING, str(r)[:70])
+    # 退回后进度重新跟着最后一次进展走（不再钉在 100），这里顺带验越界夹取。
+    check(
+        "退回后进度回到进展口径",
+        (ov.detail(iid) or {}).get("progress") == 50,
+        str((ov.detail(iid) or {}).get("progress")),
+    )
+    check("进度越界被夹到 0-100", ov.advance(iid, "反馈进展", "市测试局", text="超额", percent=300).get("ok") is True
+          and (ov.detail(iid) or {}).get("progress") == 100, str((ov.detail(iid) or {}).get("progress")))
 
     # 退回后能补：新传一份，冲掉一份还没报送的（这条路径是「传错了重来」）
     ev2, _e2 = attach.put(iid, "现场照片.jpg", b"\xff\xd8\xff\xe0fake", by="市测试局", at="2026-11-24 11:00")
