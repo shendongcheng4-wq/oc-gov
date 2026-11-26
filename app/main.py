@@ -623,6 +623,9 @@ WRITE_POLICY: tuple[tuple[str, str, str | None], ...] = (
     ("DELETE", r"/api/meetings/[^/]+", authz.MEETING_EDIT),
     # 导出通知会往本机磁盘写文件（默认桌面）。不往外发，但发文口径是市级的事。
     ("POST", r"/api/meetings/[^/]+/notice/export", authz.MEETING_NOTICE),
+    # 发站内信到参会单位：只写本系统的收件箱，不碰外部通道。权限同发文口径 ——
+    # 定时间地点、发出去、收回执本来就是秘书的活。
+    ("POST", r"/api/meetings/[^/]+/notice/send", authz.MEETING_NOTICE),
 
     # ── 配置类：全局共享状态，只有市领导 ──
     ("POST", r"/api/models", authz.CONFIG_MODEL),
@@ -1678,6 +1681,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({
                     "ok": True,
                     "meeting": one,
+                    # 发过的通知与回执。正文是发出时的快照，不和会议当前值联动。
+                    "notices": meetings.notices_for_meeting(parts[0]),
                     "units": meeting_extract.known_units(),
                     "wemeet": wemeet_mod.public_config(),
                 })
@@ -2281,6 +2286,51 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "meeting": meetings.brief(meeting)})
 
             parts = _parts(path, "/api/meetings/")
+            if len(parts) == 3 and parts[1] == "notice" and parts[2] == "send":
+                scope, allowed, why = self._require(authz.MEETING_NOTICE)
+                if not allowed:
+                    audit.user_event(scope.get("person") if scope else None, "access.denied",
+                                     target="meeting.notice_send", payload={"reason": why})
+                    return self._json({"ok": False, "error": why}, 403)
+                one = meetings.get(parts[0])
+                if one is None:
+                    return self._json({"ok": False, "error": "meeting_not_found"}, 404)
+                issuer = str(body.get("issuer") or "").strip() or meeting_notice.DEFAULT_ISSUER
+                built = meeting_notice.build(one, issuer=issuer)
+                # 正文以页面上改过的那版为准。没带这个键（脚本调用）才用系统原稿；
+                # 带了但是空的，就是人把正文删干净了，不能悄悄换回原稿替他发出去。
+                raw = body.get("text")
+                if raw is None and "text" not in body:
+                    text = built["text"]
+                elif isinstance(raw, str):
+                    text = raw
+                else:
+                    return self._json({"ok": False, "error": "通知正文必须是文本。"}, 400)
+                sender = people.meta(scope["person"])
+                res = meetings.send_notice(
+                    parts[0],
+                    text=text,
+                    title=built["title"],
+                    issuer=issuer,
+                    held_at=one.get("held_at") or "",
+                    place=one.get("place") or "",
+                    by=scope["person"],
+                    by_name=str(sender.get("name") or scope["person"]),
+                )
+                if not res.get("ok"):
+                    if res.get("error") == "meeting_not_found":
+                        return self._json(res, 404)
+                    # 正文空着不是冲突，是请求本身不对
+                    return self._json(res, 400 if str(res.get("error") or "").startswith("通知正文") else 409)
+                n = res.get("notice") or {}
+                audit.user_event(scope["person"], "meeting.notice_send", target=parts[0],
+                                 payload={"notice": n.get("id"), "to": n.get("total"),
+                                          "uncovered": n.get("uncovered") or [],
+                                          "repeated": bool(res.get("repeated"))})
+                # 回执留在会议详情里，前端发完立刻刷新那一段
+                res["notices"] = meetings.notices_for_meeting(parts[0])
+                return self._json(res)
+
             if len(parts) == 3 and parts[1] == "notice" and parts[2] == "export":
                 scope, allowed, why = self._require(authz.MEETING_NOTICE)
                 if not allowed:

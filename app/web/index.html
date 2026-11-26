@@ -1554,6 +1554,13 @@ html.embedded .drawer{top:0;height:100%}
 .mt-tag.done.ov-link{cursor:pointer}
 .mt-tag.done.ov-link:hover{text-decoration:underline;background:var(--brand-soft);color:var(--brand)}
 .mt-empty{color:var(--faint);font-size:12px;text-align:center;padding:40px 16px;line-height:1.9}
+/* 已发通知：一行一版，回执照实写（已读 3/5），未覆盖单位在该行下面单独点出来 */
+.mt-notices{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+.mt-notices-hd{font-size:10.5px;color:var(--faint);margin-bottom:2px}
+.mt-notice-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
+.mt-notice-row:last-child{border-bottom:0}
+.mt-notice-row b{font-size:12.5px;font-weight:500}
+.mt-notice-row .mt-meta{margin:3px 0 0}
 .mt-form{display:grid;grid-template-columns:1fr 1fr;gap:9px}
 .mt-form label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--muted)}
 .mt-form label.full{grid-column:1/-1}
@@ -3338,19 +3345,22 @@ html.ask-fold .ask-rail{display:flex}
     <div class="modal-head">
       <div>
         <h3>会议通知</h3>
-        <p>正文可以直接改。系统只负责成文，不发送、不记录谁收到了 —— 复制或导出后由你发到单位群／邮箱。</p>
+        <p>正文可以直接改。改完发站内信，参会单位的账号会收到；站内信只在本系统里，不代替盖章下发 —— 正式通知仍以盖章文本为准。</p>
       </div>
       <span class="modal-x" id="mnClose">✕</span>
     </div>
     <div class="modal-body">
+      <div id="mnMode"></div>
       <div id="mnWarn"></div>
       <textarea class="notice-ta" id="mnText" spellcheck="false"></textarea>
       <div class="notice-bar">
+        <button class="mini" id="mnSend">发站内信</button>
         <button class="mini" id="mnCopy">复制全文</button>
         <button class="mini" id="mnExport">导出到桌面</button>
         <span class="hint" id="mnPath"></span>
         <span class="hint" id="mnLines"></span>
       </div>
+      <div id="mnSent"></div>
     </div>
   </div>
 </div>
@@ -8960,7 +8970,7 @@ async function saveLayout() {
 /* ---------- 会议助手 ----------
    解析和落库是两个显式动作，中间一定要经过人：模型抽出来的东西先摆出来给人看，
    勾选之后才进督办台账。不要为了"顺手"把这两步合成一步。 */
-let MT = { list: [], stats: {}, units: [], model_ready: false, current: null, sel: new Set(), wemeet: null };
+let MT = { list: [], stats: {}, units: [], model_ready: false, current: null, sel: new Set(), wemeet: null, notices: [] };
 
 /* ---------------- 消息提醒 ----------------
    三件事分开做，混在一起会互相拖累：
@@ -9306,6 +9316,9 @@ function ntOpen(n) {
   if (!n.read) ntRead([n.id]);
   closeNtModal();
   if (r.type === "oversight") return openOversight(r.id);
+  // 会议通知点开的是那一版正文（发出时的快照），不是会议详情：
+  // 收件人要办的是「照通知去开会」，不是去看会议主档。
+  if (n.rule === "meet_notice") return openNoticeSent(r.id, (n.extra || {}).notice_id || "");
   if (r.type === "meeting") return openMeetModal(r.id);
   if (r.type === "metric") {
     switchView("compass");
@@ -10906,6 +10919,7 @@ async function selectMeeting(id) {
     const d = await (await fetch("/api/meetings/" + encodeURIComponent(id))).json();
     if (!d.ok) throw new Error(d.error || "读取失败");
     if (d.units) MT.units = d.units;
+    MT.notices = d.notices || [];
     renderMeetDetail(d.meeting);
   } catch (e) {
     $("#mtDetail").innerHTML = `<div class="mt-empty">读取失败：${esc(e.message)}</div>`;
@@ -10981,6 +10995,23 @@ function renderMeetDetail(m) {
     ? ""
     : `腾讯会议未配置${wmMissing.length ? "：" + wmMissing.join("、") : ""}`;
 
+  /* 已发通知与回执。只陈述事实：发了几版、谁读了、哪些单位压根没账号。
+     「已读」不等于「派人来了」，所以这里不写「已通知到位」这种话。 */
+  const nts = MT.notices || [];
+  const noticeBlock = nts.length
+    ? `<div class="mt-notices">
+        <div class="mt-notices-hd">已发通知 ${nts.length} 版（站内信，只送到本系统账号）</div>
+        ${nts.map((n) => `<div class="mt-notice-row">
+          <div>
+            <b>${esc(n.title)}</b>
+            <div class="mt-meta">${esc(n.sent_at)} · ${esc(n.sent_by_name || "—")} 发出 · 已读 ${n.read_count || 0}/${n.total || 0}</div>
+            ${(n.uncovered || []).length ? `<div class="mt-meta" style="color:var(--warn)">未送达：${esc(n.uncovered.join("、"))}（无系统账号，需另行通知）</div>` : ""}
+          </div>
+          <button class="mini" data-mnview="${esc(n.id)}">看全文</button>
+        </div>`).join("")}
+      </div>`
+    : "";
+
   $("#mtDetail").innerHTML = `
     <div class="mt-head">
       <h4>${esc(m.title)}</h4>
@@ -10995,12 +11026,13 @@ function renderMeetDetail(m) {
       ${wmButtons}
       <button class="mini" id="mtDel">删除会议</button>
       <span class="hint mt-acts-hint">${planned
-        ? "成文后可复制或导出到桌面，由你自行下发"
+        ? "成文后可发站内信到参会单位，也可复制或导出"
         : `${MT.model_ready ? "模型就绪" : "未配置模型，无法解析"} · 事项 ${items.length} 条，已落督办 ${committed} 条`}</span>
       <span class="hint mt-acts-hint">${wmHintText ? `${esc(wmHintText)} · ` : ""}<a class="wm-link" id="mtWmCfg">腾讯会议配置</a></span>
     </div>
     ${planned ? `<div class="mt-warn info">这是一场还没召开的会，没有纪要原文。开完把纪要粘进正文再解析议定事项 —— 现在解析，抽出来的只会是模型编的东西。</div>` : ""}
     ${(m.warnings || []).map((w) => `<div class="mt-warn info">${esc(w)}</div>`).join("")}
+    ${noticeBlock}
     ${planned ? "" : (items.length ? rows : `<div class="mt-empty">还没有解析。点「解析议定事项」让模型从原文里抽——原文没写的不会被补。</div>`)}
     ${items.length ? `<div class="mt-acts" style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
       <button class="mini" id="mtCommit" ${MT.sel.size ? "" : "disabled"}>落督办（已选 ${MT.sel.size} 条）</button>
@@ -11011,40 +11043,128 @@ function renderMeetDetail(m) {
   bindMeetDetail();
 }
 
-/* 会议通知：成文在服务端（纯拼装、不经模型），这里只负责呈现和改字。
-   导出走 POST，是因为要往本机桌面写文件 —— 浏览器下载会被下载目录接管，
-   而这个场景要的恰恰是「就在桌面上」。 */
+/* 会议通知：成文在服务端（纯拼装、不经模型），这里只负责呈现、改字、发送。
+   两个入口共用一个弹窗，靠 MN.mode 分开：
+
+   - draft：从会议详情「生成会议通知」进来。可改、可发站内信、可导出；
+   - sent：从收件箱或「已发通知」点开某一版。正文是发出时的快照，只读 ——
+     发出去的那一版再改，收件人手上就成了另一个版本，回执也对不上了。
+
+   发送只写本系统的收件箱，不碰群和邮箱：这一层的口径在 core/notify.py 里
+   写死（通知 to:self），界面不另开一条外发路。 */
+let MN = { mid: "", nid: "", mode: "draft", back: "none" };
+
+function fitNoticeText(text) {
+  const ta = $("#mnText");
+  ta.value = text;
+  // 打开后按内容撑高：不撑的话公文正文会缩在 400px 里，人以为后面没字
+  ta.style.height = "auto";
+  ta.style.height = Math.min(ta.scrollHeight + 8, Math.round(innerHeight * 0.68)) + "px";
+}
+
+function showNoticeModal() {
+  // 两个弹窗叠着显示，底下那个会从边上露出来，看着像页面坏了。
+  $("#meetModal").classList.remove("on");
+  $("#noticeModal").classList.add("on");
+}
+
 async function openNotice() {
   if (!MT.current) return;
   try {
     const d = await (await fetch(`/api/meetings/${encodeURIComponent(MT.current)}/notice`)).json();
     if (!d.ok) { toast("生成失败：" + (d.error || "未知错误")); return; }
     const n = d.notice;
+    MN = { mid: MT.current, nid: "", mode: "draft", back: "meet" };
+    $("#mnMode").innerHTML = "";
+    $("#mnSent").innerHTML = "";
     $("#mnWarn").innerHTML = (n.warnings || [])
       .map((w) => `<div class="mt-warn info">${esc(w)}</div>`).join("");
-    // 两个弹窗叠着显示，底下那个会从边上露出来，看着像页面坏了。
-    // 通知是从会议助手里点开的，先把它收起来，关掉通知再放回去。
-    $("#meetModal").classList.remove("on");
-    $("#noticeModal").classList.add("on");
-    const ta = $("#mnText");
-    ta.value = n.text;
-    // 打开后按内容撑高：不撑的话公文正文会缩在 400px 里，人以为后面没字
-    ta.style.height = "auto";
-    ta.style.height = Math.min(ta.scrollHeight + 8, Math.round(innerHeight * 0.68)) + "px";
-    $("#mnLines").textContent = `共 ${n.text.split("\n").length} 行 · 可直接改，改完再复制或导出`;
+    $("#mnText").readOnly = false;
+    $("#mnSend").hidden = false;
+    fitNoticeText(n.text);
+    $("#mnLines").textContent = `共 ${n.text.split("\n").length} 行 · 可直接改，改完发站内信或导出`;
     $("#mnPath").textContent = "";
+    showNoticeModal();
   } catch (e) {
     toast("生成失败：" + e.message);
   }
 }
 
+async function openNoticeSent(mid, nid) {
+  try {
+    const d = await (await fetch("/api/meetings/" + encodeURIComponent(mid))).json();
+    if (!d.ok) { toast("读取失败：" + (d.error || "未知错误")); return; }
+    const n = (d.notices || []).find((x) => x.id === nid);
+    if (!n) { toast("这份通知已经不在了"); return; }
+    // 从会议详情点进来才有回执视图；从收件箱点进来只说自己收到的这份
+    MN = { mid, nid, mode: "sent", back: $("#meetModal").classList.contains("on") ? "meet" : "none" };
+    const total = n.total || 0;
+    const head = MN.back === "meet"
+      ? `已于 ${esc(n.sent_at)} 由 ${esc(n.sent_by_name || "—")} 发出 · 已读 ${n.read_count || 0}/${total}`
+      : `${esc(n.sent_by_name || "—")} 发来 · ${esc(n.sent_at)}`;
+    $("#mnMode").innerHTML = `<div class="mt-warn info">${head}。下面是发出时的正文快照，不能再改。</div>`;
+    $("#mnWarn").innerHTML = "";
+    $("#mnSent").innerHTML = "";
+    $("#mnText").readOnly = true;
+    $("#mnSend").hidden = true;
+    fitNoticeText(n.text || "");
+    $("#mnLines").textContent = `共 ${(n.text || "").split("\n").length} 行`;
+    $("#mnPath").textContent = "";
+    showNoticeModal();
+  } catch (e) {
+    toast("读取失败：" + e.message);
+  }
+}
+
+/* 发出去之后如实写三件事：发到几个账号、哪些单位没发到、这东西不等于盖章送达。 */
+function renderNoticeReceipt(n, repeated) {
+  const units = (n.to_units || []).join("、");
+  const un = n.uncovered || [];
+  const first = repeated
+    ? "今天已经给同一批单位发过这一版，没有重复发送。"
+    : `已发到 ${n.total || 0} 个账号${units ? "（" + units + "）" : ""}。`;
+  const gap = un.length
+    ? `<br>${esc(un.join("、"))} 没有系统账号，这份通知没发到，需要另行通知。`
+    : "";
+  $("#mnSent").innerHTML = `<div class="mt-warn info">${esc(first)}${gap}<br>站内信要登录后才看得到，不等于盖章送达。</div>`;
+}
+
 function bindNoticeModal() {
   const closeNotice = () => {
     $("#noticeModal").classList.remove("on");
-    if (MT.current) $("#meetModal").classList.add("on");  // 从哪来回哪去
+    if (MN.back === "meet" && MT.current) $("#meetModal").classList.add("on");  // 从哪来回哪去
   };
   $("#mnClose").onclick = closeNotice;
   $("#noticeModal").onclick = (e) => { if (e.target.id === "noticeModal") closeNotice(); };
+
+  $("#mnSend").onclick = async () => {
+    const btn = $("#mnSend");
+    btn.disabled = true;
+    btn.textContent = "发送中…";
+    try {
+      const r = await fetch(`/api/meetings/${encodeURIComponent(MN.mid)}/notice/send`, {
+        method: "POST",
+        headers: authHeaders(),
+        // 发的是页面上这一版：人在正文里补了地点、改了措辞，发出去的就该是它
+        body: JSON.stringify({ text: $("#mnText").value }),
+      });
+      const d = await r.json();
+      if (r.status === 403) return handleWriteDeny(d);
+      if (!r.ok || !d.ok) { toast("发送失败：" + (d.error || "未知错误")); return; }
+      renderNoticeReceipt(d.notice || {}, Boolean(d.repeated));
+      toast(d.repeated ? "今天已发过同一版，没有重复发送" : `已发到 ${(d.notice || {}).total || 0} 个账号`);
+      // 会议详情里的「已发通知」跟着变，关掉弹窗就能看到回执
+      if (MT.current === MN.mid) {
+        MT.notices = d.notices || MT.notices;
+        if (MT.detail) renderMeetDetail(MT.detail);
+      }
+    } catch (e) {
+      toast("发送失败：" + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "发站内信";
+    }
+  };
 
   $("#mnCopy").onclick = async () => {
     const ta = $("#mnText");
@@ -11063,7 +11183,7 @@ function bindNoticeModal() {
     const btn = $("#mnExport");
     btn.disabled = true;
     try {
-      const r = await fetch(`/api/meetings/${encodeURIComponent(MT.current)}/notice/export`, {
+      const r = await fetch(`/api/meetings/${encodeURIComponent(MN.mid)}/notice/export`, {
         method: "POST",
         headers: authHeaders(),
         // 带上改过的正文：用户调过措辞，导出的就该是他看到的那版
@@ -11576,6 +11696,12 @@ async function wmApply(kind, btn) {
 function bindMeetDetail() {
   const box = $("#mtDetail");
 
+  // 看已发通知的全文（只读快照）。回执和正文都从服务端那份记录里读，
+  // 不用当前会议的值重拼 —— 那样就成了「用今天的会议改昨天的通知」。
+  box.querySelectorAll("[data-mnview]").forEach((b) => {
+    b.onclick = () => openNoticeSent(MT.current, b.dataset.mnview);
+  });
+
   box.querySelectorAll("[data-sel]").forEach((cb) => {
     cb.onchange = () => {
       if (cb.checked) MT.sel.add(cb.dataset.sel); else MT.sel.delete(cb.dataset.sel);
@@ -11598,7 +11724,7 @@ function bindMeetDetail() {
         if (r.status === 403) return handleWriteDeny(d);
         if (!d.ok) { toast("保存失败：" + (d.error || "未知错误")); return; }
         const m = await (await fetch("/api/meetings/" + encodeURIComponent(MT.current))).json();
-        if (m.ok) renderMeetDetail(m.meeting);
+        if (m.ok) { MT.notices = m.notices || MT.notices; renderMeetDetail(m.meeting); }
         const first = (d.item.verify.issues || [])[0];
         toast(d.item.verify.status === "ok" ? "已通过校验，可勾选落库" : "仍有问题：" + (first ? first.detail : "待核实"));
       } catch (e) {

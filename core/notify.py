@@ -44,7 +44,7 @@ import oversight as ov  # noqa: E402
 import people  # noqa: E402
 import schedule as schedule_mod  # noqa: E402
 import store  # noqa: E402
-from ledger import list_meetings  # noqa: E402
+from ledger import list_meetings, mark_notice_read, notices_for_person  # noqa: E402
 
 STORE_NAME = "notify"
 CONFIG_PATH = ROOT / "config" / "notify.json"
@@ -132,6 +132,17 @@ RULES: tuple[dict[str, Any], ...] = (
         "to": "self",
         "when": "会议开始前 60 分钟内",
         "why": "材料、参会人、议题都要在进会场前过一遍",
+    },
+    {
+        "id": "meet_notice",
+        "kind": "meeting",
+        "label": "会议通知",
+        "level": "high",
+        # 通知只走站内信：正文是公文，外发到群或邮箱等于替发文机关再发一次文，
+        # 而系统并不知道那一边有没有盖章。所以这一条的 to 永远是 self。
+        "to": "self",
+        "when": "会议通知发出后（一场会一条，不按天重复，点开前一直留着）",
+        "why": "时间、地点、议题、入会号要在一处看全 —— 靠口头转述一定会漏一项",
     },
     {
         "id": "metric_low",
@@ -827,6 +838,47 @@ def _meeting_notes(person: dict[str, Any], now: datetime) -> list[dict[str, Any]
     return out
 
 
+def _notice_notes(person: dict[str, Any]) -> list[dict[str, Any]]:
+    """已经发到本人名下的会议通知。
+
+    和 `_meeting_notes` 不是一回事：那是系统算出来的会前提醒（会开始就没了），
+    这是人发出来的公文（发出即冻结，点开前一直在）。所以正文只给一句摘要 ——
+    全文在会议详情里，站内信负责把人叫过去，不负责存公文的第二份。
+
+    `read` 由通知记录的 `reads` 决定，不用 people.seen：回执是给发文的人看的，
+    不能因为收件人清过本地已读记录就变回「未读」。
+    """
+    pid = str(person.get("id") or "")
+    out: list[dict[str, Any]] = []
+    for n in notices_for_person(pid):
+        held = str(n.get("held_at") or "").strip()
+        place = str(n.get("place") or "").strip()
+        bits = [held or "时间另行通知"]
+        bits.append(f"地点 {place}" if place else "地点另行通知")
+        if n.get("uncovered"):
+            bits.append("另有 " + str(len(n["uncovered"])) + " 家参会单位未收到")
+        bits.append("点开看全文")
+        out.append(
+            _note(
+                "meet_notice",
+                n["id"],
+                n["id"],
+                n.get("title") or "会议通知",
+                " · ".join(bits),
+                ref={"type": "meeting", "id": n.get("meeting_id") or ""},
+                at=str(n.get("sent_at") or ""),
+                extra={
+                    "notice_id": n["id"],
+                    "meeting_id": n.get("meeting_id") or "",
+                    "read_at": n.get("read_at") or "",
+                    "sent_by": n.get("sent_by_name") or "",
+                    "chars": len(n.get("text") or ""),
+                },
+            )
+        )
+    return out
+
+
 def _metric_notes(person: dict[str, Any]) -> list[dict[str, Any]]:
     """关注指标低于年度目标。按「期次」去重：同一期只提醒一次，新一期披露再提醒。"""
     period = md.latest_available()
@@ -909,11 +961,21 @@ def build(person_id: str | None = None, *, now: datetime | None = None) -> dict[
     pid = people.resolve(person_id)
     person = people.meta(pid)
 
-    notes = _oversight_notes(person, now) + _meeting_notes(person, now) + _metric_notes(person) + _period_notes(now)
+    notes = (
+        _oversight_notes(person, now)
+        + _meeting_notes(person, now)
+        + _notice_notes(person)
+        + _metric_notes(person)
+        + _period_notes(now)
+    )
 
     seen = set(people.seen_of(pid))
     for n in notes:
         n["read"] = n["id"] in seen
+        # 会议通知的已读以通知记录里的回执为准：本地「标记已读」被清掉时，
+        # 不能让发文的人看到回执倒退。
+        if n["rule"] == "meet_notice" and n["extra"].get("read_at"):
+            n["read"] = True
         # 送达方式写在条目上：同一条「逾期」，局长看到的是「已发住建局」，
         # 没配通道时就是「只在本机」。不让前端去猜。
         n["delivery"] = "external" if (n["to"] in ("unit", "both") and n["level"] in _EXTERNAL_LEVELS) else "inapp"
@@ -958,6 +1020,14 @@ def mark_read(person_id: str | None, ids: list[str] | None = None, *, all_: bool
     if not keys:
         return {"ok": False, "error": "no_ids", "message": "没有要标记的提醒"}
     result = people.mark_seen(pid, keys)
+    # 通知的「已读」还要写回通知记录：本地 seen 是给自己看的角标，回执是给发文人
+    # 看的送达凭据，两份都要有。key 的形状是 meet_notice:<通知号>:<通知号>。
+    for k in keys:
+        if not k.startswith("meet_notice:"):
+            continue
+        parts = k.split(":")
+        if len(parts) >= 2 and parts[1]:
+            mark_notice_read(parts[1], pid)
     return {**result, "ids": keys[:50]}
 
 

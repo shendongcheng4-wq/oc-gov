@@ -24,9 +24,11 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import date, datetime
 from typing import Any
 
+import people
 import store
 from extract import known_units, verify_item
 
@@ -507,6 +509,264 @@ def commit(mid: str, item_ids: list[str], actor: str = "市政府办") -> dict[s
         "status": m.get("status"),
         "counts": _counts(m),
     }
+
+
+# --------------------------------------------------------------------------
+# 会议通知：发给参会单位（站内信）
+# --------------------------------------------------------------------------
+# 和提醒的区别（这条边界改之前先想清楚）：
+#
+# - 提醒是**派生**的：今天算出来有就有，明天没催了就没，正文跟着台账走。
+# - 通知是**发出**的：正文在发出那一刻冻结（`text` + `sha`），此后会议怎么改都
+#   不改已发出去的那一版 —— 收件人手上拿着的是凭证，不是实时视图。
+#
+# 所以通知落进 `meetings.json`，而不是塞进 notify.RULES 的派生列表。
+
+
+def _clean(values: Any) -> list[str]:
+    out: list[str] = []
+    for v in values or []:
+        s = str(v).strip()
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def recipients(m: dict[str, Any]) -> dict[str, Any]:
+    """这场会的通知该发给谁。
+
+    参会单位 = 单位名（"市发改委"），而能收消息的是**账号**。两边的对应关系不在
+    这里另建一张表：`people.PEOPLE` 里每个账号本来就挂着 `units`，单位账号只有
+    自己那一格，分管领导挂着分管的几格。用同一份数据判，才不会出现「日程里有
+    这场会、通知却收不到」。
+
+    另外两处必须如实说：
+    - 主持人按职务认（"常务副市长"），他可能不挂在任何参会单位上；
+    - 参会单位里没有账号的（如市委宣传部），站内信发不到，写进 `uncovered`
+      让发文的人自己补，不假装都发了。
+    """
+    attendees = _clean(m.get("attendees"))
+    host = str(m.get("host") or "").strip()
+    squad = getattr(people, "PEOPLE", ())
+
+    targets: list[dict[str, str]] = []
+    for p in squad:
+        pid = str(p.get("id") or "").strip()
+        if not pid:
+            continue
+        units = _clean(p.get("units"))
+        hit = [u for u in units if u in attendees]
+        if hit:
+            targets.append({"person": pid, "name": str(p.get("name") or pid), "unit": hit[0], "why": "参会单位"})
+        elif host and host == str(p.get("post") or "").strip():
+            targets.append({"person": pid, "name": str(p.get("name") or pid), "unit": "", "why": "主持会议"})
+
+    covered = {u for p in squad for u in _clean(p.get("units"))}
+    uncovered = [a for a in attendees if a not in covered]
+
+    warnings: list[str] = []
+    if not attendees:
+        warnings.append("没有填参会单位：通知只留档，没有投递对象。")
+    if uncovered:
+        warnings.append("、".join(uncovered) + " 没有系统账号，站内信发不到，需要另行通知。")
+
+    return {
+        "people": targets,
+        # 单位去重：分管领导和单位账号可能命中同一个参会单位，写两遍会让回执
+        # 看起来像发了两份给同一家。
+        "units": _clean([t["unit"] for t in targets if t["unit"]]),
+        "uncovered": uncovered,
+        "warnings": warnings,
+    }
+
+
+def _notice_brief(n: dict[str, Any], *, with_text: bool = False) -> dict[str, Any]:
+    reads = [r for r in (n.get("reads") or []) if r.get("person")]
+    out = {
+        "id": n["id"],
+        "title": n.get("title") or "",
+        "sent_at": n.get("sent_at") or "",
+        "sent_by": n.get("sent_by") or "",
+        "sent_by_name": n.get("sent_by_name") or n.get("sent_by") or "",
+        "issuer": n.get("issuer") or "",
+        "held_at": n.get("held_at") or "",
+        "place": n.get("place") or "",
+        "to_people": list(n.get("to_people") or []),
+        "to_units": list(n.get("to_units") or []),
+        "uncovered": list(n.get("uncovered") or []),
+        "warnings": list(n.get("warnings") or []),
+        "read_count": len(reads),
+        "total": len(n.get("to_people") or []),
+        "reads": [{"person": r["person"], "at": r.get("at") or ""} for r in reads],
+        "sha": n.get("sha") or "",
+    }
+    if with_text:
+        out["text"] = n.get("text") or ""
+    return out
+
+
+def send_notice(
+    mid: str,
+    *,
+    text: str,
+    title: str = "",
+    issuer: str = "",
+    held_at: str = "",
+    place: str = "",
+    by: str = "",
+    by_name: str = "",
+) -> dict[str, Any]:
+    """把一版通知正文发给参会单位，落一条不会变的记录。
+
+    同一天、同一版正文、同一批收件人再点一次「发送」不会堆第二条 —— 手抖点两下
+    不该让单位收件箱里出现两封一模一样的通知。换了正文或改了参会单位就是新的一条
+    （那确实是一次新的通知）。
+    """
+    text = (text or "").strip()
+    if not text:
+        return {"ok": False, "error": "通知正文是空的，没什么可发的。"}
+
+    doc = _doc()
+    m = _find(doc, mid)
+    if m is None:
+        return {"ok": False, "error": "meeting_not_found"}
+
+    rc = recipients(m)
+    targets = [t["person"] for t in rc["people"]]
+    sha = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+    today = date.today().isoformat()
+
+    prev = next(
+        (
+            n
+            for n in (m.get("notices") or [])
+            if n.get("sha") == sha
+            and sorted(n.get("to_people") or []) == sorted(targets)
+            and str(n.get("sent_at") or "").startswith(today)
+        ),
+        None,
+    )
+    if prev is not None:
+        return {
+            "ok": True,
+            "repeated": True,
+            "notice": _notice_brief(prev, with_text=True),
+            "message": "今天已经给同一批单位发过这一版正文，没有重复发送。",
+        }
+
+    box: dict[str, Any] = {"ok": False}
+
+    def _do(d: dict) -> dict:
+        mm = _find(d, mid)
+        if mm is None:
+            box["error"] = "meeting_not_found"
+            return d
+        year = date.today().year
+        used = [
+            int(str(n.get("id", "")).split("-")[1])
+            for mm2 in d["meetings"]
+            for n in (mm2.get("notices") or [])
+            if str(n.get("id", "")).startswith(f"MN{year}-") and str(n.get("id", "")).split("-")[1].isdigit()
+        ]
+        seq = (max(used) + 1) if used else 1
+        record = {
+            "id": f"MN{year}-{seq:04d}",
+            "meeting_id": mid,
+            "title": title or (mm.get("title") or ""),
+            # 正文与指纹：发出即冻结。后来改了会议时间地点，已发的这一版不变。
+            "text": text,
+            "sha": sha,
+            "issuer": issuer,
+            "held_at": held_at or (mm.get("held_at") or ""),
+            "place": place or (mm.get("place") or ""),
+            "to_people": targets,
+            "to_units": rc["units"],
+            "uncovered": rc["uncovered"],
+            "warnings": rc["warnings"],
+            "sent_at": _now(),
+            "sent_by": by,
+            "sent_by_name": by_name or by,
+            "reads": [],
+        }
+        mm.setdefault("notices", []).append(record)
+        box["ok"] = True
+        box["notice"] = record
+        return d
+
+    store.update(FILE, _do, default=_empty())
+    if not box.get("ok"):
+        return {"ok": False, "error": box.get("error") or "send_failed"}
+    return {"ok": True, "repeated": False, "notice": _notice_brief(box["notice"], with_text=True)}
+
+
+def mark_notice_read(nid: str, person_id: str) -> dict[str, Any]:
+    """收件人点开了通知。同一个人重复打开只记第一次。
+
+    只认 `to_people` 里的人：不是发给他的通知，读了也不该进回执 —— 否则
+    发文的人会看到一个没被通知到的单位「已读」。
+    """
+    pid = str(person_id or "").strip()
+    box: dict[str, Any] = {"ok": False}
+
+    def _do(doc: dict) -> dict:
+        for m in doc.get("meetings") or []:
+            for n in m.get("notices") or []:
+                if n.get("id") != nid:
+                    continue
+                box["found"] = True
+                if pid not in (n.get("to_people") or []):
+                    box["error"] = "not_recipient"
+                    return doc
+                reads = n.setdefault("reads", [])
+                if not any(str(r.get("person")) == pid for r in reads):
+                    reads.append({"person": pid, "at": _now()})
+                box["ok"] = True
+                box["notice"] = n
+                return doc
+        return doc
+
+    store.update(FILE, _do, default=_empty())
+    if not box.get("ok"):
+        if box.get("error") == "not_recipient":
+            return {"ok": False, "error": "这条通知不是发给你的。"}
+        return {"ok": False, "error": "notice_not_found"}
+    return {"ok": True, "notice": _notice_brief(box["notice"])}
+
+
+def notices_for_person(person_id: str) -> list[dict[str, Any]]:
+    """发给这个人的通知（新的在前）。通知不按天消失，读没读由 `reads` 说了算。"""
+    pid = str(person_id or "").strip()
+    if not pid:
+        return []
+    out: list[dict[str, Any]] = []
+    for m in _doc()["meetings"]:
+        for n in m.get("notices") or []:
+            if pid not in (n.get("to_people") or []):
+                continue
+            one = _notice_brief(n, with_text=True)
+            one["meeting_id"] = m.get("id") or ""
+            one["meeting_title"] = m.get("title") or ""
+            one["read_at"] = next(
+                (str(r.get("at") or "") for r in (n.get("reads") or []) if str(r.get("person")) == pid),
+                "",
+            )
+            out.append(one)
+    out.sort(key=lambda x: (x.get("sent_at") or "", x.get("id") or ""), reverse=True)
+    return out
+
+
+def notices_for_meeting(mid: str) -> list[dict[str, Any]]:
+    """这场会发过哪几版通知、谁读了。给发文的人看回执用。"""
+    m = _find(_doc(), mid)
+    if m is None:
+        return []
+    out: list[dict[str, Any]] = []
+    for n in m.get("notices") or []:
+        one = _notice_brief(n, with_text=True)
+        one["meeting_id"] = mid
+        out.append(one)
+    out.sort(key=lambda x: (x.get("sent_at") or "", x.get("id") or ""), reverse=True)
+    return out
 
 
 def stats() -> dict[str, int]:
