@@ -35,10 +35,12 @@ SECTIONS = [
     ("01", "开场"),
     ("02", "罗盘"),
     ("03", "问政"),
-    ("04", "督办"),
-    ("05", "单位"),
-    ("06", "交办"),
-    ("07", "收尾"),
+    ("04", "会议"),
+    ("05", "督办"),
+    ("06", "单位"),
+    ("07", "交办"),
+    ("08", "写材料"),
+    ("09", "收尾"),
 ]
 
 CSS = """
@@ -59,6 +61,8 @@ th{background:#eef2f7;color:#44546a;font-size:15px;font-weight:600;text-align:le
 td{vertical-align:top;padding:18px 14px;border-bottom:1px solid #e7ecf2;
    font-size:21px;line-height:1.7}
 tr:nth-child(even) td{background:#fafbfc}
+code{font-family:Consolas,Menlo,monospace;font-size:.92em;background:#f1f4f8;
+     color:#1e3a5f;padding:1px 5px;border-radius:4px}
 td.no{width:74px;color:#94a0b0;font-size:17px;font-weight:700}
 td.tm{width:150px;color:#1e3a5f;font-weight:700;font-size:19px}
 td.hand{width:360px;color:#44546a;font-size:19px}
@@ -79,6 +83,9 @@ td.sub .blank{color:#9aa5b1;font-style:normal;font-size:18px}
 
 
 def md_inline(t):
+    # 反引号是 Markdown 的行内代码。直接漏到图上，看到的就是一串 `python xxx`——
+    # 录制现场没人会照着敲，只会以为排版坏了。转成等宽字体，样式上再收一收。
+    t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
     t = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", t)
     return t.replace("|", "｜")
 
@@ -109,7 +116,7 @@ def parse():
                              "end": m.group(2), "rows": rows, "notes": notes})
         elif "剪点速查" in title:
             for line in blk.split("\n"):
-                if re.match(r"\| [③⑤⑥]", line):
+                if re.match(r"\| [①②③④⑤⑥⑦⑧⑨]", line):
                     c = [x.strip() for x in line.split("|")]
                     cuts.append(c[1:5])
         elif "分轨录制" in title:
@@ -296,14 +303,24 @@ def main():
     if not os.path.exists(EDGE):
         sys.exit("找不到 Edge：" + EDGE)
     sections, cuts, rails, spec = parse()
-    if len(sections) != 7:
-        sys.exit("解析到 %d 段，应为 7 段——分镜单格式变了？" % len(sections))
+    if len(sections) != len(SECTIONS):
+        sys.exit("解析到 %d 段，SECTIONS 里定义了 %d 段——分镜单或段落表改了没同步？"
+                 % (len(sections), len(SECTIONS)))
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(TMP, exist_ok=True)
 
     jobs = [("00", "速查", html_overview(sections, cuts, rails, spec))]
     for i, sec in enumerate(sections, 1):
-        jobs.append(("%02d" % i, SECTIONS[i - 1][1], html_for(sec, i, 7)))
+        jobs.append(("%02d" % i, SECTIONS[i - 1][1], html_for(sec, i, len(SECTIONS))))
+
+    # 先清掉上一版的图。加了段、改了段名之后，旧文件名（04-督办.png 那种）会留在
+    # 目录里，和新的（04-会议.png）并排摆着——录制时按编号拿，一拿就拿错。
+    # 只删本工具生成的 `NN-xxx.png`，别的文件不碰。
+    keep = {"%s-%s.png" % (n, nm) for n, nm, _ in jobs}
+    for fn in sorted(os.listdir(OUT)):
+        if re.match(r"\d\d-.+\.png$", fn) and fn not in keep:
+            os.remove(os.path.join(OUT, fn))
+            print("清掉旧图 %s" % fn)
 
     for num, name, html in jobs:
         hp = os.path.join(TMP, "sb_%s.html" % num)
