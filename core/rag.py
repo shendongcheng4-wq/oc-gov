@@ -435,12 +435,25 @@ def list_bases() -> list[dict[str, Any]]:
                 "created_at": b.get("created_at"),
                 "doc_count": len(docs),
                 "chunk_count": sum(int(d.get("chunk_count") or 0) for d in docs),
+                "kind": b.get("kind") or "",
+                "label": b.get("label") or "",
             }
         )
     return out
 
 
-def create_base(name: str, description: str = "") -> dict[str, Any]:
+def create_base(
+    name: str,
+    description: str = "",
+    kind: str = "",
+    label: str = "",
+) -> dict[str, Any]:
+    """建一个分类库。
+
+    `kind` / `label` 是可选的**归类**：知识库清单页按类型分 chip，库不挂归类就
+    落到「上传文档」这个兜底类里；挂了（比如「重点领域」）则单独成类。这两个
+    字段只是清单页的归类，不影响检索 —— 检索始终按库走，不按类走。
+    """
     name = str(name or "").strip()
     if not name:
         raise ValueError("分类库名称不能为空")
@@ -458,6 +471,11 @@ def create_base(name: str, description: str = "") -> dict[str, Any]:
         "created_at": int(time.time()),
         "documents": [],
     }
+    # 只有挂了归类才写这两个键：默认库不该在 rag.json 里多出两个空字段，
+    # 否则「没分类」和「分类叫空字符串」在文件里长得一样。
+    if str(kind or "").strip():
+        base["kind"] = str(kind).strip()
+        base["label"] = str(label or "").strip()
     state["bases"].append(base)
     store.write(FILE, state)
     _Index(base["id"])  # 提前建好索引目录
@@ -724,7 +742,17 @@ def browse_documents() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for b in _state()["bases"]:
         for d in b.get("documents") or []:
-            out.append({**d, "kb_id": b["id"], "kb_name": b["name"]})
+            out.append(
+                {
+                    **d,
+                    "kb_id": b["id"],
+                    "kb_name": b["name"],
+                    # 库挂的归类（见 create_base）：清单页据此分 chip。
+                    # 没挂的落回「doc」，也就是「上传文档」那个兜底类。
+                    "kb_kind": b.get("kind") or "doc",
+                    "kb_label": b.get("label") or "",
+                }
+            )
     out.sort(key=lambda d: int(d.get("created_at") or 0), reverse=True)
     return out
 
@@ -992,6 +1020,10 @@ def doc_view(
             "name": doc["name"],
             "kb_id": kb_id,
             "kb_name": base["name"],
+            # 归类（见 create_base）：阅读视图头部的类型标签用它，
+            # 否则挂了「重点领域」的库里的文件，打开后还是写着「上传文档」
+            "kb_kind": base.get("kind") or "doc",
+            "kb_label": base.get("label") or "",
             "byte_size": int(doc.get("byte_size") or 0),
             "chars": len(text),
             "chunk_count": int(doc.get("chunk_count") or 0),

@@ -175,6 +175,9 @@ def tools_schema(*, team: bool = False) -> list[dict[str, Any]]:
                     "一次可以给多个代码（同一期次）。要走势就给 want=trend，"
                     "要比两个指标就给两个代码 + want=compare，要看分镇街/分行业就给"
                     " want=breakdown。"
+                    "返回里 demo=true 表示这条指标还没接入统计月报真数、数值是演示的，"
+                    "回答时必须说明是演示值；error=no_data 表示该期次没有真数，"
+                    "照 message 里的最近可得期说，不要改口成「还没公布」。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -199,6 +202,21 @@ def tools_schema(*, team: bool = False) -> list[dict[str, Any]]:
                     },
                     "required": ["codes"],
                 },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "focus_topics",
+                "description": (
+                    "看民情焦点：12345 热线、市长信箱、网格员上报的诉求聚类。每条带焦点编号"
+                    "（F1/F2/F3）、受理件数、涉及人数、首次出现日、当前状态、主管部门、"
+                    "关联工单号，以及可在市政府门户查到的来信原文编号。"
+                    "问「民情焦点」「群众最近反映最集中的是什么」「哪类诉求在涨」"
+                    "「12345 热点」就调它。件数、人数、走势是按演示需要编排的（demo=true），"
+                    "来信原文与答复口径是真的，可以让人去核。"
+                ),
+                "parameters": {"type": "object", "properties": {}},
             },
         },
         {
@@ -487,6 +505,9 @@ def tools_schema(*, team: bool = False) -> list[dict[str, Any]]:
 # 所以两段提示词和两条工具（draft_directive / scan_directives）都只在团模式下出现。
 # 给单参谋留着、指望它「自觉不用」是不行的：模型看到工具就会用，而且用得理直气壮。
 _DIRECTIVE_HINT = (
+    "   **这一轮你就是 AI 秘书团，立案、交办、查办理情况都有权限。** 不要说「我在普通模式\n"
+    "   里做不了」「要先切到 AI 秘书团」——那正是你现在所处的模式；上一轮（普通模式）说过\n"
+    "   这句话也不要紧，这一轮工具面里已经有 draft_directive，直接拟卡。\n"
     "   领导口述要往下派（「让住建局 11 月 15 日前把 46 个小区全部开工，城管局把泊位补上」）\n"
     "   就用 draft_directive：原话整段传进去，系统拆条目、认单位、算时限，出一张拟办卡。\n"
     "   派给个人的活（「让秘书 26 号前把三季度分析材料整理好放我桌上」）也走它 ——\n"
@@ -506,13 +527,14 @@ _DIRECTIVE_RULE = (
 
 SYSTEM = """你是溧阳市政府工作台的问数助手，在常务会前给市长和分管领导查数、看台账、找依据。
 
-今天是 {today}。你能查的东西只有三类：11 个已注册指标、督办台账、系统内的会议与口径记录。
+今天是 {today}。你能查的东西只有四类：已注册指标（list_metrics 有全量）、督办台账、
+民情焦点、系统内的会议与口径记录。
 
 ## 怎么做事
 
 1. **先查再答。** 问数值就调 query_metric；不知道代码先调 list_metrics；问进度、催办、谁在办
    就调 scan_oversight；问口径、问某个会定了什么就调 search_knowledge（系统内的会议与
-   台账记录都在那里）。
+   台账记录都在那里）；问群众诉求、热线热点、民情焦点就调 focus_topics。
 2. **不确定就问，别猜。** 拿不准指的是哪个指标、单月还是累计、哪一期，调 clarify 问一句。
    猜错一个指标比问一句的代价大得多 —— 用户拿到的是一个看着正常的错数。
 3. **答案里每个数都要有出处。** 只能用工具返回的数。要算新数（比如用相邻两期累计相减得单月），
@@ -528,7 +550,7 @@ SYSTEM = """你是溧阳市政府工作台的问数助手，在常务会前给�
    142.2」—— 用户要的数拖到第三句才出现，第一眼看到的是一段免责声明。
 5. **建议要落在具体对象上。** 说「加强监测」没用。要说清找哪个单位、看什么、什么时候之前。
    能点名的就点名（督办事项、责任单位、时限）。用户要建议时：先 scan_oversight 看台账，
-   再挑 2-3 个跟他关心的事最相关的指标看，**不要把 11 个指标全查一遍** —— 那是查表，不是参谋。
+   再挑 2-3 个跟他关心的事最相关的指标看，**不要把全部指标挨个查一遍** —— 那是查表，不是参谋。
 6. **能办的事直接办，不要先问「要不要」。** 用户说「催一下住建局那个」时，先 scan_oversight
    拿到编号，再调 advance_item（action 选催办）。它只生成一张待确认卡片，不会立刻写入
    台账 —— 所以不必先问「需要我帮您催办吗」，那等于让用户把同一句话再说一遍。真正的
@@ -539,6 +561,14 @@ SYSTEM = """你是溧阳市政府工作台的问数助手，在常务会前给�
    放进 anchors，正文就会带出处。写完只出草稿，编号留给发文登记簿。
    越权会被当场拒（你只能催用户分管的单位），被拒就把原因说清楚，别自己找别的路。
 {directive_hint}7. **答不了就直说。** 系统里没有的指标、没有的记录，明说没有，不要用常识补。{directive_rule}
+
+**民情焦点不是办结率。** 问「群众最近反映最集中的是什么」「哪类诉求在涨」时调 focus_topics，
+它给的是诉求内容（学区、通气、补贴这类具体事），不是 12345 按期办结率 —— 办结率是效率指标，
+拿它顶焦点等于答了另一个问题。焦点里的件数、人数、走势要说明是演示编排值；来信原文编号
+（如 18842）是能到市政府门户核到的，值得点出来。要把某条焦点往下办，就接 scan_oversight
+看台账里有没有对应事项，没有就如实说「台账里还没有」，再约会研究或者立项；立项要切到
+AI 秘书团才有权限，别在普通模式里声称已经拟好。焦点编号是 F1 这种，跟督办编号（DB…）
+不是一回事，不要混着说。
 
 ## 说话方式
 
@@ -577,6 +607,69 @@ def _scan_text(rows: dict[str, Any]) -> str:
     if not rows.get("hit_count"):
         lines.append("没有需要催办的事项。")
     return "\n".join(lines)
+
+
+def _records_digest(parts: list[dict[str, Any]], limit: int = 1600) -> str:
+    """把本轮查到的**非指标记录**摘成一段，给参谋当底稿。
+
+    参谋的 prompt 原来只有「指标名 + 方向信号 + 本域知识库条目」。问民情焦点、
+    督办台账这类没有指标的问题时，这三样全空，六位参谋于是都回一句「本轮没有
+    可用数值，无法判断」—— 正文是对的，卡上却像系统答不上来（链五实测）。
+
+    只摘系统自己存着的字段，不摘模型措辞：焦点取编号/受理量/标签/状态，台账取
+    `_scan_text` 的摘要，知识库只取标题。数字能不能引用由 `numgate.numbers_in`
+    按这段放行，模型不能凭空多报一个数。
+    """
+    out: list[str] = []
+    for part in parts:
+        kind = part.get("kind")
+        if kind == "focus":
+            for it in (part.get("items") or [])[:5]:
+                bits = [f"民情焦点 {it.get('id') or ''}".strip(), str(it.get("title") or "")]
+                if it.get("meta"):
+                    bits.append(str(it["meta"]))
+                if it.get("tag"):
+                    bits.append(f"标签 {it['tag']}")
+                if it.get("state"):
+                    bits.append(str(it["state"]))
+                if it.get("people") is not None:
+                    bits.append(f"涉及 {it['people']} 人")
+                if it.get("first_seen"):
+                    bits.append(f"首次出现 {it['first_seen']}")
+                lines = "｜".join(b for b in bits if b)
+                tickets = [
+                    str(t[0]) for t in (it.get("tickets") or [])[:3] if t and t[0]
+                ]
+                if tickets:
+                    lines += "｜工单 " + "、".join(tickets)
+                out.append(lines)
+        elif kind == "oversight":
+            text = _scan_text(part.get("rows") or {})
+            if text:
+                out.append(text)
+        elif kind == "knowledge":
+            kb = part.get("kb") or {}
+            for item in (kb.get("knowledge") or [])[:4]:
+                title = str(item.get("title") or "").strip()
+                if title:
+                    unit = str(item.get("unit") or item.get("department") or "").strip()
+                    out.append(f"记录：{title}" + (f"（{unit}）" if unit else ""))
+        elif kind == "meeting":
+            draft = (part.get("payload") or {}).get("meet_draft") or {}
+            if draft:
+                bits = [f"会议草稿：{draft.get('title') or ''}", str(draft.get("held_at") or "")]
+                if draft.get("place"):
+                    bits.append(f"地点 {draft['place']}")
+                if draft.get("host"):
+                    bits.append(f"主持 {draft['host']}")
+                if draft.get("attendees"):
+                    bits.append("参会 " + "、".join(str(x) for x in draft["attendees"]))
+                if draft.get("topics"):
+                    bits.append("议题 " + "；".join(str(x) for x in draft["topics"]))
+                if draft.get("missing"):
+                    bits.append("待补 " + "、".join(str(x) for x in draft["missing"]))
+                out.append("｜".join(b for b in bits if b))
+    return "\n".join(out)[:limit]
 
 
 def _run_tool(
@@ -632,6 +725,37 @@ def _run_tool(
             want=want,
         )
         return _metric_text(res), {"kind": "metric", "payload": res}
+
+    if name == "focus_topics":
+        items = md.focus_items()
+        if not items:
+            return (
+                "民情焦点现在是空的：没有待处理的诉求聚类。",
+                {"kind": "focus", "items": [], "demo": True},
+            )
+        blocks: list[str] = []
+        for it in items[:8]:
+            tickets = "、".join(
+                f"{t[0]}（{t[2]}）" for t in (it.get("tickets") or [])[:3] if t
+            ) or "（未关联工单）"
+            letters = "、".join(
+                f"来信 {le[0]}《{le[1]}》{le[2]}" for le in (it.get("letters") or []) if le
+            ) or "（无来信原文）"
+            blocks.append(
+                f"〔{it.get('id')}〕{it.get('title')}\n"
+                f"  受理：{it.get('meta')}｜标签：{it.get('tag')}｜类型：{it.get('type')}"
+                f"｜状态：{it.get('state')}\n"
+                f"  来源：{it.get('source')}｜涉及 {it.get('people')} 人"
+                f"（{it.get('people_delta')}）｜首次出现 {it.get('first_seen')}\n"
+                f"  关联工单：{tickets}\n"
+                f"  可核查：{letters}\n"
+                f"  详情：{str(it.get('detail') or '')[:120]}"
+            )
+        text = (
+            f"民情焦点 {len(items)} 条。件数、人数、走势是按演示需要编排的（demo=true），"
+            f"来信原文与答复口径可核查：\n\n" + "\n\n".join(blocks)
+        )
+        return text, {"kind": "focus", "items": items, "demo": True}
 
     if name == "scan_oversight":
         import oversight  # noqa: PLC0415
@@ -801,9 +925,40 @@ def _run_tool(
         # 规则算得出来的东西，交给模型反而更不稳，还白花一次推理。
         import meetplan  # noqa: PLC0415
 
-        text = str(args.get("text") or "").strip() or question
+        # 但「模型填的那句话」不能全信：它常常把用户原话浓缩成一句议题摘要，
+        # 顺手丢掉时间和参会单位，草稿卡上就成了「时间未定、参会未定」，
+        # 用户以为系统没听懂（现场就这样：一句话里的四个单位全丢了）。
+        # 原句和 text 各解析一次，取要素更全的那份 —— 纯规则，多花的是微秒。
         person = people_mod.meta(person_id)
-        draft = meetplan.parse(text, today=today, person=person)
+        cands = [t for t in (str(args.get("text") or "").strip(), question) if t]
+        parsed = [(meetplan.parse(t, today=today, person=person), t) for t in cands]
+
+        def _fullness(item: tuple[dict[str, Any], str]) -> tuple[int, int, int, int]:
+            d = item[0]
+            return (
+                len(d.get("attendees") or []),
+                1 if d.get("held_at") else 0,
+                1 if d.get("title") else 0,
+                # 要素打平时看议题条数：一句话里列了「一、二、三」的，解析出来的
+                # 议题越多说明这一遍切得越细。不带上这一项，可能挑中只有一条议题、
+                # 其余被并进标题的那份。
+                len(d.get("topics") or []),
+            )
+
+        def _name_like(title: Any) -> bool:
+            """标题像不像一个会名（「民情焦点研判会」），而不是议题列表（「A、B、C」）。"""
+            t = str(title or "")
+            return bool(t) and t.endswith("会") and "、" not in t
+
+        draft, text = max(parsed, key=_fullness) if parsed else (meetplan.parse(question, today=today, person=person), question)
+        # 会名单独兜一道。模型那句 text 常把原话浓缩成议题摘要，它那份要素更全，
+        # 于是 __fullness 选中它、标题变成「学区归属、燃气通气、租房补贴」，
+        # 而用户原话里明明说了「开个民情焦点研判会」。两份都解析过了，直接拿会名。
+        if not _name_like(draft.get("title")):
+            for other, _ in parsed:
+                if _name_like(other.get("title")):
+                    draft = {**draft, "title": other["title"]}
+                    break
         res = meetplan.as_result(draft, text)
         # 喂给模型的是「还缺什么、撞不撞车」，让它能据此追问一句，而不是照念一遍。
         bits = [
@@ -1156,6 +1311,38 @@ def _audit_payload(
                 payload["period_label"] = res["period_label"]
         elif part.get("kind") == "oversight":
             payload["notes"].append(_scan_text(part.get("rows") or {}))
+        elif part.get("kind") == "focus":
+            # 焦点台账里的件数、人数、工单号、来信编号都是系统里写着的数（件数人数
+            # 是按演示编排的，但也不是模型编的）。不放行的话，「学区 128 件、96 人」
+            # 会被判成查不到出处 —— 实测就是这样：连退两轮，最后一次把整句剔除，
+            # 用户只看到一句「我上一条回复里没有写数字」。焦点是这条链路的第一环，
+            # 它一被判编造，后面建会、立项全跟着没依据。
+            for it in part.get("items") or []:
+                for key in ("id", "title", "meta", "tag", "type", "state", "source",
+                            "first_seen", "people_delta", "letters_note", "detail"):
+                    if it.get(key):
+                        payload["notes"].append(str(it[key]))
+                if it.get("people") is not None:
+                    payload["notes"].append(str(it["people"]))
+                for row in (it.get("tickets") or []):
+                    # 编号单独放一条：正文引用「TZ20261116032」时不会连标题一起写，
+                    # 只把「编号+标题+状态」整串当字面量，正文里就对不上。
+                    if row and row[0]:
+                        payload["notes"].append(str(row[0]))
+                    payload["notes"].append(" ".join(str(x) for x in row if x))
+                for row in (it.get("letters") or []):
+                    # 来信编号（18842 这种 5 位纯数字）必须单独进：只放整串时，
+                    # 正文写「来信 18842」，数闸会拿别处的短字面量「18」去抹，
+                    # 把编号切成 842 —— 实测连退两轮，最后把整句删了。
+                    if row and row[0]:
+                        payload["notes"].append(str(row[0]))
+                    payload["notes"].append(" ".join(str(x) for x in row[:3] if x))
+                for row in (it.get("channels") or []):
+                    payload["notes"].append(" ".join(str(x) for x in row if x))
+                for row in (it.get("keywords") or []):
+                    payload["notes"].append(" ".join(str(x) for x in row if x))
+                for v in (it.get("trend") or []):
+                    payload["notes"].append(str(v))
         elif part.get("kind") == "knowledge":
             for item in (part.get("kb") or {}).get("knowledge") or []:
                 if item.get("text"):
@@ -1184,6 +1371,16 @@ def _audit_payload(
             for key in ("title", "held_at", "when_text", "place", "host"):
                 if d.get(key):
                     payload["notes"].append(str(d[key]))
+            # 日期和时间再拆开各放一条。整串「2026-11-29 09:00」在正文里常被写成
+            # 「11 月 29 日（明天）上午 9:00」—— 中间插了词，整串就抹不掉；
+            # 而剩下的「2026-11-29」会被区间规则当成「26-11」切出 20、29 两个裸数
+            # （实测就是这么判坏的）。拆开后 _variants 能生成「11月29日」这类变体。
+            held = str(d.get("held_at") or "").strip()
+            m_held = re.match(r"(\d{4}-\d{2}-\d{2})[ T]?(\d{2}:\d{2})?", held)
+            if m_held:
+                payload["notes"].append(m_held.group(1))
+                if m_held.group(2):
+                    payload["notes"].append(m_held.group(2))
             for name in d.get("attendees") or []:
                 payload["notes"].append(str(name))
         elif part.get("kind") == "compare":
@@ -1554,6 +1751,21 @@ def run(
         for m in (history or [])
         if m.get("role") in ("user", "assistant") and m.get("content")
     ]
+    # 切到团模式时补一条就近提示。系统提示里已经写了「这一轮你就是 AI 秘书团」，
+    # 但实测压不住历史：前两轮在普通模式下说过「立项要切到秘书团才有权限」，模型
+    # 会照着历史继续拒绝，连工具都不调 —— 同一句话、同一份工具面，无历史时出卡
+    # 正常，带历史就答「我这一轮的工具里没有这个权限」。贴着当前问题说它才认。
+    if team and messages:
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "（系统）本轮已切到 AI 秘书团，draft_directive / scan_directives 都在工具面里，"
+                    "立项、交办、查办理情况可以直接做。前面说的「普通模式做不了」「要先切到秘书团」"
+                    "是上一轮的事，不要带到这一轮，也不要再说这句话。"
+                ),
+            }
+        )
     messages.append(
         {"role": "user", "content": (materials + "\n\n用户的问题：\n" + question) if materials else question}
     )
@@ -1933,6 +2145,7 @@ def run(
             check=check,
             question=question,
             person_id=person_id,
+            records=_records_digest(parts),
         )
     return None
 
@@ -2111,6 +2324,7 @@ def _finish(
             check=check,
             question=question,
             person_id=person_id,
+            records=_records_digest(parts),
         )
     return result
 
@@ -2124,6 +2338,7 @@ def _attach_experts(
     check: Any,
     question: str,
     person_id: str | None,
+    records: str = "",
 ) -> dict[str, Any]:
     """给一份已经成形的答案配参谋解读。参谋失败不影响答案本身。
 
@@ -2131,6 +2346,9 @@ def _attach_experts(
     结论、用工具原文兜底」那条 return。后者以前直接返回，于是同一句问话，模型
     答顺了就有七段解读，答秃了就一段都没有 —— 用户看到的是「这个功能时灵时不灵」，
     比干脆没有更让人不敢用。兜底时正文本来就是接口原文，参谋反而更有话可说。
+
+    `records` 见 `_records_digest`：没有指标的那类问题（民情焦点、督办台账）全靠它，
+    否则六位参谋只会回「没有可用数值」。
     """
     if not expert_ids:
         return result
@@ -2142,6 +2360,7 @@ def _attach_experts(
             expert_ids,
             model_ref,
             on_step=on_step,
+            records=records,
             refs_by_expert=ask_mod._expert_refs(  # noqa: SLF001 域检索只有一份实现
                 question, result, person_id, expert_ids
             ),

@@ -78,6 +78,22 @@ def _close(x: float, y: float) -> bool:
     return abs(x - y) <= max(0.05, abs(y) * 0.002)
 
 
+def numbers_in(text: str) -> set[float]:
+    """一段文字里出现过的数值，用于「这段记录里的数可以引用」。
+
+    只给系统自己存的记录用（民情焦点的件数人数、督办台账的件数天数）。参谋的
+    底稿里有这段记录、却不放行它的数，就会出现「说了 128 件被判编造」—— 而
+    那 128 正是系统写在焦点台账里的。
+    """
+    out: set[float] = set()
+    for match in _NUM.finditer(str(text or "")):
+        try:
+            out.add(_to_float(match.group(0)))
+        except ValueError:  # pragma: no cover - 正则已保证是数字
+            continue
+    return out
+
+
 def _walk(obj: Any, numbers: set[float], literals: list[str], depth: int = 0) -> None:
     if depth > 6:
         return

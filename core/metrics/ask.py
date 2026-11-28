@@ -59,6 +59,71 @@ def match_metrics(question: str) -> list[dict[str, Any]]:
     ]
 
 
+# 「问的是哪个指标」不该由模型说了算。现场两次都错在同一处：
+# 问「规上工业总产值增速是多少」，别名精确只命中产值，模型却答成
+# 「规上工业增加值增速 8.6%」——总产值和增加值是两个指标，差一个字、
+# 差一个量级；更麻烦的是 8.6% 那条是演示值，答错了连「这是演示」都看不出来。
+_RATE_ASK = ("增速", "增长", "增幅", "涨幅", "涨了", "同比")
+
+
+def _shared_subject(a: str, b: str, least: int = 5) -> bool:
+    """名字前半段是不是同一个主体（「规模以上工业」总产值 / 增加值）。"""
+    n = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        n += 1
+    return n >= least
+
+
+def _guard_metric_codes(
+    question: str, codes: list[str], rule_hits: list[dict[str, Any]]
+) -> list[str]:
+    """模型选码的守卫：只在「同主体、总量 vs 增速」这一处纠偏。
+
+    只守一个方向：问句精确命中了总量类指标（总产值、投资额），又明说要
+    「增速」，模型却塞进同主体的增速类指标 —— 这时该用总量指标自己的同比
+    回答，而不是换一个指标。问「那固投呢」这种没提增速的，并排「增速 +
+    金额」两行是想要的，不能动。
+    """
+    if not codes or not rule_hits:
+        return codes
+    wants_growth = any(w in question for w in _RATE_ASK)
+    if not wants_growth:
+        return codes
+
+    totals = [
+        h for h in rule_hits
+        if md.METRICS.get(h["code"], {}).get("unit") != "%"
+        and md.METRICS.get(h["code"], {}).get("kind") != "rate"
+    ]
+    if not totals:
+        return codes
+    total_names = [h["name"] for h in totals]
+    # 问句里**点名**了的指标不能剔：问「产值和工业增加值增速比一比」时
+    # 那条增速是用户自己要的，剔掉就答非所问了。
+    named = {h["code"] for h in rule_hits}
+
+    kept, dropped = [], []
+    for code in codes:
+        meta = md.METRICS.get(code, {})
+        is_rate = meta.get("unit") == "%" or meta.get("kind") == "rate"
+        if (
+            is_rate
+            and code not in named
+            and any(_shared_subject(meta.get("name", ""), n) for n in total_names)
+        ):
+            dropped.append(code)
+        else:
+            kept.append(code)
+    if not dropped:
+        return codes
+    # 剔干净了就把规则命中的总量指标补回来 —— 模型可能一个都没选对。
+    if not kept:
+        kept = [h["code"] for h in totals]
+    return kept
+
+
 def _should_autofix(question: str) -> bool:
     """这句话值不值得为它多花一次模型改写。
 
@@ -174,8 +239,11 @@ def _fmt(value: float | None, unit: str) -> str:
         return "—"
     if unit == "%":
         return f"{value:g}%"
-    if unit == "亿元":
-        return f"{value:,.1f} 亿元"
+    if unit in ("亿元", "亿千瓦时"):
+        # 统计表给到两位（1300.07、290.86、100.47），固定一位会把 1300.07 写成
+        # 1300.1 —— 对着材料核数时说「差 0.03」比不显示更难看。多余的零去掉。
+        s = f"{value:,.2f}".rstrip("0").rstrip(".")
+        return f"{s} {unit}"
     return f"{value:,.0f} {unit}".strip()
 
 
@@ -1027,10 +1095,17 @@ def _ask_impl(
         # 工具路径：查哪个指标、哪一期、要什么口径，都由调用方（core/agent.py）定好。
         # 这里不再调模型规划 —— 一次多余的往返不仅慢，还可能把已经确认的期次改掉。
         plan, planner, degraded = None, "tool", {}
+        # 但调用方也是模型挑的码（agent 先想再调工具），同一处混淆照样会进来：
+        # 问「总产值多少、增速怎么样」，agent 会顺手把「增加值增速」一起查。
+        # 守卫是纯代码、不看是谁指定的，两条路径共用。
+        tool_codes = _guard_metric_codes(
+            question,
+            [c for c in (codes or []) if c in md.METRICS],
+            match_metrics(question),
+        )
         hits = [
             {"code": c, "alias": "调用方指定", "name": md.METRICS[c]["name"]}
-            for c in (codes or [])
-            if c in md.METRICS
+            for c in tool_codes
         ]
         if hits:
             base = parse_intent(question, hits)
@@ -1086,6 +1161,31 @@ def _ask_impl(
         out["material_refs"] = plan["material_refs"]
 
     if plan is not None:
+        # 模型挑的码过一道守卫：问的是哪个指标，别名逐字出现这件事比模型的
+        # 判断更硬 —— 模型只该决定「要值还是要走势、哪一期」，不该换指标。
+        # 纠偏必须留痕：trace 里能看出「模型原来选的是哪个」，否则事后只能
+        # 看到一条正确但来历不明的答案。
+        guarded = _guard_metric_codes(
+            question, list(plan.get("metric_codes") or []), match_metrics(question)
+        )
+        if guarded != list(plan.get("metric_codes") or []):
+            trace.append(
+                {
+                    "step": len(trace) + 1,
+                    "tool": "guard.metric_codes",
+                    "call": f"guard(codes={plan.get('metric_codes')!r}) → {guarded!r}",
+                    "status": "ok",
+                    "summary": "问的是「"
+                    + "、".join(md.METRICS[c]["name"] for c in guarded)
+                    + "」，模型原选的是「"
+                    + "、".join(
+                        md.METRICS.get(c, {}).get("name", c)
+                        for c in (plan.get("metric_codes") or [])
+                    )
+                    + "」，已按问句里的指标名纠正",
+                }
+            )
+            plan["metric_codes"] = guarded
         hits = [
             {"code": c, "alias": "模型指定", "name": md.METRICS[c]["name"]}
             for c in plan["metric_codes"]
@@ -1496,6 +1596,13 @@ def _ask_impl(
             return f"{name}（{clean}）"
 
         notes = ["两个指标口径不同（一个是增速、一个是比率/总量），只能并排看，不能相加减。"]
+        # 一行真、一行演示的对比最坑：数看着一样权威，其实一个能对外、一个不能。
+        demo_names = [r["name"] for r in ok_rows if r.get("demo")]
+        if demo_names:
+            notes.append(
+                "、".join(demo_names)
+                + " 尚未接入统计月报真数，这几项数值是演示数据，不能当统计局的数引用。"
+            )
         if result.get("mixed_period"):
             # 有一个指标取到的是公报年度值（GDP 就是这样），另一个是当月值。
             # 还按「同期表现」写，等于把 2025 全年和 2026 年 10 月摆成一对 ——
@@ -1790,7 +1897,14 @@ def _ask_impl(
         "period_note": pending_note,
         "notes": (
             [month_note] if month_note else []
-        ) + ([dim_note] if dim_note else []) + ([pending_note] if pending_note else []) + result["caveats"],
+        ) + ([dim_note] if dim_note else [])
+        + ([pending_note] if pending_note else [])
+        + (
+            [result["name"] + " 尚未接入统计月报真数，这个数是演示数据，不能当统计局的数引用。"]
+            if result.get("demo")
+            else []
+        )
+        + result["caveats"],
         "trace": trace,
     }
     if intent["intent"] == "trend":

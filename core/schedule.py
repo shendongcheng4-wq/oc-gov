@@ -442,7 +442,9 @@ def build(person_id: str | None = "mayor", days: int = WINDOW_DEFAULT) -> dict[s
             # 今天第一条就是最该先办的：排序已经把逾期、签收、临近会议顶到前面
             "lead": todays[0]["title"] if todays else "",
         },
-        # 口径写在数据里，前端照抄，不在两处各写一份文案
+        # 口径留在数据里：接口、离线快照、README 都引这一句，免得三处各写一版文案。
+        # 页面上只在弹窗标题下说一次；页脚曾经把它连同「分管单位 / 生成于」再抄一遍，
+        # 同一句话写四遍，读者只会跳过去。
         "basis": ("分管单位：" + "、".join(units)) if units else "全市（不按单位筛）",
         "rule": "日程只收已有时间的事：督办时限与状态、领导交办、会议时间、统计数据披露日。没有手工排期。",
         "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),

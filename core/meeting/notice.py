@@ -101,7 +101,13 @@ def notice_title(title: str) -> str:
     name = (title or "").strip()
     if name.startswith("关于") and name.endswith("通知"):
         return name
-    return f"关于召开{_meeting_name(name)}的通知"
+    name = _meeting_name(name)
+    # 标题是议题拼出来的时候（「学区归属、燃气通气、租房补贴」），后面不补
+    # 「会议」就成了「关于召开……补贴的通知」，读起来像要开一场关于补贴的会。
+    # 以「会」结尾的（经济运行分析会、常务会议）不动，免得「会会议」。
+    if name and not name.endswith("会"):
+        name += "会议"
+    return f"关于召开{name}的通知"
 
 
 def _clean_list(values: Any) -> list[str]:

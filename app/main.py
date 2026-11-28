@@ -30,6 +30,7 @@ import sys
 import threading
 import time
 import traceback
+from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
@@ -86,6 +87,7 @@ import attach as ov_attach  # noqa: E402  —— 佐证原件仓库（core/overs
 import chat  # noqa: E402
 import docparse  # noqa: E402
 import directives as directives_mod  # noqa: E402
+import extdata as extdata_mod  # noqa: E402  —— 附件表格 × 指标库逐期对照
 import extract as meeting_extract  # noqa: E402
 import ledger as meetings  # noqa: E402
 import notice as meeting_notice  # noqa: E402
@@ -469,9 +471,9 @@ def turn_events(turn_id: str, after: int, owner: str) -> dict | None:
 
 EXAMPLES = [
     {"q": "今年1-9月全市规上工业增加值是多少？同比增速如何？", "tag": "图上这句"},
-    {"q": "重大项目投资完成率有多少，跟时序进度比怎么样", "tag": "对比时序"},
-    {"q": "12345 办结率最近三个月什么走势", "tag": "走势"},
-    {"q": "哪个镇街的项目推进最慢", "tag": "分解"},
+    {"q": "1-9 月全社会固定资产投资下降了多少", "tag": "对比时序"},
+    {"q": "民生实事 20 项里哪几项还没完成", "tag": "督办"},
+    {"q": "新增城镇就业 1.5 万人完成到多少了", "tag": "进度"},
     {"q": "今年财政收入增长多少", "tag": "已注册"},
     {"q": "全市 GDP 是多少", "tag": "总量"},
 ]
@@ -682,6 +684,43 @@ def _att_meta(a: dict) -> dict:
     return out
 
 
+def _attach_external(result: dict, atts: list[dict]) -> None:
+    """给对话层的答案补一张「外部数据 × 指标库」逐期对照表。
+
+    为什么不在 `ask()` 里做完了事：那条链路只在对话层没答出来时才走到。实测
+    「这份月报和系统里的数对得上吗」这句话，对话层自己会逐个指标查库、在正文里
+    把每一格核一遍（结论还对），但它不产出那张表 —— 界面下方「外部数据 × 指标库」
+    整块就不出现，用户以为文件只被读了一眼。表是这一轮的主证据，不能靠运气。
+
+    只补**本轮新传**的材料：会话早前挂着的那几份（archived）进上下文是为了让追问
+    能翻原文，不是为了每轮把同一张表重对一遍。数字仍不回流进正文 —— 这一步在
+    正文生成之后。
+    """
+    if "external" in result:
+        return
+    fresh = [a for a in atts if not a.get("archived")]
+    if not fresh:
+        return
+    try:
+        ext = extdata_mod.analyze(fresh, date.today())
+    except Exception:  # noqa: BLE001 对照表是加分项，坏了不该让整轮问答失败
+        return
+    if ext and ext.get("metrics"):
+        result["external"] = ext
+        # 正文可能只念了其中一个指标（问「这份月报对不对」时模型会自己挑一个），
+        # 不点一句的话，用户看到正文讲 GDP、下面一张三指标的对照表，会以为答偏了。
+        ms = ext.get("metrics") or []
+        rows = sum(len(m.get("rows") or []) for m in ms)
+        if rows:
+            same = sum(int(m.get("same") or 0) for m in ms)
+            result.setdefault("notes", [])
+            if len(result["notes"]) < 6:
+                result["notes"].append(
+                    f"附件表格已按「期次 + 指标」与指标库对齐：{len(ms)} 项指标、"
+                    f"{rows} 期里有 {same} 期一致，逐期对照见下方。"
+                )
+
+
 def _drop_materials(body: dict) -> list[str]:
     """本轮要摘掉的材料 id（用户点了芯片上的 ✕）。
 
@@ -759,6 +798,22 @@ def _attachments(body: dict, owner: str | None = None) -> list[dict]:
 _KB_DOC_LABEL = "上传文档"
 
 
+def _kb_doc_kinds() -> dict[str, str]:
+    """清单页的「文件类」chip：归类 → 中文名，兜底的「上传文档」永远在。
+
+    归类挂在分类库上（rag.create_base 的 kind/label），这里只做汇总：库多挂
+    一个归类，清单页就多一个 chip，前端不用改。顺序把兜底类放最后 —— 具体
+    归类比「其他文件」先出现，人才会先看到「重点领域」再看到「上传文档」。
+    """
+    named: dict[str, str] = {}
+    for b in rag_mod.list_bases():
+        k = str(b.get("kind") or "").strip()
+        if not k or k == "doc":
+            continue
+        named[k] = str(b.get("label") or k).strip() or k
+    return {**named, "doc": _KB_DOC_LABEL}
+
+
 def _kb_doc_entry(doc: dict[str, Any], body: str) -> dict[str, Any]:
     """把一篇上传文档装成知识库条目的形状，好让前端一套渲染吃到两种来源。"""
     ts = int(doc.get("created_at") or 0)
@@ -787,8 +842,8 @@ def _kb_doc_entry(doc: dict[str, Any], body: str) -> dict[str, Any]:
         lead.append(str(doc["doc_no"]))
     note = " · ".join(lead + [note])
     return {
-        "kind": "doc",
-        "kind_label": _KB_DOC_LABEL,
+        "kind": doc.get("kb_kind") or "doc",
+        "kind_label": doc.get("kb_label") or _KB_DOC_LABEL,
         "id": doc["id"],
         "title": doc["name"],
         "text": body,
@@ -805,26 +860,32 @@ def _kb_doc_entry(doc: dict[str, Any], body: str) -> dict[str, Any]:
     }
 
 
-def _kb_doc_entries(q: str = "", limit: int = 0) -> list[dict[str, Any]]:
+def _kb_doc_entries(q: str = "", limit: int = 0, kind: str = "") -> list[dict[str, Any]]:
     """资料库里的文档，按知识库条目的形状列出来。
 
     - 不带 q：清单模式，取每篇开头三块当预览。**不设阈值、不过滤** —— 和
       knowledge.browse 同一个立场，翻目录漏一篇会让人以为文件没上传成功。
     - 带 q：走向量检索，命中的那一块当正文。**按文档去重** —— 一篇文件命中
       十块，列十遍没有意义；取分最高的那块，并把分数留在条目上供排序。
+    - `kind` 非空时只列挂了这个归类的库（清单页的 chip 收窄）。注意「上传文档」
+      也是归类的一种（没挂归类的库都算它），所以两边都按归类精确比，不是「全都要」。
     """
     bases = rag_mod.list_bases()
+    all_docs = rag_mod.browse_documents()
+    if kind:
+        bases = [b for b in bases if (str(b.get("kind") or "").strip() or "doc") == kind]
+        all_docs = [d for d in all_docs if (d.get("kb_kind") or "doc") == kind]
     if not bases:
         return []
 
     if not q:
         return [
             _kb_doc_entry(d, "\n\n".join(rag_mod.preview_chunks(d["kb_id"], d["id"], 3)))
-            for d in rag_mod.browse_documents()
+            for d in all_docs
         ]
 
     k = max(1, int(limit or rag_mod.DEFAULT_K))
-    docs = rag_mod.browse_documents()
+    docs = all_docs
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
 
@@ -1251,10 +1312,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, **wb.workspace(self._person())})
 
             if path == "/api/people":
+                # 带上 role：前端据此决定要不要显示「城市罗盘」。登录态以 session 里的
+                # 角色为准，但演示浏览（未登录）也要能按身份收口，所以这里一并给出。
                 return self._json(
                     {
                         "ok": True,
-                        "people": people.all_people(),
+                        "people": [
+                            {**p, "role": directory.role_of(str(p["id"]))}
+                            for p in people.all_people()
+                        ],
                         "current": people.resolve(self._person()),
                         "max_watch": people.MAX_WATCH,
                         "demo": True,
@@ -1404,14 +1470,18 @@ class Handler(BaseHTTPRequestHandler):
                 for e in idx:
                     counts[e["kind"]] = counts.get(e["kind"], 0) + 1
                 # 上传文档不受身份收窄（沿用资料库原有的读口径：演示态不收窄），
-                # 所以单独数一遍，不从 idx 里推。
-                doc_total = len(rag_mod.browse_documents())
-                if doc_total:
-                    counts["doc"] = doc_total
+                # 所以单独数一遍，不从 idx 里推。按归类分别数：挂了「重点领域」的
+                # 库不该再算进「上传文档」，否则 chip 上的数加起来比「全部」还多。
+                doc_kinds = _kb_doc_kinds()
+                for d in rag_mod.browse_documents():
+                    dk = d.get("kb_kind") or "doc"
+                    counts[dk] = counts.get(dk, 0) + 1
+                kinds_meta = [{"id": k, "label": v} for k, v in doc_kinds.items()]
+                is_doc_kind = kind in doc_kinds
                 if not q:
-                    items = [] if kind == "doc" else knowledge_mod.browse(person, kind or None)
-                    if kind in ("", "doc"):
-                        items += _kb_doc_entries()
+                    items = [] if is_doc_kind else knowledge_mod.browse(person, kind or None)
+                    if is_doc_kind or not kind:
+                        items += _kb_doc_entries(kind=kind)
                     return self._json(
                         {
                             "ok": True,
@@ -1420,6 +1490,7 @@ class Handler(BaseHTTPRequestHandler):
                             "total": len(items),
                             "index_size": len(idx),
                             "counts": counts,
+                            "doc_kinds": kinds_meta,
                             "items": knowledge_mod.to_meta(items),
                             # 保留 hits 字段：老调用方（测试、脚本）读的是它。
                             # 清单不是检索结果，这里如实给空。
@@ -1427,12 +1498,12 @@ class Handler(BaseHTTPRequestHandler):
                         }
                     )
                 pool = [e for e in idx if e["kind"] == kind] if kind else idx
-                items = [] if kind == "doc" else knowledge_mod.search_in(pool, q, limit)
-                if kind in ("", "doc"):
+                items = [] if is_doc_kind else knowledge_mod.search_in(pool, q, limit)
+                if is_doc_kind or not kind:
                     # 两路分数不同源：系统记录是「余弦 + 硬信号」（编号精确命中能
                     # 加到 1.0），上传文档是纯余弦。合并排序时系统记录天然靠前，
                     # 这是想要的次序 —— 台账/口径是现成的答案，文件是要读的原文。
-                    items = items + _kb_doc_entries(q, limit)
+                    items = items + _kb_doc_entries(q, limit, kind=kind)
                     items.sort(key=lambda e: float(e.get("score") or 0), reverse=True)
                 return self._json(
                     {
@@ -1442,6 +1513,7 @@ class Handler(BaseHTTPRequestHandler):
                         "total": len(items),
                         "index_size": len(idx),
                         "counts": counts,
+                        "doc_kinds": kinds_meta,
                         "items": knowledge_mod.to_meta(items),
                         "hits": knowledge_mod.to_meta(items),
                     }
@@ -2248,6 +2320,12 @@ class Handler(BaseHTTPRequestHandler):
                 draft = body.get("draft") or {}
                 if not isinstance(draft, dict):
                     return self._json({"ok": False, "error": "draft 必须是对象"}, 400)
+                # 这里**不做「回原消息里补 topics」的兜底**。想过，也写过，最后删了：
+                # 唯一的数据源是旧卡片落进会话历史的那一份，而那份的议题是旧切分
+                # 逻辑的产物（「工业支撑与投资拖累」被按「与」切成「工业托」「固投拖
+                # 的判断」）。把它们补进会议，等于系统自己把读不通的句子写进通知
+                # 正文，还绕过了人看一眼的机会 —— 比「这场会暂时没有议题」更糟。
+                # 现在的卡片自己会提交 topics（见 index.html 的 commitMeet）。
                 res = meetplan_mod.commit(
                     draft,
                     thread_id=str(body.get("thread_id") or ""),
@@ -3851,6 +3929,8 @@ class Handler(BaseHTTPRequestHandler):
                 fb = _harness_fallback(question, result, atts)
                 if fb is not None:
                     result = fb
+        # 对话层答了也补一张逐期对照表（走 ask() 时它已经自己带上了）。
+        _attach_external(result, atts)
         result["planner_info"] = llm.llm_info()
         # 本轮上下文的裁剪统计。前端在用量行里写出来，让「它怎么把刚才的忘了」
         # 有一个可核对的解释，而不是让人怀疑系统不稳定。
@@ -3959,6 +4039,8 @@ class Handler(BaseHTTPRequestHandler):
                 fb = _harness_fallback(question, result, atts)
                 if fb is not None:
                     result = fb
+            # 同 /api/ask：对话层答了也要有那张逐期对照表。
+            _attach_external(result, atts)
             result["planner_info"] = llm.llm_info()
             # 本轮上下文的裁剪统计。前端在用量行里写出来，让「它怎么把刚才的忘了」
             # 有一个可核对的解释，而不是让人怀疑系统不稳定。

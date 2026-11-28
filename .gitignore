@@ -26,5 +26,9 @@ docs/分镜图.rar
 # 一次性调试产物（curl 回包、出图时用的 headless 浏览器 profile），可随时重跑
 .tmp_*
 
+# 自检/试跑时把 OCGOV_DATA 指到仓库根下留下的临时数据目录（models.json、
+# oversight-state.json 之类），跟 data/ 一样属于运行时状态，不入库
+ocgov_*/
+
 # 离线快照导出物（每导一次整份重写，不入库）
 dist/

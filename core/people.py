@@ -34,16 +34,29 @@ STORE_NAME = "workspaces"
 # 3 列布局下 8 张也正好收在两行半内，不会把关注动态挤到屏幕外。
 MAX_WATCH = 8
 
-# 工作台的板块。顺序 = 渲染顺序，缺省 = 三块都显示、按这个次序。
+# 工作台的板块。顺序 = 渲染顺序，缺省 = 四块都显示、按这个次序。
 # 这里只登记"已经写好的块"，不是组件市场：加一块就要有对应的取数逻辑，
 # 光在名单里加个 id 只会渲染出一片空白。
+#
+# 「督办列表」排在「我的关注」前面：它是台账的全量清单（本单位主办/协办的事），
+# 而「关注指标」是各人自己挑的几个数。单位账号进来第一眼要看的正是自己那几件账，
+# 之前这些只混在「关注动态」里（按紧急度截前 5 条），看不见第八件。
+#
+# **市长例外**：这张清单按单位归口，市长看的是全市综合面（指标 + 动态 + 他跟进的
+# 那几件），把八件分工摊在最上面反而把指标挤下去。所以 leader 的缺省块里没有它，
+# 见 `default_block_ids()`；他真要看，仍可在「自定义」里勾回来（块本身没删）。
 BLOCKS: tuple[tuple[str, str], ...] = (
+    ("oversight", "督办列表"),
     ("watch", "我的关注"),
     ("feed", "关注动态 · 今日提醒"),
     ("follow", "重点注意事项 · 我跟进的"),
 )
 BLOCK_IDS = tuple(b[0] for b in BLOCKS)
+# 「全部块」的缺省顺序。注意它不含角色判断：按人取缺省块请用 default_block_ids()。
 DEFAULT_LAYOUT = list(BLOCK_IDS)
+
+# 缺省不给「督办列表」的角色。只有一把手（看全市综合面）。
+_NO_OVERSIGHT_ROLES = ("leader",)
 
 # 手动跟进的条数上限：这是"我自己挑的几条重点"，不是第二份台账。
 # 上限太松就会变成"全选一遍"，那和不挑没区别。
@@ -127,6 +140,23 @@ UNIT_ACCOUNTS: tuple[tuple[str, str, str, str], ...] = (
     ("u-emergency", "市应急管理局", "应", "应急"),
     ("u-market", "市市场监管局", "监", "市场监管"),
     ("u-data", "市大数据局", "数", "大数据"),
+    # 2026-11-28 补齐。此前这 14 家在台账里是责任单位、在会议名单里是参会单位，
+    # 但没有账号 —— 催办写不进收件箱、会议通知的发文回执只能记「没有系统账号」。
+    # 头像字取单位名里最有辨识度的那个字，简称给登录框和日程里用。
+    ("u-gongxin", "市工信局", "工", "工信"),
+    ("u-rsj", "市人社局", "人", "人社"),
+    ("u-wsj", "市卫健局", "卫", "卫健"),
+    ("u-police", "市公安局", "公", "公安"),
+    ("u-sifa", "市司法局", "司", "司法"),
+    ("u-court", "市法院", "院", "法院"),
+    ("u-tax", "市税务局", "税", "税务"),
+    ("u-swj", "市商务局", "商", "商务"),
+    ("u-stat", "市统计局", "统", "统计"),
+    ("u-union", "市总工会", "会", "工会"),
+    ("u-youth", "团市委", "团", "共青团"),
+    ("u-women", "市妇联", "妇", "妇联"),
+    ("u-canlian", "市残联", "残", "残联"),
+    ("u-media", "市融媒体中心", "媒", "融媒体"),
 )
 # 市生态环境局不在这里：它的账号就是既有的 `bureau`（生态环境局局长）。
 # 再开一个 `u-env` 会出现同一单位两个账号，事件流里分不清是谁签的。
@@ -370,20 +400,55 @@ def set_follow(pid: str | None, ids: Any) -> dict[str, Any]:
     return {"ok": True, "person": key, "follow": clean, "count": len(clean)}
 
 
+def default_block_ids(pid: str | None) -> tuple[str, ...]:
+    """这个人台面上缺省显示哪些块（只算「有没有」，顺序仍按 BLOCK_IDS）。
+
+    唯一的差别是「督办列表」：市长不看它。判角色走 `directory.role_of()` ——
+    角色的唯一映射点在那边，这里不再抄一份「谁是市长」。
+
+    **为什么延迟 import**：`directory` 反过来 import 本模块（它从 PEOPLE 派生
+    角色与分管单位），模块级引它就是个循环导入。放在函数里，调用时 directory
+    早已加载完，取到的是同一份映射。导不进来就让它报错，不吞 —— 静默回落到
+    「市长也有督办列表」正是这次要修的那个 bug，藏起来更难查。
+    """
+    import directory
+
+    key = resolve(pid)
+    if directory.role_of(key) in _NO_OVERSIGHT_ROLES:
+        return tuple(b for b in BLOCK_IDS if b != "oversight")
+    return BLOCK_IDS
+
+
 def default_layout(pid: str | None) -> list[str]:
     """没配过布局时的缺省块序。
 
     单位账号没有关注指标（`watch` 是空的：指标是市级口径，一个局看全市 GDP
     没有意义），把空的「我的关注」摆第一，登录进来第一眼就是一块白板。
-    所以「没有关注项」的人缺省先从 follow 开始 —— 他真正要看的是本单位的账。
+    所以「没有关注项」的人缺省从督办列表开始 —— 他真正要看的是本单位的账。
+    市长没有督办列表（见 default_block_ids），对他这条分支不成立。
     """
+    ids = default_block_ids(pid)
     if not watch_of(pid):
-        return ["follow", "feed"]
-    return list(DEFAULT_LAYOUT)
+        return [b for b in ("oversight", "follow", "feed") if b in ids]
+    return list(ids)
 
 
 def layout_of(pid: str | None) -> list[str]:
-    """这个人工作台的板块顺序（只含显示出来的块）。没配过就按 default_layout。"""
+    """这个人工作台的板块顺序（只含显示出来的块）。没配过就按 default_layout。
+
+    **新增的块要能自己出现**：老配置里只存了"当时显示了哪几块"，没有"藏了哪几块"。
+    直接按老列表返回，后来加的块（这次的「督办列表」）对这些人是永远看不见的 ——
+    他们不会想到去「自定义」里翻一个没见过的名字。所以这里补一层：既没显示、
+    也没被显式藏起来的块，按缺省顺序插回去。
+
+    `layout_hidden` 是 set_layout 新写的显隐记录。老记录没有这个键，一律当"没藏过"
+    —— 代价是：在这次改动之前手动藏过某块的人，那一块会回来一次。现有数据里没有
+    这种人（唯一存过布局的市长三块全在），而且"新功能没出现"比"旧块冒出来"更难查。
+
+    **补的只是这个人缺省就该有的块**（`default_block_ids`）：市长存过
+    `[watch, follow, feed]`，若按全量补，他会凭空长出一块「督办列表」——
+    正是要他别看到的那个。
+    """
     key = resolve(pid)
     stored = _doc()["people"].get(key) or {}
     blocks = stored.get("layout")
@@ -394,7 +459,21 @@ def layout_of(pid: str | None) -> list[str]:
     for b in blocks:
         if isinstance(b, str) and b in BLOCK_IDS and b not in seen:
             seen.append(b)
-    return seen or default_layout(key)
+    hidden = {b for b in (stored.get("layout_hidden") or []) if isinstance(b, str)}
+    allow = default_block_ids(key)
+    for b_id in allow:
+        if b_id in seen or b_id in hidden:
+            continue
+        # 插到缺省顺序里"它后面那个已经在显示"的块前面，位置和默认布局一致
+        pos = len(seen)
+        for nxt in allow[allow.index(b_id) + 1:]:
+            if nxt in seen:
+                pos = seen.index(nxt)
+                break
+        seen.insert(pos, b_id)
+    if not seen:
+        return default_layout(key)
+    return seen
 
 
 def set_layout(pid: str | None, blocks: Any) -> dict[str, Any]:
@@ -402,6 +481,9 @@ def set_layout(pid: str | None, blocks: Any) -> dict[str, Any]:
 
     允许把某几块藏起来（不显示），但**不允许一块都不留**：空工作台不是"配置"，
     是把自己锁在门外 —— 那时连"自定义"按钮在哪都不知道。
+
+    藏起来的块要**显式记下来**（`layout_hidden`），否则 layout_of 会把它当成
+    "后来才加的块"再补回来，用户会发现"勾掉了又自己出现"。
     """
     key = resolve(pid)
     if not isinstance(blocks, list):
@@ -423,7 +505,12 @@ def set_layout(pid: str | None, blocks: Any) -> dict[str, Any]:
         doc = doc if isinstance(doc, dict) else {}
         people = doc.get("people") if isinstance(doc.get("people"), dict) else {}
         prev = people.get(key) if isinstance(people.get(key), dict) else {}
-        people[key] = {**prev, "layout": clean, "updated_at": _now()}
+        people[key] = {
+            **prev,
+            "layout": clean,
+            "layout_hidden": [b for b in BLOCK_IDS if b not in clean],
+            "updated_at": _now(),
+        }
         return {"people": people}
 
     store.update(STORE_NAME, _apply, {})

@@ -427,15 +427,21 @@ def analyze(attachments: list[dict[str, Any]] | None, today: date | None = None)
                 continue
             # 一致 = 在外部数据自己的显示精度下相同。表里写到 6.4，系统是 6.43，
             # 用户看到的就是两个 6.4，不该被判成不一致。
+            #
+            # 系统这一侧优先用**逐期真数**：`query_metric` 的 series 是演示序列，
+            # 真数只覆盖 value。拿 series 对照，9 月月报会被判成「GDP 差 13.57 亿」
+            # 「财政收入量级差十倍」—— 两边本来就是同一张统计表。
+            real = md.period_real(code, p["period"])
+            internal = float(real["value"]) if real else float(ip["value"])
             d = _decimals(p["written"])
-            same = round(float(ip["value"]), d) == round(float(p["value"]), d)
-            diff = round(float(p["value"]) - float(ip["value"]), 2)
+            same = round(internal, d) == round(float(p["value"]), d)
+            diff = round(float(p["value"]) - internal, 2)
             # 累计口径的指标（财政收入、投资完成率），外部表里常给「当月」。
             # 两者差一个数量级时判「不一致」是假结论 —— 标成 check，让人去确认
             # 口径，而不是让人以为系统数据错了。
             state = "same" if same else "diff"
             if not same and meta.get("cumulative"):
-                base = abs(float(ip["value"])) or 1.0
+                base = abs(internal) or 1.0
                 if abs(diff) > 0.3 * base:
                     state = "check"
             rows.append(
@@ -443,7 +449,10 @@ def analyze(attachments: list[dict[str, Any]] | None, today: date | None = None)
                     "period": p["period"],
                     "label": ip.get("label") or md._period_label(p["period"]),
                     "external": p["written"],
-                    "internal": str(ip["value"]),
+                    "internal": str(md._round(internal, code) if real else ip["value"]),
+                    # 这一行系统侧是统计月报真数还是演示值。界面上不打这个标记，
+                    # 但结论句说「一致」时，得知道拿什么比的。
+                    "internal_real": bool(real),
                     "diff": 0.0 if same else diff,
                     "state": state,
                     "file": p["file"],

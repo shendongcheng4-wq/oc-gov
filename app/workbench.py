@@ -105,6 +105,8 @@ def kpis(codes: list[str] | None = None) -> list[dict[str, Any]]:
                 # 让卡片自己说明口径，前端据此打「10月单月」标。
                 "period_scope": "cum" if metric["cumulative"] else "month",
                 "real_override": bool(r.get("real_override")),
+                # 没接入真数的指标要能一眼看出来，否则演示值会被当成统计局的数
+                "demo": bool(r.get("demo")),
                 "series": [p["value"] for p in r["series"]],
                 "source": {
                     "department": r["source"]["department"],
@@ -509,6 +511,10 @@ _OVERSIGHT_MAX = 5
 # 「重点注意事项」不设条数上限，只在前端滚动；这里给个保险上限，防止台账涨到几百条时
 # 一次吐出满屏 JSON。排序按紧急度，所以被截掉的永远是最后面那些不着急的。
 _FOLLOW_MAX = 30
+# 督办列表是**全量**清单（含已办结），不是"只看着急的"。给一个远高于实际台账量的
+# 上限兜底，防止某天台账涨到四位数时把整个工作台接口拖垮 —— 真到那一步应该分页，
+# 而不是悄悄截断。
+_OV_LIST_MAX = 60
 
 # 动态右侧的分类胶囊。按**来源**分而不是按颜色分：warn/danger 这个颜色既可能是
 # 指标落后，也可能是时限临近，只看颜色不知道"这条为什么冒出来"。
@@ -677,6 +683,55 @@ def follow_items(person: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def oversight_list(person: dict[str, Any]) -> dict[str, Any]:
+    """「督办列表」：本单位主办 ∪ 协办的全部事项（含已办结）。
+
+    和上面「重点注意事项」的区别，正是这块非开不可的理由：
+    - follow 只留**需要注意的**（risk≠正常），且派生的正常项会被滤掉 —— 它是
+      "今天该盯哪几件"，不是清单；
+    - 这里**一件不筛**：待签收的、正常推进的、已办结的都在，因为它回答的是
+      "本单位在台账上总共背着几件事、各到哪一步了"。
+
+    行级收窄沿用台账读口的口径（主办 ∪ 协办）：单位账号只看得到本单位的账，
+    全市身份（市长/秘书）unit_set 为空 = 不筛，看全量。这就是"都是属于自己单位的
+    督办事件"——不是前端过滤出来的，是取数时按 assignee/co_assignees 收窄的。
+    """
+    units = [u for u in (person.get("units") or []) if u]
+    unit_set = set(units)
+    raw = ov.list_items(scope=unit_set if unit_set else None)
+    rows: list[dict[str, Any]] = []
+    for it in raw[:_OV_LIST_MAX]:
+        rows.append(
+            {
+                "id": it["id"],
+                "title": it["title"],
+                "assignee": it["assignee"],
+                "co_assignees": it["co_assignees"],
+                "status": it["status"],
+                "risk": it["risk"],
+                "risk_reasons": it["risk_reasons"],
+                "tone": _BUCKET_TONE.get(it["risk"], "muted"),
+                "days_left": it["days_left"],
+                "progress": it["progress"],
+                "deadline": it["deadline"],
+                "priority": it["priority"],
+                "closed": it["status"] == ov.CLOSED,
+                # 这一条对本单位是主办还是只协办：界面上标一下，免得协办的人
+                # 点开详情发现"签收/报进展"按钮没有，以为功能坏了。
+                "role_in_item": "host" if it["assignee"] in unit_set else ("cc" if unit_set else ""),
+            }
+        )
+    return {
+        "count": len(rows),
+        "open": sum(1 for r in rows if not r["closed"]),
+        "overdue": sum(1 for r in rows if r["risk"] == "逾期"),
+        "due_soon": sum(1 for r in rows if r["risk"] in _DUE_BUCKETS),
+        "items": rows,
+        "units": units,
+        "basis": "本单位：" + "、".join(units) if units else "全市",
+    }
+
+
 def workspace(person_id: str = "mayor") -> dict[str, Any]:
     """个人工作台：谁看的，就给他谁的关注、动态和跟进事项。
 
@@ -709,6 +764,9 @@ def workspace(person_id: str = "mayor") -> dict[str, Any]:
         "catalog": metric_catalog(codes),
         "feed": feed,
         "unread": sum(1 for f in feed if f["unread"]),
+        # 督办列表：与「关注动态」里的督办条目不同 —— 那条按紧急度截到 5 条，
+        # 这块是全量清单，本单位背着几件事一眼看全（含已办结）。
+        "oversight": oversight_list(person),
         "follow": {
             "count": len(follow),
             "items": follow,
@@ -721,8 +779,9 @@ def workspace(person_id: str = "mayor") -> dict[str, Any]:
             # 说清这块是怎么来的：按分管单位派生，不是人工维护的"我要跟进"
             "basis": "分管单位：" + "、".join(units) if units else "全市",
         },
-        # 板块顺序与显隐（按人配）；前端照着排，没有就退回默认三块
-        "layout": person.get("layout") or list(people.DEFAULT_LAYOUT),
+        # 板块顺序与显隐（按人配）；前端照着排，没有就退回这个人自己的缺省块
+        # （市长没有「督办列表」，不能退回那张全量名单）
+        "layout": person.get("layout") or people.default_layout(person_id),
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "mock": True,
     }

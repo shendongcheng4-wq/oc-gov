@@ -914,6 +914,7 @@ def _interpret_one(
     result: dict[str, Any],
     model_ref: str | None,
     refs: list[dict[str, Any]] | None = None,
+    allow: set[float] | None = None,
 ) -> dict[str, Any]:
     """一位专家的完整一轮：调模型 → 过数字闸 → 给出 ok/why。
 
@@ -923,6 +924,9 @@ def _interpret_one(
     `refs` 无论成败都写进 view：参谋读了哪几条是**事实**，不因为这段解读
     被数字闸丢掉就跟着消失。用户看到一个「信息不足」，还得能知道它当时
     手上有什么，否则只会以为系统没检索。
+
+    `allow` 是 `records` 里那些数的放行集合（见 numgate.numbers_in）。不给
+    的话，参谋照着焦点台账说「受理 128 件」会被判成编造、整段丢掉。
     """
     view: dict[str, Any] = {
         "id": expert["id"],
@@ -962,7 +966,7 @@ def _interpret_one(
         view["why"] = "模型没有给出内容。"
     else:
         titles = [str(r.get("title") or "") for r in (refs or [])]
-        gate = numgate.audit(text, result, extra_literals=titles)
+        gate = numgate.audit(text, result, extra=allow, extra_literals=titles)
         if gate["ok"]:
             view["ok"] = True
             view["text"] = text[:400]
@@ -973,7 +977,7 @@ def _interpret_one(
             # 整段过不了就先逐句救一次：建议句通常不含数，没道理跟着违规句一起丢。
             # 门槛放到 10 字 —— 四句话里能留下一句动作，就比整段空着有用。
             # 留下的句子仍然逐句过闸，底线没变：每个数都追得到来源。
-            salvaged = numgate.salvage(text, result, extra_literals=titles, min_chars=10)
+            salvaged = numgate.salvage(text, result, extra=allow, extra_literals=titles, min_chars=10)
             if salvaged:
                 kept, dropped = salvaged
                 bad = "、".join(str(x) for x in gate["bad"][:3])
@@ -983,7 +987,7 @@ def _interpret_one(
                     f"删去了 {len(dropped)} 句含无法溯源数字的话（{bad}）；"
                     "留下来的每个数都能追到来源。"
                 )
-                again = numgate.audit(kept, result, extra_literals=titles)
+                again = numgate.audit(kept, result, extra=allow, extra_literals=titles)
                 if again["computed"]:
                     view["computed"] = again["computed"][:4]
             else:
@@ -1003,6 +1007,7 @@ def interpret(
     on_step: Any = None,
     refs_by_expert: dict[str, list[dict[str, Any]]] | None = None,
     cap: int | None = None,
+    records: str = "",
 ) -> list[dict[str, Any]]:
     """给一份已经算好的答案配专家解读。
 
@@ -1017,6 +1022,12 @@ def interpret(
     检索的范围和可见性交给 knowledge，两边各管一段，才不会出现「专家自己
     去库里翻，翻到了别人分管的事」。
 
+    `records` 是本轮工具查到的**非指标记录**（民情焦点、督办台账、知识库条目）。
+    参谋的底稿原来只有「指标 + 方向信号」，所以问县里的诉求、台账这类没有指标
+    的问题时，六位参谋都只会回一句「本轮没有可用数值，无法判断」—— 实测链五
+    前三句三张卡全是这句话，正文对、卡上像系统答不上来。记录里的数按系统数据
+    放行（见 numgate.numbers_in），不按模型自由发挥。
+
     `cap` 见 `cap_for`：默认按 MAX_PER_CALL 截，总参谋在场时放开，
     因为它就是被展开出来收口的，砍到 3 位等于让它对着半张桌子做综合。
     """
@@ -1029,12 +1040,27 @@ def interpret(
     codes = [str(c) for c in (result.get("metric_codes") or [])]
     signals = _signals(result)
     question = str(result.get("question") or "").strip()
+    digest = str(records or "").strip()
 
-    base = [
-        f"市长问的是：{question}",
-        f"涉及指标：{'、'.join(names) if names else '（未命中具体指标）'}",
-        f"方向信号：{'；'.join(signals) if signals else '（无同比环比数据）'}",
-    ]
+    if digest:
+        # 有记录就别再写「未命中指标 / 无同比环比」：那两句会把模型直接引到
+        # 「没有数可说」上去，正是要修的毛病。
+        base = [f"市长问的是：{question}"]
+        if names or signals:
+            base.append(f"涉及指标：{'、'.join(names) if names else '（本轮没查指标）'}")
+            base.append(f"方向信号：{'；'.join(signals) if signals else '（无同比环比数据）'}")
+        base.append("本轮查到的记录（系统里写着的，数字可以直接引用）：\n" + digest[:1600])
+        # 记录只覆盖本轮工具真查过的东西。上一轮点过名的焦点、别的事项都不在这里，
+        # 不点明的话模型会拿台账里随便一条顶上去 —— 实测问「最集中那条谁在办」，
+        # 它指着台账里一件逾期事项说「最集中的是这件」。
+        base.append("（只依据上面这段记录和本轮数值；问到的条目不在其中，就说这轮没有，不要拿别的记录顶替。）")
+    else:
+        base = [
+            f"市长问的是：{question}",
+            f"涉及指标：{'、'.join(names) if names else '（未命中具体指标）'}",
+            f"方向信号：{'；'.join(signals) if signals else '（无同比环比数据）'}",
+        ]
+    allow = numgate.numbers_in(digest) if digest else None
 
     # 总参谋从名单里摘出来，排到最后单独跑：它要说的话依赖别人说了什么，
     # 和分管参谋挤在同一个 for 里就只能是「并列的第七个角度」。
@@ -1091,7 +1117,7 @@ def interpret(
         user_content = "\n".join(
             base + [_numbers_block(result)] + extra + [ref_block, "按你的角色说四句话以内。"]
         )
-        view = _interpret_one(expert, user_content, result, model_ref, refs)
+        view = _interpret_one(expert, user_content, result, model_ref, refs, allow=allow)
         emit("done", expert, i, view["ok"])
         return view
 

@@ -615,6 +615,28 @@ def _markdown(meta: dict[str, Any], blocks: list[dict[str, Any]]) -> str:
 # --------------------------------------------------------------------------
 # 对外
 # --------------------------------------------------------------------------
+def period_label_of(period: str) -> str:
+    """2026-09 → 2026年9月。材料表头、选项、提示语都用这一份写法。"""
+    return f"{period[:4]}年{int(period[5:7])}月"
+
+
+def _common_period(codes: list[str] | None, available: list[str], today: date | None = None) -> str:
+    """选中指标都能答得出的最近一期。
+
+    真数只覆盖到某一期时，再往后的月份对这些指标是「没接入」而不是「没披露」，
+    材料不能拿它当报告期。取各指标「最近可得期」里最早的那个 —— 早一期无所谓，
+    宁可少一期，也不能让某一行没有出处。
+    """
+    latest: list[str] = []
+    for code in codes or []:
+        if code not in md.METRICS:
+            continue
+        r = md.query_metric(code, None, 1, today)
+        if r.get("ok") and r.get("period"):
+            latest.append(str(r["period"]))
+    return min(latest) if latest else (available[-1] if available else "")
+
+
 def options(pid: str | None = None) -> dict[str, Any]:
     person = people.meta(pid)
     periods = md.available_periods()
@@ -632,7 +654,8 @@ def options(pid: str | None = None) -> dict[str, Any]:
             {"value": p, "label": f"{p[:4]}年{int(p[5:7])}月"}
             for p in reversed(periods)
         ],
-        "default_period": periods[-1] if periods else None,
+        # 默认期次要和默认指标对得上：真数只到 1—9 月的指标，不能默认给 10 月。
+        "default_period": _common_period(list(watched), periods) or (periods[-1] if periods else None),
         "metrics": md.list_metrics(),
         "default_metrics": list(watched),
         "meetings": [
@@ -668,8 +691,32 @@ def compose(
     if period and period not in available:
         warnings.append(f"所选期次 {period} 尚未到披露日，已改取 {available[-1]}。")
         period = None
-    period = period or available[-1]
-    period_label = f"{period[:4]}年{int(period[5:7])}月"
+    # 不指定期次时，取「所有选中指标都答得出」的最近一期。以前取 available[-1]，
+    # 而真数只到 1—9 月，于是表头写「1—10 月」、GDP 那行却查不到当期值 ——
+    # 审校当场判它没有出处。期次是材料的地基，不能让某一行落在没有数的月份上。
+    if not period:
+        # codes 为 None 是「按关注列表默认选」，所以算共同期次时也要用那份默认，
+        # 否则会挑出一个默认指标查不到数的月份。
+        period = _common_period(
+            list(codes) if codes is not None else list(person["watch"]), available, today
+        )
+    # 显式选了一个「指标查不到当期值」的期次（真数还没接到那个月）：同样退到
+    # 共同可得期。不听用户的会让他拿到一份表头好看、某几行没数的材料。
+    if codes:
+        short = [
+            c for c in codes
+            if c in md.METRICS and not md.query_metric(c, period, 1, today).get("ok")
+        ]
+        if short:
+            alt = _common_period(codes, available, today)
+            if alt and alt != period:
+                warnings.append(
+                    f"{period_label_of(period)}有指标查不到当期值（"
+                    + "、".join(md.METRICS[c]["name"] for c in short)
+                    + f"），已改取 {period_label_of(alt)}。"
+                )
+                period = alt
+    period_label = period_label_of(period)
 
     units, manual = schedule.scope_of(person)
     # 「含协办」要说出来：局长协办的项目会算进他的台账，不说清就会出现

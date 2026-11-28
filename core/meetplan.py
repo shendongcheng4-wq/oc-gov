@@ -9,8 +9,8 @@
 2. **猜了要写出来。** 时间是怎么算的、主持人为什么按当前身份、哪几个单位没
    匹配上、同时间段有没有撞车，全摆在卡上。猜而不说的，等于让人替系统背锅。
 
-3. **不发明主数据。** 参会单位按台账里真实出现过的责任单位匹配（外加演示身份
-   的分管单位、已有会议的参会单位），匹配不上就原样保留并标出来。硬塞一个
+3. **不发明主数据。** 参会单位按单位目录（`directory.UNITS`）+ 台账里真实出现过的
+   责任单位匹配，已有会议的参会单位也算认识；匹配不上就原样保留并标出来。硬塞一个
    「市财政局」进白名单，会让系统看起来认识一个它其实没有的单位。
 
 不确定性用 `missing`（缺必填）和 `assumptions`（我替你定了）两个字段分开表达，
@@ -318,6 +318,12 @@ _RE_TOPIC = (
     re.compile(r"(?:讨论|研究|审议|部署|听取|商量)\s*([^。；;！？?，,]{2,40})"),
 )
 
+# 议题后面紧跟的「重点是/主要研究…」是**第二条议题**，不是补充说明。
+# 议题正则停在逗号上（不停就会把参会单位吞进会议名），于是「议题是 A，重点是 B」
+# 里的 B 整段丢掉 —— 而 B 往往才是领导真正要议的那件事。只认紧贴着的那一句
+# （`start() <= 6`），不往整句话里到处捞「重点」。
+_RE_TOPIC_MORE = re.compile(r"[，,]\s*(?:重点|主要)\s*(?:是|为|研究|讨论|了解|：|:)?\s*([^。；;！？?，,]+)")
+
 
 def parse_place(q: str) -> str:
     for pat in _RE_PLACE:
@@ -333,13 +339,52 @@ def parse_host(q: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+_RE_MEETING_NAME = re.compile(
+    r"(?:召开|开个|开一场|开一次|举办|办个|安排)\s*(?:一场|一次|一个|个)?\s*"
+    r"([\u4e00-\u9fa5A-Za-z0-9]{2,18}?会)(?![议])"
+)
+
+
+def parse_meeting_name(q: str) -> str:
+    """原话里点名的会名，如「民情焦点研判会」。取不到返回空。
+
+    为什么值得单独取：草稿的标题原先就是议题用顿号连起来。议题一多，标题就变成
+    「学区归属、燃气通气、租房补贴」，通知标题跟着变成「关于召开学区归属、燃气通气、
+    租房补贴的通知」—— 语法上通了，读起来像把三件不相干的事摞在一起，看不出
+    这到底是个什么会。原话里其实说了「开个民情焦点研判会」，那句话就是会名。
+
+    只在明确的「召开/开个/安排…会」结构里取，且会名至少两个字：光说「开个会」
+    不能把「会」当会名（取不到就照旧退到议题）。
+    """
+    m = _RE_MEETING_NAME.search(q or "")
+    if not m:
+        return ""
+    name = m.group(1).strip()
+    # 「安排一场会讨论供暖」会被抓成「一场会」—— 正则回溯时量词那一段可以不吃，
+    # 让捕获组把它一起吞下。去掉量词后不足两字就说明原话根本没点会名。
+    name = re.sub(r"^(?:一场|一次|一个|个)", "", name).strip()
+    return name if len(name) >= 2 else ""
+
+
 def parse_topics(q: str) -> list[str]:
     for pat in _RE_TOPIC:
         m = pat.search(q)
         if m:
-            text = m.group(1).strip(" 的，,。；;")
-            # 「议题是供暖保障和管网排查」→ 两个议题
-            parts = [x.strip() for x in re.split(r"[、和及与]", text) if x.strip()]
+            text = m.group(1).strip(" 的，,。；;：:、")
+            # 只在顿号、分号处切。「和 / 与 / 及」在中文里常常是**同一个议题内部**
+            # 的连接（「工业支撑与投资拖累的判断」切成两半就是两个残句），而列表
+            # 用的是顿号。少切一条，人还能在草稿卡上补一行；错切一条，它会原样
+            # 印进通知正文的「会议议题」，发出一份读起来像机器切的公文。
+            parts = [x.strip(" 的，,。；;：:、") for x in re.split(r"[、；;]", text)]
+            parts = [p for p in parts if p]
+            # 紧跟其后的「重点是…」独立成一条（见 _RE_TOPIC_MORE 的说明）
+            for more in _RE_TOPIC_MORE.finditer(q[m.end():]):
+                if more.start() > 6:
+                    break
+                t = more.group(1).strip(" 的，,。；;：:、")
+                if t and t not in parts:
+                    parts.append(t)
+                break
             return parts or [text]
     return []
 
@@ -371,10 +416,20 @@ def _bare(unit: str) -> str:
 def roster() -> list[str]:
     """参会单位的可选清单。
 
-    不新建一份主数据：台账里出现过的责任单位 + 协办单位 + 演示身份的分管单位 +
+    不新建一份主数据：单位目录里登记过的主体 + 台账里出现过的责任单位 +
     已有会议的参会单位，就是系统真正"认识"的单位。现算，不落盘。
+
+    2026-11-28 起**先从单位目录起底**（`directory.UNITS`）。此前这里是「台账里
+    出现过的 + 一家写死的市统计局」：统计局名下没有督办事项，只能靠硬编码把它
+    加回来；而硬编码治不了第一例（工信局、卫健局从台账来，反倒没事）。单位
+    目录补齐账号后，「系统认识谁」有了唯一答案，这些补丁就该收掉了。
     """
     units: set[str] = set()
+    try:
+        import directory  # noqa: PLC0415
+        units.update(directory.UNITS)
+    except Exception:  # 目录导不进来不该让约会议整体失败
+        pass
     try:
         import oversight as ov  # noqa: PLC0415
         for it in ov.list_items():
@@ -531,7 +586,10 @@ def parse(question: str, *, today: date | None = None,
     notes: list[str] = list(when.get("notes") or [])
     missing: list[str] = list(when.get("missing") or [])
 
-    title = "、".join(topics) if topics else ""
+    # 标题优先用原话点名的会名（「民情焦点研判会」），取不到才退回议题拼接。
+    # 议题拼出来的标题会把通知写成「关于召开学区归属、燃气通气、租房补贴的通知」，
+    # 读者看不出这是个什么会 —— 而原话里其实已经说了会名。
+    title = parse_meeting_name(q) or ("、".join(topics) if topics else "")
     if not title:
         missing.append("title")
     if not attendees:
@@ -539,9 +597,16 @@ def parse(question: str, *, today: date | None = None,
 
     if not host:
         post = (person.get("post") or "").strip()
-        if post:
+        # 秘书代拟的会**不替他定主持人**。这条会一路走到通知正文，「主持人：秘书」
+        # 会被当成真的写进公文发到参会单位手里 —— 收件人只会当是发文写错了，
+        # 而这条错是系统替人默认出来的。会议没有改字段的接口，建完只能删了重建。
+        # 「秘书长」不算秘书岗：那是领导职务，协调会本来就由他主持，所以只认
+        # 「秘书」结尾的职务（秘书 / 市长秘书）。
+        if post and not post.endswith("秘书"):
             host = post
             assumptions.append(f"没说谁主持，按当前身份（{post}）填，确认时可以改")
+        elif post:
+            assumptions.append(f"没说谁主持，{post}是代拟身份，不替你定，建会前请补上主持人")
         else:
             assumptions.append("没说谁主持，也没识别出当前身份")
 
@@ -550,7 +615,8 @@ def parse(question: str, *, today: date | None = None,
 
     if unknown_units:
         notes.append(
-            "这几个单位在台账里没出现过，按原话保留：" + "、".join(unknown_units)
+            "这几个单位系统里没登记（单位目录和台账里都没有），按原话保留："
+            + "、".join(unknown_units)
             + "。建会不受影响，但督办匹配、通知名单可能对不上"
         )
 

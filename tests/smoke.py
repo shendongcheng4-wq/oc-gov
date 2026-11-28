@@ -85,6 +85,26 @@ def check(name: str, cond: bool, detail: str = "") -> None:
         FAILS.append(f"{name} {detail}")
 
 
+def _put_layout(pid: str, blocks: list[str]) -> None:
+    """直接往存储里写一份「老布局」：只有 `layout`，没有 `layout_hidden`。
+
+    模拟这次改动之前存下的配置 —— 那时还没有「显式藏起来」这个概念，
+    所以 layout_of 的"补新块"逻辑对这份记录必须照常生效。
+    """
+    import people
+
+    def _apply(doc: object) -> dict[str, object]:
+        doc = doc if isinstance(doc, dict) else {}
+        rows = doc.get("people") if isinstance(doc.get("people"), dict) else {}
+        row = dict(rows.get(pid) or {})
+        row["layout"] = list(blocks)
+        row.pop("layout_hidden", None)
+        rows[pid] = row
+        return {"people": rows}
+
+    people.store.update(people.STORE_NAME, _apply, {})
+
+
 def test_data_layer() -> None:
     print("[1] 数据层")
 
@@ -154,15 +174,21 @@ def test_data_layer() -> None:
     check("总览带披露日期", bool(overview.get("disclosed_on")), "")
     check("总览指标数与字典一致", overview["metric_count"] == len(METRICS), f"{overview['metric_count']} vs {len(METRICS)}")
 
-    # 期次：页头是当期（2026年1—10月），但 GDP 卡取的是 2025 年公报全年值。
-    # 卡片不带期次，这个数就会被当成当期数读 —— 展示层最容易犯的错。
+    # 期次：页头是当期（2026年1—10月），但真数只到 1—9 月 —— GDP、预算收入、
+    # 固投增速三张卡给的是 9 月的数。卡片不带期次，这个数就会被当成当期数读。
     for k in kpis:
         check(f"KPI {k['code']} 带期次", bool(k.get("period_label")), str(k.get("period_label")))
         check(f"KPI {k['code']} 标出是否当期", isinstance(k.get("period_is_current"), bool), str(k.get("period_is_current")))
+    REAL_KPI = {"GDP_TOTAL", "BUDGET_REV", "FAI_GROWTH"}
     gdp = next(k for k in kpis if k["code"] == "GDP_TOTAL")
     check("GDP 卡不是当期数", gdp["period_is_current"] is False, str(gdp.get("period_label")))
-    check("GDP 卡期次写明全年", "全年" in gdp["period_label"], gdp["period_label"])
-    check("其余 KPI 是当期数", all(k["period_is_current"] for k in kpis if k["code"] != "GDP_TOTAL"), "")
+    check("GDP 卡期次是真数期", gdp["period_label"] == "2026年9月", gdp["period_label"])
+    check(
+        "有真数的 KPI 都停在 1—9 月",
+        all(k["period_label"] == "2026年9月" for k in kpis if k["code"] in REAL_KPI),
+        str([(k["code"], k["period_label"]) for k in kpis if k["code"] in REAL_KPI]),
+    )
+    check("其余 KPI 是当期数", all(k["period_is_current"] for k in kpis if k["code"] not in REAL_KPI), "")
 
     # 页头「2026年1—10月」是累计口径，页面上却混着单月值 —— 每张卡要自己说口径，
     # 否则读的人会把「10 月单月增速 8.6%」当成「1—10 月累计增速 8.6%」。
@@ -186,14 +212,42 @@ def test_data_layer() -> None:
     check("页头说明点出台账不按报告期", "台账" in hint, "")
     check("总览给出台账截止日", bool(overview.get("ledger_as_of")), str(overview.get("ledger_as_of")))
 
-    # 真实年度值不能配演示月度走势：两者不同期，画在一起就是「1746 跌到 1428」
+    # 真数覆盖后不能配演示月度走势：两者不同期、不同口径，画在一起就是「1746 跌到 1428」
     d_gdp = wb.metric_detail("GDP_TOTAL")
-    check("真实年度值不给演示序列", d_gdp["series"] == [], f"{len(d_gdp['series'])} 期")
-    check("真实年度值标记 real_override", d_gdp.get("real_override") is True, str(d_gdp.get("real_override")))
+    check("真数覆盖不给演示序列", d_gdp["series"] == [], f"{len(d_gdp['series'])} 期")
+    check("真数覆盖标记 real_override", d_gdp.get("real_override") is True, str(d_gdp.get("real_override")))
     check("无序列时给出原因", bool(d_gdp.get("series_note")), str(d_gdp.get("series_note")))
+    check("GDP 取到 1—9 月真数", d_gdp["value"] == 1300.07, str(d_gdp["value"]))
     d_gy = wb.metric_detail("GY_VA_GROWTH")
     check("演示指标仍有走势", len(d_gy["series"]) >= 2, f"{len(d_gy['series'])} 期")
     check("演示指标不标覆盖", d_gy.get("real_override") is False, str(d_gy.get("real_override")))
+
+    # 绝对额指标：2026-11 补进来的产值、用电、固投额。它们没有演示序列，
+    # 只认真实期次 —— 问没接入的期次必须说没有，不能回落编一个。
+    d_out = wb.metric_detail("GY_OUTPUT")
+    check("产值指标在字典里", d_out is not None and d_out["value"] == 2585.23, str(d_out and d_out["value"]))
+    check("产值来源是统计局月报", "1-9月" in (d_out or {}).get("source", {}).get("report", ""), str((d_out or {}).get("source")))
+    check("固投增速是真数（-9.4%）", query_metric("FAI_GROWTH")["value"] == -9.4, str(query_metric("FAI_GROWTH")["value"]))
+    check("固投额是真数（290.86）", query_metric("FAI_TOTAL")["value"] == 290.86, str(query_metric("FAI_TOTAL")["value"]))
+    nodata = query_metric("GY_OUTPUT", "2026-10")
+    check("没接入的期次直接说没有", nodata.get("ok") is False and nodata.get("error") == "no_data", str(nodata)[:80])
+    check("没接入时给出最近可得期", nodata.get("latest") == "2026-09", str(nodata.get("latest")))
+
+    # 问「总产值增速」不能答成「增加值增速」。两个是不同的指标，差一个字、
+    # 差一个量级；更麻烦的是增加值那条还是演示值 —— 答错了用户连「这是演示」
+    # 都看不出来。备用模型会把字典里的标准指标顺手套上来（现场答成 8.6%），
+    # 所以 ask 里加了一道选码守卫，这里卡的就是它。
+    import ask as ask_mod
+
+    for q in ("规上工业总产值增速是多少", "1—9 月全市规上工业总产值多少？增速怎么样？"):
+        got = ask_mod.ask(q)
+        codes = got.get("metric_codes") or []
+        check(
+            f"产值增速不串到增加值（{q[:8]}…）",
+            "GY_OUTPUT" in codes and "GY_VA_GROWTH" not in codes,
+            str(codes),
+        )
+        check(f"产值增速答的是 18.5%（{q[:8]}…）", "18.5" in (got.get("headline") or ""), (got.get("headline") or "")[:60])
 
 
 def test_workspace() -> None:
@@ -314,6 +368,25 @@ def test_people() -> None:
         all(directory.role_of(pid) == directory.ROLE_BUREAU for pids in directory.UNIT_ACCOUNT.values() for pid in pids),
         "",
     )
+
+    # 补齐的这批要**真能收到东西**，不只是下拉里多几行。链一那场经济运行分析会点了
+    # 「发改委、工信局、统计局、财政局」，早先后两家只在回执里留一句「没有系统账号」。
+    # 这里直接跑台账的收件人算法（不走 HTTP）：发不发得出去是数据层的结论。
+    m = {"attendees": ["市发改委", "市工信局", "市统计局", "市财政局"], "host": "常务副市长"}
+    rc = mt_ledger.recipients(m)
+    check("补齐的单位能收会议通知", not rc["uncovered"], str(rc["uncovered"]))
+    check("通知按单位去重后一个不少", sorted(rc["units"]) == sorted(["市发改委", "市工信局", "市财政局", "市统计局"]), str(rc["units"]))
+
+    # 口语写作要能收敛成全称：纪要是照原话抄的，抄进来的就是简称。
+    for alias, full in (("卫健局", "市卫健局"), ("统计局", "市统计局"), ("工信局", "市工信局"),
+                        ("人社局", "市人社局"), ("共青团", "团市委"), ("法院", "市法院")):
+        check(f"简称归一到全称：{alias}", directory.normalize_unit(alias) == full, str(directory.normalize_unit(alias)))
+
+    # 「包在更长单位名里」不算点名：原文写「市公安局交警支队」，不该被当成也点了
+    # 「市公安局」—— 那正是「原文没提、模型自己填」要抓的那种情况。
+    check("交警支队不算点名公安局",
+          not directory.mentioned_in("请市公安局交警支队参会", "市公安局"), "")
+    check("点名公安局仍能认出", directory.mentioned_in("请市公安局派人参会", "市公安局"), "")
     check("未知身份回落默认", people.resolve("ghost") == "mayor", people.resolve("ghost"))
     check("未知身份读到默认关注", people.watch_of("ghost") == people.DEFAULT_WATCH["mayor"], str(people.watch_of("ghost")))
 
@@ -402,7 +475,11 @@ def test_people() -> None:
     r = people.set_layout("bureau", ["follow", "watch"])
     check("布局写入", r.get("ok") is True and people.layout_of("bureau") == ["follow", "watch"], str(r))
     check("布局回显到工作台", wb.workspace("bureau")["layout"] == ["follow", "watch"], str(wb.workspace("bureau")["layout"]))
-    check("布局只影响本人", people.layout_of("mayor") == list(people.DEFAULT_LAYOUT), str(people.layout_of("mayor")))
+    check(
+        "布局只影响本人",
+        people.layout_of("mayor") == people.default_layout("mayor"),
+        str(people.layout_of("mayor")),
+    )
     r = people.set_layout("bureau", [])
     check("空布局被拒", r.get("ok") is False and "至少" in (r.get("error") or ""), str(r))
     check("被拒后布局不变", people.layout_of("bureau") == ["follow", "watch"], str(people.layout_of("bureau")))
@@ -411,17 +488,90 @@ def test_people() -> None:
     people.set_layout("bureau", list(people.DEFAULT_LAYOUT))
 
     # 单位账号没有关注指标：缺省不能把空的「我的关注」摆第一，
-    # 否则局长登录进来第一眼是白板，而他要办的账在第三块。
+    # 否则局长登录进来第一眼是白板，而他要办的账排在后面。
     check(
-        "单位工作台缺省先放跟进事项",
-        people.layout_of("u-zhujian") == ["follow", "feed"],
+        "单位工作台缺省先放督办列表",
+        people.layout_of("u-zhujian") == ["oversight", "follow", "feed"],
         str(people.layout_of("u-zhujian")),
     )
+
+    # 督办列表是「按单位归口的账」：市长看全市综合面，缺省台面上不放这一块；
+    # 常务/秘书/局长/单位账号都放，且排在最上面（他们进来先看自己背着几件）。
     check(
-        "有指标的演示身份仍三块全显示",
-        people.layout_of("mayor") == list(people.DEFAULT_LAYOUT),
+        "市长缺省没有督办列表",
+        people.layout_of("mayor") == ["watch", "feed", "follow"],
         str(people.layout_of("mayor")),
     )
+    for pid in ("vmayor", "secretary", "bureau"):
+        check(
+            f"{pid} 缺省有督办列表且在最上面",
+            people.layout_of(pid)[:1] == ["oversight"],
+            str(people.layout_of(pid)),
+        )
+    # 「自定义」里仍能勾回来：块本身没删，只是缺省不给
+    people.set_layout("mayor", ["oversight", "watch", "feed", "follow"])
+    check("市长手动勾回督办列表有效", people.layout_of("mayor")[:1] == ["oversight"], str(people.layout_of("mayor")))
+    people.set_layout("mayor", ["watch", "feed", "follow"])
+
+    # 老布局（只存了显示的块、没有 layout_hidden）遇到新块：
+    # 补，但只补这个人缺省就该有的 —— 市长不能因为"补新块"长出一条督办列表。
+    _put_layout("mayor", ["watch", "follow", "feed"])
+    check(
+        "老布局不给市长补督办列表",
+        people.layout_of("mayor") == ["watch", "follow", "feed"],
+        str(people.layout_of("mayor")),
+    )
+    _put_layout("vmayor", ["watch", "follow", "feed"])
+    check(
+        "老布局给常务补上督办列表且在关注指标之前",
+        people.layout_of("vmayor") == ["oversight", "watch", "follow", "feed"],
+        str(people.layout_of("vmayor")),
+    )
+    _put_layout("vmayor", [])
+
+
+def test_oversight_list() -> None:
+    """工作台「督办列表」：本单位主办 ∪ 协办的全量清单，一件不筛（含已办结）。
+
+    这块和「重点注意事项」同一本台账、两种口径，最容易写错的是**收窄**：
+    前端再筛一遍就会出现「列表里有、点开详情 404」。
+    """
+    print("[7b] 工作台督办列表")
+
+    # 全市身份：不按单位筛，全量
+    mayor = wb.workspace("mayor")["oversight"]
+    total = len(ov.list_items())
+    check("市长看到全量督办任务", mayor["count"] == total, f"{mayor['count']} vs {total}")
+    check("督办列表含已办结", any(i["closed"] for i in mayor["items"]) or total == 0, "")
+    check("在办数与列表一致", mayor["open"] == sum(1 for i in mayor["items"] if not i["closed"]), str(mayor["open"]))
+
+    # 单位账号：只看得到本单位主办或协办的事
+    for pid in ("u-civil", "u-zhujian", "bureau"):
+        o = wb.workspace(pid)["oversight"]
+        units = set(wb.workspace(pid)["person"].get("units") or [])
+        check(
+            f"{pid} 督办列表只含本单位事项",
+            all(units & ({i["assignee"]} | set(i["co_assignees"])) for i in o["items"]),
+            str([(i["assignee"], i["co_assignees"]) for i in o["items"]]),
+        )
+        check(
+            f"{pid} 主办/协办标对了",
+            all(
+                (i["role_in_item"] == "host") == (i["assignee"] in units)
+                for i in o["items"]
+            ),
+            str([(i["id"], i["assignee"], i["role_in_item"]) for i in o["items"]]),
+        )
+
+    # 和台账同一口径：列表里每一条都点得开（详情不会因为收窄而 404）
+    for pid in ("u-civil", "u-zhujian", "bureau"):
+        units = set(wb.workspace(pid)["person"].get("units") or [])
+        for i in wb.workspace(pid)["oversight"]["items"]:
+            check(f"{pid}/{i['id']} 详情可打开", ov.detail(i["id"], scope=units) is not None, "")
+
+    # 空台账的单位不是"报错"，是"本单位还没有督办事项"（0 项、列表为空）
+    empty = wb.workspace("bureau")["oversight"]
+    check("没有事项时列表为空而不是报错", isinstance(empty["items"], list) and empty["count"] == len(empty["items"]), str(empty["count"]))
 
 
 def test_alerts() -> None:
@@ -1037,6 +1187,87 @@ def test_experts() -> None:
     )
 
 
+    # ---- 记录类问题：参谋的底稿里要有「本轮查到的记录」 ----
+    #
+    # 参谋原来的底稿只有指标名、方向信号、本域知识库。问民情焦点、督办台账这类
+    # 没有指标的问题时这三样全空，六位参谋一律回「本轮没有可用数值，无法判断」——
+    # 链五前三句实测就是这样：正文对，卡上像系统答不上来。
+    import agent as agent_rec  # noqa: PLC0415 只在断言里用
+
+    focus_part = {
+        "kind": "focus",
+        "items": [
+            {
+                "id": "F1",
+                "title": "城区初中学区归属咨询",
+                "meta": "受理 128 件、环比 ↑42%",
+                "state": "集中答复",
+                "people": 96,
+                "tickets": [["TZ20261116032", "学区咨询", "办理中"]],
+            }
+        ],
+    }
+    focus_digest = agent_rec._records_digest([focus_part])
+    check(
+        "焦点记录能进参谋底稿",
+        "F1" in focus_digest and "128" in focus_digest and "TZ20261116032" in focus_digest,
+        focus_digest[:90],
+    )
+    check(
+        "记录里的数按系统数据放行",
+        numgate.numbers_in(focus_digest) >= {128.0, 42.0, 96.0},
+        str(sorted(numgate.numbers_in(focus_digest))),
+    )
+    meet_digest = agent_rec._records_digest(
+        [
+            {
+                "kind": "meeting",
+                "payload": {
+                    "meet_draft": {
+                        "title": "民情焦点研判会",
+                        "held_at": "2026-11-29 09:00",
+                        "attendees": ["市教育局", "市住建局"],
+                        "topics": ["学区归属"],
+                    }
+                },
+            }
+        ]
+    )
+    check("会议草稿能进参谋底稿", "民情焦点研判会" in meet_digest and "市教育局" in meet_digest, meet_digest[:90])
+    check("没有记录就不写空段", agent_rec._records_digest([{"kind": "metric", "payload": {}}]) == "", "")
+
+    # 同一句「受理 128 件」：带记录时放行，不带记录时仍判编造。放行的是记录里的数，
+    # 不是「参谋可以随便报数」。
+    old_chat_rec = ex.llmclient.chat_text
+    old_avail_rec = ex.llmclient.available
+    ex.llmclient.available = lambda: True
+    ex.llmclient.chat_text = lambda *a, **k: {
+        "text": "学区咨询受理 128 件，建议本周内立项督办。",
+        "model": "stub",
+    }
+    try:
+        with_rec = ex.interpret(
+            {"question": "最近民情焦点有哪些", "metric_names": []},
+            ["society"],
+            records=focus_digest,
+        )[0]
+        without_rec = ex.interpret(
+            {"question": "最近民情焦点有哪些", "metric_names": []}, ["society"]
+        )[0]
+    finally:
+        ex.llmclient.chat_text = old_chat_rec
+        ex.llmclient.available = old_avail_rec
+    check(
+        "带记录时参谋能引用记录里的数",
+        with_rec["ok"] is True and "128" in with_rec["text"],
+        str(with_rec)[:90],
+    )
+    check(
+        "不带记录时同一个数仍判编造",
+        without_rec["ok"] is False and "128" in (without_rec.get("why") or ""),
+        str(without_rec)[:90],
+    )
+
     # compare 型回答的数值落在 compare_rows、facts 是空列表。只读 facts 的话，
     # 多指标一问里专家看不到任何方向，只会回「信息不足」—— 召唤了等于没召唤。
     cmp_sig = ex._signals(
@@ -1610,17 +1841,22 @@ def test_experts() -> None:
     check("面板能改指标代码与责任单位", 'data-exp-f="domain.codes"' in html and 'data-exp-f="domain.units"' in html, "")
     check("政策原文依据可点开", "function openKbDoc(" in html and "KB_PENDING_DOC" in html and 'type === "doc"' in html, "")
     check("默认态不留「不召唤」占位", '>不召唤</b>' not in html and '"不召唤"' not in html, "")
-    check("空态不占位（:empty 隐藏）", ".es-name:empty" in html and ".es-state:empty" in html, "")
-    check("全组叫 AI秘书团", 'return "AI秘书团"' in html and 'item("__all", "团", "AI秘书团"' in html, "")
+    # 菜单改版（参谋收进输入框下沿的「选择参谋」钮）后，这两条守的东西没变：
+    # 空着的位置不能留占位框，取消要有显式的出口。只是落点变了 —— 名字位现在
+    # 默认写着「选择参谋」（不再是空字符串），会空的是右边的状态位。
+    check("空态不占位（:empty 隐藏）",
+          ".expert-select .es-state:empty" in html and "选择参谋</b>" in html, "")
+    check("全组叫 AI秘书团", 'return "AI秘书团"' in html and 'row("__all", "团", "AI秘书团"' in html, "")
     # 团模式一位参谋都不召唤：后端也会拒（_expert_ids 直接返回空），但前端更不该发 ——
     # 发了就是三次没人看的模型调用，而且用户会在「秘书团」名下看到三张参谋卡。
     cur_src = html.split("function currentExperts()")[1][:420]
     check("团模式不召唤参谋", 'if (!EXP.cur || EXP.cur === "__all") return [];' in cur_src, cur_src[:120])
     check("再点一次可取消", "EXP.cur = !eid || EXP.cur === eid ? null : eid" in html, "")
     # 取消不能只有「再点一次」这一条 hidden 路径（只写在 item 的 title 里）。
-    # 菜单第一行必须有一个显式的、回到「不用参谋」的出口，否则看起来就是单选题。
+    # 菜单最后必须有一行显式的、回到「不用参谋」的出口，否则看起来就是单选题。
+    # 改版后这一行由 row() 生成，data-eid 传空、cls 传 "none"。
     check("菜单有「不使用参谋」显式出口",
-          'class="es-item none' in html and "不使用参谋" in html and 'data-eid=""' in html, "")
+          'row("", "×", "不使用参谋"' in html and "es-item.none" in html, "")
     check("斜杠里也能取消参谋",
           'all.unshift({ id: "", avatar: "×", name: "不使用参谋"' in html, "")
 
@@ -2255,7 +2491,7 @@ def test_knowledge() -> None:
     # 检索：俗称、短词、无关问题
     check("俗称能命中（环保局 → 生态环境局）", bool(kb.search("环保局那件事", mayor)), "")
     check("全称也能命中", bool(kb.search("生态环境局", mayor)), "")
-    check("短查询仍能命中（供暖 只有一个二字组）", bool(kb.search("供暖", mayor)), "")
+    check("短查询仍能命中（筛查 只有一个二字组）", bool(kb.search("筛查", mayor)), "")
     check("只对上一个通用词不算命中", kb.answer("火星基地建设情况", mayor)["refused"], "")
     check("无关问题不硬凑", kb.answer("今天晚上吃什么", mayor)["refused"], "")
 
@@ -2376,6 +2612,14 @@ def test_knowledge() -> None:
     check("清单页不覆盖对话卡片样式", ".kl-kind{" in html and ".kb-item{" in html and ".kb-tx{" in html, "")
     # 知识库和上传文档合成一页：chips 里必须有 doc 这一类，否则文件进了库也看不见
     check("清单页有「上传文档」一类", '{ id: "doc", label: "上传文档" }' in html, "")
+    # 文件类的 chip 跟服务端给的归类走（分类库上挂 kind/label）。钉住这条，是因为
+    # 硬编码一份 chip 列表也能跑通 —— 但那样服务端新加的归类在页面上永远不出现，
+    # 文件全挤在「上传文档」里，用户只能靠标题猜。
+    check(
+        "文件类 chip 跟服务端的归类走",
+        "const KB_CHIPS" in html and "d.doc_kinds" in html and "KB_IS_DOC" in html,
+        "前端只认 doc 的话，新加的「重点领域」这类 chip 永远不出现",
+    )
     # 混排的代价是「看不出这条是系统记录还是自己传的文件」。翻目录时按来源
     # 分组，组头明确写出来；上传入口的名字也要落到「入库」这个归宿上。
     check(
@@ -2724,7 +2968,27 @@ def test_notify() -> None:
     check("提醒定时轮询", "setInterval" in html and "loadNotify()" in html, "")
     check("提醒类名统一 nt- 前缀", ".nt-item{" in html and not re.search(r"^\.item\{", html, re.M), "")
     # 单位账号登录后落到工作台，而不是全市 GDP 那块罗盘
-    check("单位登录默认进工作台", "function defaultView" in html and 'who.role === "bureau"' in html, "")
+    check(
+        "单位登录默认进工作台",
+        "function defaultView" in html and 'role === "bureau"' in html and "applyRoleGate" in html,
+        "",
+    )
+    # 单位账号看不到罗盘：页签要摘掉，视图入口也要堵住（只藏页签会留下没有出口的视图）
+    check(
+        "委办局页签摘掉罗盘",
+        '.cp-tabs a[data-nav="compass"]' in html and 'a.hidden = noCompass' in html,
+        "",
+    )
+    check(
+        "委办局切不到罗盘视图",
+        'ROLE === "bureau" && which !== "desk"' in html,
+        "",
+    )
+    check(
+        "hidden 能压住页签的 inline-flex",
+        ".pagebar .cp-tabs a[hidden]" in html and "display:none" in html,
+        "",
+    )
     check("直达链接不被默认视图顶掉", "if (location.hash) return;" in html, "")
     # 佐证材料从「手打文件名」改成「上传原件」：输入框的那个提示语必须消失，
     # 否则界面还在教人用已经被状态机拒绝的填法。
@@ -2861,6 +3125,40 @@ def test_meetplan() -> None:
     )
     check("解析出时间", d["held_at"] == "2026-11-11 15:00", d["held_at"])
     check("解析出议题", d["title"] == "冬季供暖保障", d["title"])
+
+    # 标题优先取原话点名的会名。原先一律用议题拼（「学区归属、燃气通气、租房补贴」），
+    # 通知标题就跟着变成「关于召开……补贴的通知」，看不出这是个什么会。
+    import notice as notice_mod
+    dname = mp.parse(
+        "明天上午九点开个民情焦点研判会，市教育局参加，议题是学区归属",
+        today=today, person={"post": "市长"},
+    )
+    check("原话点名会名就用会名做标题", dname["title"] == "民情焦点研判会", dname["title"])
+    check(
+        "通知标题给非「会」结尾的标题补「会议」",
+        notice_mod.notice_title("冬季供暖保障") == "关于召开冬季供暖保障会议的通知",
+        notice_mod.notice_title("冬季供暖保障"),
+    )
+    check(
+        "会名已含「会」就不叠字",
+        notice_mod.notice_title("经济运行分析会") == "关于召开经济运行分析会的通知",
+        notice_mod.notice_title("经济运行分析会"),
+    )
+    check("光说「开个会」不把「会」当会名", mp.parse_meeting_name("明天下午四点开个会") == "",
+          mp.parse_meeting_name("明天下午四点开个会"))
+
+    # 对话路径是「模型浓缩的那句」和「用户原话」各解析一次取要素最全的。模型那句
+    # 常常把会名煮成议题摘要（「学区归属、燃气通气、租房补贴」），要素更全就被选中，
+    # 标题跟着变成议题列表 —— 而原话里明明点了会名。
+    import agent as agent_mod_mt
+    _, mpart = agent_mod_mt._run_tool(
+        "draft_meeting",
+        {"text": "学区归属、燃气通气、租房补贴，2026年11月29日上午九点，市教育局、市住建局参加"},
+        question="明天上午九点开个民情焦点研判会，市教育局、市住建局参加，议题是学区归属、燃气通气、租房补贴",
+        person_id="mayor", today=today, materials="", team=False,
+    )
+    mtitle = ((mpart.get("payload") or {}).get("meet_draft") or {}).get("title")
+    check("模型那份没会名时，标题取原句的会名", mtitle == "民情焦点研判会", str(mtitle))
     check("解析出地点", d["place"] == "3号楼会议室", d["place"])
     check("单位别名对齐全称", d["attendees"] == ["市住建局", "市城管局"], str(d["attendees"]))
     check("必填齐全才允许建会", d["ready"] is True, str(d["missing"]))
@@ -2877,15 +3175,34 @@ def test_meetplan() -> None:
     check("没说上下午按下午算且写明", d3["held_at"].endswith("15:00")
           and any("按下午" in a for a in d3["assumptions"]), d3["held_at"])
 
+    # 议题分条的两条硬约定：逗号后的「重点是…」要单独成条（不成就整段丢掉，
+    # 而那半句往往才是要议的事）；「和 / 与 / 及」不切（切出来是「工业托」这种残句）。
+    check("议题后的「重点是…」独立成条",
+          mp.parse_topics("议题是分析1—9月经济运行情况，重点是工业产值增长和固投下降")
+          == ["分析1—9月经济运行情况", "工业产值增长和固投下降"], "")
+    check("「与」不切议题",
+          mp.parse_topics("议题是工业支撑与投资拖累的判断") == ["工业支撑与投资拖累的判断"], "")
+    check("逗号后的参会单位不进议题",
+          mp.parse_topics("开个会，议题是停车难，市住建局参加") == ["停车难"], "")
+
+    # 秘书代拟的会不能替他定主持人：「主持人：秘书」会一字不差写进通知正文发到
+    # 参会单位手里，而会议没有改字段的接口，错了只能删会重建。
+    # 「秘书长」是领导职务，协调会本来就由他主持，不在排除之列。
+    dsec = mp.parse("下周三上午安排一场经济运行分析会", today=today, person={"post": "秘书"})
+    check("秘书代拟不替你定主持人",
+          dsec["host"] == "" and any("代拟" in a for a in dsec["assumptions"]), str(dsec["assumptions"]))
+    dsec2 = mp.parse("下周三上午安排一场经济运行分析会", today=today, person={"post": "秘书长"})
+    check("秘书长仍按身份填主持", dsec2["host"] == "秘书长", str(dsec2["host"]))
+
     # 系统里根本没有的单位：原样留着并说明，不硬塞进清单 ——
     # 系统不该假装认识一个它从来没有的单位。
-    # 注意这里不能用「市财政局」：单位账号补齐后，directory.UNITS 里的十五个单位
+    # 注意这里不能用「市财政局」：单位账号补齐后，directory.UNITS 里的单位
     # 全都有了账号，roster() 自然认得它们（这正是第一步要的效果）。要用清单外
     # 的单位才测得到「不认识」这条路径。
     d4 = mp.parse("约个会，参会单位：市体育局", today=today, person={"post": "市长"})
     check("系统没有的单位不硬塞", d4["unknown_units"] == ["市体育局"]
           and "市体育局" not in d4["attendees"], str(d4["attendees"]) + str(d4["unknown_units"]))
-    check("没对上的单位要提示", any("台账里没出现过" in n for n in d4["notes"]), str(d4["notes"])[:80])
+    check("没对上的单位要提示", any("系统里没登记" in n for n in d4["notes"]), str(d4["notes"])[:80])
 
     # ---- 落库 ----
     from datetime import datetime as _dt, timedelta as _td
@@ -2902,6 +3219,14 @@ def test_meetplan() -> None:
     check("落库记下来源消息", one.get("from_message") == "th_smoke:m_smoke", str(one.get("from_message")))
     check("落库记下地点与主持", one.get("place") == "3号楼会议室" and one.get("host") == "市长",
           f"{one.get('place')} / {one.get('host')}")
+    check("落库记住议题清单", one.get("topics") == ["供暖保障"], str(one.get("topics")))
+
+    # 议题要能一路走到通知正文。这条链上曾经唯一的丢信息点就在这儿：卡片只提交
+    # 五个字段，topics 被丢掉，会议详情议题为空，通知正文的「会议议题」整段消失 ——
+    # 通知发下去，收件人只知道几点在哪开会，不知道要研究什么。
+    nt_one = mt_notice.build(one)
+    check("通知正文带「会议议题」一节",
+          "会议议题" in nt_one["text"] and "供暖保障" in nt_one["text"], nt_one["text"][:80])
 
     r2 = mp.commit(good, thread_id="th_smoke", message_id="m_smoke", actor="市长")
     check("同一条消息只建一场会",
@@ -3015,7 +3340,7 @@ def test_agent() -> None:
     # 腾讯会议那两个只在配了 Token 时出现（没配就不给模型一个必然失败的工具），
     # 所以断言按「基础工具集 ⊆ 实际」写，多出来的只允许是那两把只读工具。
     DIRECTIVE_TOOLS = {"draft_directive", "scan_directives"}
-    BASE_TOOLS = {"list_metrics", "query_metric", "scan_oversight",
+    BASE_TOOLS = {"list_metrics", "query_metric", "scan_oversight", "focus_topics",
                   "search_knowledge", "clarify", "advance_item",
                   "draft_meeting", "draft_document", "compare_material",
                   "draft_directive", "scan_directives"}
@@ -3034,6 +3359,44 @@ def test_agent() -> None:
         [n for n in schema_names
          if n not in ((BASE_TOOLS - {"advance_item"}) | WEMEET_TOOLS)] == ["advance_item"],
         str(schema_names),
+    )
+
+    # 民情焦点是「对话 → 焦点 → 会议 → 督办」这条链的第一环。两个坑都在实测里
+    # 咬过人：① 没有这个工具时，模型会拿 12345 按期办结率顶替 —— 办结率是效率
+    # 指标，答的不是「群众在反映什么」；② 焦点里的来信编号（18842）、会议日期
+    # （2026-11-29 09:00）只以整串进放行清单时，正文把它们拆开写就会被判编造，
+    # 连退两轮后整句被删，用户只看到「我上一条回复里没有写数字」。
+    ftxt, fpart = agent_mod._run_tool(
+        "focus_topics", {}, question="最近民情焦点有哪些", person_id="mayor",
+        today=date(2026, 11, 28), materials="", team=False,
+    )
+    check(
+        "民情焦点工具能列出三条",
+        fpart.get("kind") == "focus" and len(fpart.get("items") or []) == 3,
+        str(fpart.get("kind")),
+    )
+    check("民情焦点标明件数是演示值", "demo" in ftxt and "演示" in ftxt, ftxt[:80])
+    fpay = agent_mod._audit_payload([fpart], [], "最近民情焦点有哪些", materials="")
+    check(
+        "焦点来信编号能溯源",
+        numgate.audit("来信编号 18842、18818、18786、18902 可以核到。", fpay)["ok"],
+        str(numgate.audit("来信编号 18842、18818、18786、18902", fpay)["bad"]),
+    )
+    check(
+        "焦点件数人数能溯源",
+        numgate.audit("F1 受理 128 件、涉及 96 人，F2 54 人，F3 37 人。", fpay)["ok"],
+        str(numgate.audit("F1 受理 128 件、涉及 96 人", fpay)["bad"]),
+    )
+    mt_pay = agent_mod._audit_payload(
+        [{"kind": "meeting", "payload": {"meet_draft": {
+            "title": "民情焦点研判会", "held_at": "2026-11-29 09:00",
+            "host": "市长", "attendees": ["市教育局"]}}}],
+        [], "约个会", materials="",
+    )
+    check(
+        "会议日期时间能溯源（拆开写也不判编造）",
+        numgate.audit("时间：2026-11-29（明天）上午 9:00", mt_pay)["ok"],
+        str(numgate.audit("时间：2026-11-29（明天）上午 9:00", mt_pay)["bad"]),
     )
 
     # ---------------- 交办只归 AI秘书团 ----------------
@@ -3986,9 +4349,9 @@ def test_attach_entry() -> None:
     check("表头能认出带编号的指标名", ext_mod.match_metric("12345按期办结率") == "TZ_12345_CLOSURE", "")
     check("表头能认出省掉后缀的指标名", ext_mod.match_metric("规模以上工业增加值") == "GY_VA_GROWTH", "")
     check(
-        "★产值不会被当成增加值（防错配）",
-        ext_mod.match_metric("规上工业总产值") is None,
-        "错配比不显示更糟：两个不同的东西摆在一起说「差 3%」",
+        "★产值认到产值，不当成增加值（防错配）",
+        ext_mod.match_metric("规上工业总产值") == "GY_OUTPUT",
+        "以前字典里没有产值，只能认成增加值去比 —— 两个不同的东西摆在一起说「差 3%」",
     )
     check(
         "期次三种写法都认",
@@ -4041,6 +4404,38 @@ def test_attach_entry() -> None:
         'result["external"] = ext' in src_ask
         and "external" not in src_ask.split("def _ask_impl(")[1].split("def ask(")[0],
         "一旦在 _ask_impl 里拼，外部数字就进了答案正文",
+    )
+
+    # 逐期对照要比**真数**。`query_metric` 的 series 永远是演示序列（真数只覆盖
+    # value），照 series 比，一份 9 月统计月报会被判成「GDP 差 13.57 亿」
+    # 「财政收入量级差十倍」—— 两边根本是同一张表。
+    gdp_row = (
+        (
+            ext_mod.analyze(
+                [{"name": "m.csv", "text": "期次,地区生产总值（亿元）\n2026-09,1300.07"}]
+            )
+            or {}
+        ).get("metrics")
+        or [{}]
+    )[0].get("rows") or [{}]
+    check(
+        "★真数期按真数对照，不拿演示序列比",
+        gdp_row[0].get("state") == "same" and gdp_row[0].get("internal_real") is True,
+        str(gdp_row[0]),
+    )
+    mock_row = (
+        (
+            ext_mod.analyze(
+                [{"name": "m.csv", "text": "期次,地区生产总值（亿元）\n2026-09,1286.5"}]
+            )
+            or {}
+        ).get("metrics")
+        or [{}]
+    )[0].get("rows") or [{}]
+    check(
+        "改了数的表仍然判不一致",
+        mock_row[0].get("state") == "diff",
+        str(mock_row[0]),
     )
 
     html = (ROOT / "app" / "web" / "index.html").read_text(encoding="utf-8")
@@ -5016,6 +5411,24 @@ def test_authz_scope() -> None:
     ok, why = authz.can(sec, authz.MEETING_EDIT)
     check("秘书不能改会议主档", ok is False, why)
 
+    # ── 3b. 个人交办（把活直接派给某个人，落到那个人的 AI 日程）：只给市领导 ──
+    # 秘书能替市长拟办、能发会议通知，但不能替市长给人派活；分管领导和局长派的
+    # 是单位（进台账、要签收），不是人。这条要是漏了，任何一个单位账号都能把活
+    # 塞进秘书的日程里，而秘书根本没有拒绝的入口。
+    check(
+        "市领导能给人直接交办",
+        authz.can(directory.person_scope("mayor"), authz.TASK_ASSIGN)[0],
+        "",
+    )
+    for who, label in (("secretary", "秘书"), ("vmayor", "分管领导"), ("bureau", "局长")):
+        ok, why = authz.can(directory.person_scope(who), authz.TASK_ASSIGN)
+        check(f"{label}不能给人直接交办", ok is False and "市领导" in why, f"{ok} {why}")
+    check(
+        "能接个人交办的只有秘书",
+        [p["id"] for p in people.assignable()] == ["secretary"],
+        str([p["id"] for p in people.assignable()]),
+    )
+
     # ── 4. 补挂历史凭证：改的是已经发生过的记录，按事项状态分三档 ──
     # 待审核一律不补（批的和看到的会是两批材料）；已办结只给市级
     # （责任单位给自己补事后凭证，等于自己给自己做背书）；办理中同上传口径。
@@ -5172,11 +5585,16 @@ def test_http(port: int | None = None) -> None:
     try:
         ppl = get("/api/people")
         ids = [p.get("id") for p in (ppl.get("people") or [])]
-        # 18 = 4 个演示身份 + 14 个单位账号。单位账号必须出现在这份清单里，
-        # 否则登录框的下拉里根本选不到它 —— 账号建了等于没建。
+        # 不比「恰好几位」：单位账号会随目录补齐而变化（15 家 → 29 家就是这么来的），
+        # 把 18 写死在这里，补一家单位就要来改一次测试，改的人还会以为测试坏了。
+        # 比的是「接口与数据层同源」+ 单位账号确实出现在清单里 —— 后者才是要守的：
+        # 账号建了但下拉里选不到，等于没建。
+        import people as people_api
+
+        expect = [p["id"] for p in people_api.all_people()]
         check(
             "/api/people 含演示身份与单位账号",
-            len(ids) == 18
+            ids == expect
             and "secretary" in ids
             and all(u in ids for u in ("u-zhujian", "u-market", "u-edu", "u-gov"))
             and ppl.get("demo") is True,
@@ -5606,7 +6024,7 @@ def test_http(port: int | None = None) -> None:
     )
 
     # ---- 知识库 ----
-    kres = get("/api/knowledge?q=%E5%85%A5%E6%B2%B3%E6%8E%92%E6%B1%A1%E5%8F%A3")
+    kres = get("/api/knowledge?q=%E5%9F%8E%E4%B8%AD%E6%9D%91")
     check(
         "/api/knowledge 返回条目",
         kres.get("ok") is True and bool(kres.get("hits")),
@@ -5618,7 +6036,7 @@ def test_http(port: int | None = None) -> None:
         "",
     )
     check("知识库报告索引规模", int(kres.get("index_size") or 0) >= len(METRICS), str(kres.get("index_size")))
-    empty = get("/api/knowledge?q=%E7%81%AB%E6%98%9F%E5%9F%BA%E5%9C%B0%E5%BB%BA%E8%AE%BE")
+    empty = get("/api/knowledge?q=%E7%8C%AB%E7%B2%AE%E5%93%81%E7%89%8C%E5%AF%B9%E6%AF%94%E8%AF%84%E6%B5%8B")
     check("/api/knowledge 无命中返回空而不是硬凑", empty.get("ok") is True and not empty.get("hits"), str(empty.get("total")))
 
     # 清单页：不带 q 是目录，不是「搜了空词所以没结果」
@@ -5647,6 +6065,34 @@ def test_http(port: int | None = None) -> None:
         doc_only.get("ok") is True and all(i.get("kind") == "doc" for i in (doc_only.get("items") or [])),
         str(doc_only.get("total")),
     )
+    # 分类库可以挂归类（比如「重点领域」）：挂了就在清单页单独成一个 chip。
+    # 这里钉住三件事：归类要报给前端、按归类能收窄、归类库的文件不再算进
+    # 「上传文档」—— 两边都算的话，chip 上的数加起来会比「全部」还多。
+    kind_map = {k.get("id"): k.get("label") for k in (browsed.get("doc_kinds") or []) if isinstance(k, dict)}
+    check(
+        "文件类 chip 由分类库的归类决定（含兜底的「上传文档」）",
+        "doc" in kind_map and kind_map.get("doc") == "上传文档",
+        str(kind_map),
+    )
+    if "keyarea" in kind_map:
+        ka = get("/api/knowledge?kind=keyarea")
+        check(
+            "可按归类收窄（重点领域）且只回该类",
+            ka.get("ok") is True
+            and bool(ka.get("items"))
+            and all(i.get("kind") == "keyarea" for i in (ka.get("items") or [])),
+            str(ka.get("total")),
+        )
+        counts_all = browsed.get("counts") or {}
+        doc_kind_ids = set(kind_map)
+        files_in_list = [i for i in (browsed.get("items") or []) if i.get("kind") in doc_kind_ids]
+        check(
+            "每个文件只出现在一个归类下（计数不重复）",
+            len(files_in_list) == sum(int(counts_all.get(k) or 0) for k in doc_kind_ids),
+            f"列表 {len(files_in_list)} vs 计数 {sum(int(counts_all.get(k) or 0) for k in doc_kind_ids)}",
+        )
+    else:
+        print("  SKIP  服务里没有挂归类的库，「重点领域」收窄跳过")
     # 阅读视图接口：只能用**服务里真实存在**的文档来打。测试进程自己造的库
     # 服务看不到（两边 OCGOV_DATA 不是同一个目录），拿 tbase 去打必定 404。
     docs_live = doc_only.get("items") or []
@@ -6618,6 +7064,9 @@ def test_directive() -> None:
     )
     check("非市领导不能给人交办", denied_p.get("ok") is False and "市领导" in str(denied_p.get("error")), str(denied_p)[:100])
     check("被拒时不落一条", not any(x["title"] == "拟个稿" for x in dr.assigned_to("secretary")), "")
+    check("被拒的活也进不了秘书日程", not any(
+        e.get("title") == "拟个稿"
+        for g in sch.build("secretary", 14)["groups"] for e in g["items"] if e["kind"] == "assign"), "")
 
     done = dr.complete_person_task(pdid, 1, by="secretary", done=True)
     check("本人能标已办", done.get("ok") is True and done.get("done") is True, str(done)[:90])
@@ -7104,7 +7553,7 @@ def test_wenshu() -> None:
 
     # ── 请示：结构、要素、出处 ──
     qs = ws.build("qingshi", {
-        "subject": "高铁东站周边路网配套工程管线迁改资金",
+        "subject": "老年人智能技术培训经费",
         "contact": "王磊", "tel": "0519-88888888",
         "items": [{"text": "申请市级财政补助资金 3200 万元", "unit": "市财政局", "due": "2026-12-20"}],
         "anchors": [{"type": "ledger", "ref": "DB2026-0027"}],
@@ -7121,7 +7570,7 @@ def test_wenshu() -> None:
     check("时限写成中文日期", "2026年12月20日" in qd["paras"][-1]["text"], qd["paras"][-1]["text"])
     check("缘由段以承接语收尾", qd["paras"][0]["text"].endswith("请示如下："), qd["paras"][0]["text"][-14:])
     check("缘由段引到了勾选的台账事实",
-          "高铁东站周边路网配套工程" in qd["paras"][0]["text"], "")
+          "老年人智能技术培训" in qd["paras"][0]["text"], "")
     check("依据带回了台账编号", qd["facts"][0]["ref"] == "DB2026-0027", str(qd["facts"]))
     check("文号不自动编号（系统没有登记簿）",
           "___" in qd["no"] and any("登记簿" in w for w in qs["warnings"]), qd["no"])
@@ -7129,7 +7578,7 @@ def test_wenshu() -> None:
 
     # ── 通知：分条方式、结语、工作要求 ──
     tz = ws.build("tongzhi", {
-        "subject": "做好 2026—2027 年度冬季供暖保障工作",
+        "subject": "做好托育服务保障工作",
         "basis": "市政府第 12 次常务会议部署",
         "require": "各责任单位每周五前将进展报市政府办公室",
         "anchors": [{"type": "ledger", "ref": "DB2026-0035"}],
@@ -7148,7 +7597,7 @@ def test_wenshu() -> None:
     check("未填事项时自动代入台账事项",
           any("事项未填" in w for w in tz["warnings"]), str(tz["warnings"]))
     check("同一件事不在缘由里说第二遍",
-          td["paras"][0]["text"].count("冬季供暖保障预案报备") == 0, td["paras"][0]["text"])
+          td["paras"][0]["text"].count("爱心暖托班") == 0, td["paras"][0]["text"])
 
     # 查不到的锚点：如实说，不静默丢，也不编
     bad = ws.build("qingshi", {"subject": "X", "anchors": [{"type": "ledger", "ref": "DB-不存在"}]}, use_model=False)
@@ -7193,14 +7642,14 @@ def test_wenshu() -> None:
         llmclient.available = lambda: True
         llmclient.chat_json = lambda *a, **k: {"data": {"reason": reason}}
         return ws.build("qingshi", {
-            "subject": "高铁东站周边路网配套工程管线迁改资金",
+            "subject": "老年人智能技术培训经费",
             "items": [{"text": "申请补助"}, ],
             "anchors": [{"type": "ledger", "ref": "DB2026-0027"}],
         }, use_model=True)
 
     try:
-        good = fake("高铁东站周边路网配套工程已于 2026年10月28日 到期，目前仍在办理中，"
-                    "市住建局需尽快完成管线迁改，现提请审议相关资金安排。")
+        good = fake("全溧颐养工程老年人智能技术培训已于 2026年11月20日 到期，目前仍在办理中，"
+                    "市民政局需尽快完成培训任务，现提请审议相关资金安排。")
         check("清单内的数字放行", good["model"]["source"] == "model", good["model"].get("note", ""))
         check("放行后缘由此模型写", "提请审议" in good["doc"]["paras"][0]["text"], "")
 
@@ -7500,6 +7949,7 @@ def main() -> int:
     test_memory()
     test_workspace()
     test_people()
+    test_oversight_list()
     test_experts()
     test_meeting()
     test_wemeet()

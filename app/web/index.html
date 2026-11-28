@@ -81,9 +81,21 @@ body{
 #viewDesk{overflow-y:auto;overflow-x:hidden}
 #viewDesk .desk-sec{flex:0 0 auto}
 .desk-sec{display:flex;flex-direction:column;gap:8px;min-height:0}
+/* 藏起来的板块要真的不占位。`hidden` 属性只带一条 UA 的 display:none，被上面
+   `.desk-sec{display:flex}` 压掉了 —— 结果是「取消勾选」只是把这块挪到末尾，
+   还留在页面上。加这条之后，自定义里的勾选才和看到的一致。 */
+.desk-sec[hidden]{display:none}
 /* 动态卡片高度贴合内容，不强行撑满 —— 否则条目少时下半部会空一大块 */
 .desk-feed{flex:0 1 auto}
 .desk-follow{flex:0 1 auto}
+/* 督办列表同样贴合内容：它是台账全量，行数本来就多，再撑满会把后面几块挤出屏 */
+.desk-ov{flex:0 1 auto}
+/* 单位账号（委办局）看不到城市罗盘：页签用 hidden 摘掉。
+   选择器要写到 .pagebar 这一层 —— 页签在顶栏那套样式里是 `.pagebar .cp-tabs a`
+   （specificity 0,2,1），光写 `.cp-tabs a[hidden]` 跟它打平，后定义的那条会赢，
+   属性摘不掉，页签照样在。 */
+.cp-tabs a[hidden],
+.pagebar .cp-tabs a[hidden]{display:none}
 /* 标题行右侧的操作按钮（管理关注 / 全部已读）：靠 auto 顶到行尾 */
 .sec-act{margin-left:auto}
 .sec-head{display:flex;align-items:center;gap:8px;padding:0 2px}
@@ -440,28 +452,45 @@ html.ask-fold .ask-rail{display:flex}
 /* 标题前的实心点，和右侧「在线」一起构成状态感 */
 .ask-dot{width:7px;height:7px;border-radius:50%;background:var(--brand);display:inline-block;margin-right:6px;vertical-align:1px}
 
-/* 专家：当前对话绑定的那一位，单选。参谋团（全组）收进菜单最后一项，
-   不再并排一堆胶囊 —— 一排胶囊看着像筛选项，实际是「谁在跟我说话」。
-   没选人时名字和状态都为空，整条只留「AI参谋 ▾」，不放占位文案。 */
+/* 参谋：不再占会话上方一整行，收进输入框下沿的工具行 —— 点开从输入框上沿
+   弹一整面菜单（和斜杠层同一个位置）。没选人时只写「选择参谋」，不写
+   「不召唤」这种占位词：空着就是没选，菜单里有「不使用参谋」这个显式出口。 */
 .expert-select{
-  position:relative;display:flex;align-items:center;gap:6px;margin:0 14px 8px;
-  background:var(--surface-4);border:1px solid var(--line-2);border-radius:8px;
-  padding:7px 10px;cursor:pointer;user-select:none;transition:background .15s,border-color .15s
+  position:relative;display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;
+  height:24px;padding:0 5px;border-radius:6px;background:transparent;
+  color:#8b9ab0;font-size:11.5px;cursor:pointer;user-select:none;transition:.15s
 }
-.expert-select:hover{background:var(--hover-2);border-color:var(--line-3)}
+.expert-select:hover{color:var(--hr-blue);background:#f2f7ff}
 .expert-select:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
-/* 右侧留出查找按钮的位置：那是浮在专家行右端的空白区，不挤占文字 */
-.expert-select{padding-right:34px}
-
-/* 会话内查找。入口浮在专家行右端（不占一行），查找条本身插在消息区上方。 */
-.find-open{
-  position:absolute;right:16px;top:9px;z-index:4;width:24px;height:24px;
-  display:flex;align-items:center;justify-content:center;padding:0;
-  border:1px solid transparent;border-radius:6px;background:transparent;
-  color:var(--faint);cursor:pointer
+/* 字标：没选人是一颗空心「＋」，选了人就是那位参谋的首字（蓝底白字） */
+.expert-select .es-badge{
+  width:16px;height:16px;border-radius:50%;flex:0 0 auto;display:grid;place-items:center;
+  font-style:normal;font-size:9.5px;font-weight:700;line-height:1;
+  border:1px solid #dbe4f0;background:transparent;color:#8b9ab0
 }
-.find-open:hover{color:var(--brand);background:var(--surface-4);border-color:var(--line-2)}
-.find-open svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8}
+.expert-select .es-name{
+  font-size:11.5px;font-weight:600;max-width:112px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+}
+.expert-select .es-state{font-size:10.5px;color:var(--faint)}
+/* 选中参谋后「（对话中）」点亮为绿色，提示当前正在和谁对话 */
+.expert-select .es-state.on{color:var(--ok);font-weight:600}
+.expert-select .es-state:empty{display:none}
+.expert-select .es-caret{width:11px;height:11px;flex:0 0 auto;transition:transform .15s}
+.expert-select.open .es-caret{transform:rotate(180deg)}
+/* 有人在对话时整颗钮点亮：一眼看出这条对话不是裸问 */
+.expert-select.has{color:var(--hr-blue);background:#eff5ff}
+.expert-select.has .es-badge{background:var(--hr-blue);border-color:var(--hr-blue);color:#fff}
+.expert-select.has:hover{background:#e7f0ff}
+
+/* 会话内查找：原来是会话上方并排的一格，现在收成工具行里的一颗图标钮；
+   查找条本身仍然插在消息区上方。 */
+.inputbar .ib-ic{
+  width:24px;height:24px;padding:0;border:0;border-radius:6px;background:transparent;
+  display:grid;place-items:center;color:#8b9ab0;cursor:pointer;flex:0 0 auto
+}
+.inputbar .ib-ic:hover{color:var(--hr-blue);background:#f2f7ff}
+.inputbar .ib-ic svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.9}
 .findbar{display:flex;align-items:center;gap:5px;padding:6px 14px 8px}
 .findbar[hidden]{display:none}
 .findbar input{
@@ -479,46 +508,49 @@ html.ask-fold .ask-rail{display:flex}
 /* 命中用 outline 不用 background：outline 不参与布局，闪一下不会把整段文字挤动 */
 .thread .find-hit{outline:2px solid var(--brand);outline-offset:3px;border-radius:8px;animation:findPulse .8s ease-out 1}
 @keyframes findPulse{from{outline-color:transparent}to{outline-color:var(--brand)}}
-.expert-select .es-label{font-size:10.5px;color:var(--faint);flex:0 0 auto}
-.expert-select .es-name{font-size:12px;color:var(--ink);font-weight:700;flex:0 0 auto}
-.expert-select .es-state{font-size:10.5px;color:var(--faint);flex:1 1 auto;min-width:0;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* 空着就别占位：名字/状态为空时整条只剩标签和箭头，也不留 gap 缝 */
-.expert-select .es-name:empty,.expert-select .es-state:empty{display:none}
-/* 选中参谋后「（对话中）」点亮为绿色，提示当前正在和谁对话 */
-.expert-select .es-state.on{color:var(--ok);font-weight:600}
-.expert-select .es-caret{width:13px;height:13px;color:var(--muted);flex:0 0 auto;transition:transform .15s}
-.expert-select.open .es-caret{transform:rotate(180deg)}
-.es-menu{
-  position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:30;
-  background:var(--surface);border:1px solid var(--line);border-radius:9px;
-  box-shadow:0 8px 24px rgba(23,43,77,.13);padding:5px;max-height:264px;overflow-y:auto
+/* 参谋菜单：贴着输入框上沿、整行宽，和斜杠层同一个位置、同一档阴影。
+   分组照参考稿：小灰标题 + 「名字 + 一句说明」一行一位，选中的那行浅蓝底。
+   高度按视口收一下，矮屏上宁可滚动也不要顶出面板外被裁掉。 */
+.tool-menu{
+  position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:33;
+  background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  box-shadow:0 12px 32px rgba(17,45,92,.16);padding:4px;
+  max-height:min(400px,50vh);overflow-y:auto
 }
+.tool-menu[hidden]{display:none}
+.tm-hd{
+  display:flex;align-items:baseline;gap:5px;padding:7px 8px 4px;
+  font-size:10px;color:var(--faint);white-space:nowrap
+}
+.tm-hd b{font-size:10px;font-weight:600;color:var(--muted);flex:0 0 auto}
+.tm-hd span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+/* 第二组自带一条分界线：两组不是同一类东西（一组选人，一组办事 / 取消） */
+.tm-hd.sep{border-top:1px solid var(--line-2);margin-top:4px;padding-top:9px}
 .es-item{
-  display:flex;align-items:center;gap:7px;padding:7px 8px;border-radius:6px;
+  display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:7px;
   cursor:pointer;font-size:12px;color:var(--ink-2)
 }
-.es-item:hover{background:var(--hover-2)}
-.es-item.on{background:var(--brand-soft);color:var(--brand);font-weight:700}
+.es-item:hover{background:var(--surface-3)}
+.es-item.on{background:#eef4ff}
 .es-item i{
-  width:17px;height:17px;border-radius:50%;background:var(--brand-soft);color:var(--brand);
-  font-style:normal;font-size:9px;display:grid;place-items:center;font-weight:700;flex:0 0 auto
+  width:18px;height:18px;border-radius:50%;background:var(--brand-soft);color:var(--brand);
+  font-style:normal;font-size:9.5px;display:grid;place-items:center;font-weight:700;flex:0 0 auto
 }
 .es-item.on i{background:var(--brand);color:#fff}
-.es-item em{font-style:normal;font-size:10px;color:var(--faint);margin-left:auto;flex:0 0 auto}
-/* 参谋名后括号里的一句话简介：弱化色、放不下省略，悬停 title 里有完整 focus */
-.es-item .es-brief{
-  font-size:10.5px;font-weight:400;color:var(--faint);
-  min-width:0;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+.es-item b{font-size:12px;font-weight:700;color:#25303f;flex:0 0 auto}
+.es-item.on b{color:var(--brand)}
+/* 说明跟在名字后面、弱化色；放不下就省略，完整版在行的 title 里 */
+.es-item .es-desc{
+  font-size:10.5px;color:var(--faint);flex:1 1 auto;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap
 }
-.es-item.sep{margin-top:5px;padding-top:9px;border-top:1px solid var(--line-2)}
-/* 「不使用参谋」不是第八位参谋，是清空：弱化，和名单之间画一条分界。
+.es-item em{font-style:normal;font-size:10px;color:var(--faint);flex:0 0 auto}
+.es-item.on em{color:var(--brand)}
+/* 「不使用参谋」不是第七位参谋，是清空：弱化，图标改成描边的 ×。
    它必须一直在菜单里 —— 取消的办法不能只藏在「再点一次」的 tooltip 里。 */
-.es-item.none{color:var(--muted);border-radius:6px 6px 0 0;border-bottom:1px solid var(--line-2);
-  margin-bottom:4px;padding-bottom:8px}
-.es-item.none i{background:transparent;border:1px solid var(--line-2);color:var(--muted);font-size:12px}
-.es-item.none.on{color:var(--brand)}
-.es-item.none.on i{background:var(--brand);border-color:var(--brand);color:#fff}
+.es-item.none i{background:transparent;border:1px solid var(--line);color:var(--muted);font-size:12px;font-weight:400}
+.es-item.none b{color:var(--muted);font-weight:600}
+.es-item.none.on b{color:var(--brand);font-weight:700}
 
 /* ---------- 斜杠唤起（输入框里打 / 弹这一层） ----------
    贴着输入框上沿弹出，宽度跟整行一致：左栏只有屏宽 1/3，做成跟在光标后面的
@@ -778,10 +810,13 @@ html.ask-fold .ask-rail{display:flex}
 .mp-f{display:flex;flex-direction:column;gap:3px;font-size:10.5px;color:var(--faint);min-width:0}
 .mp-f.full{grid-column:1/-1}
 .mp-f>span{display:flex;align-items:center;gap:5px}
-.mp-f input{font-family:inherit;font-size:12px;color:var(--ink);padding:5px 7px;
+.mp-f input,.mp-f textarea{font-family:inherit;font-size:12px;color:var(--ink);padding:5px 7px;
   border:1px solid var(--line);border-radius:7px;background:var(--surface);min-width:0}
-.mp-f input:focus{outline:none;border-color:var(--brand)}
-.mp-f.miss input{border-color:var(--danger-line);background:var(--danger-bg)}
+/* 议题一格可能是好几条，textarea 要能自己撑高一点、也只许竖着拉 —— 横着拉会把
+   卡片撑出容器，右边那几个按钮就被挤到看不见的地方 */
+.mp-f textarea{resize:vertical;line-height:1.55;min-height:52px}
+.mp-f input:focus,.mp-f textarea:focus{outline:none;border-color:var(--brand)}
+.mp-f.miss input,.mp-f.miss textarea{border-color:var(--danger-line);background:var(--danger-bg)}
 .mp-miss{font-style:normal;margin-left:5px;font-size:9.5px;color:var(--danger);
   background:var(--danger-bg);border:1px solid var(--danger-line);border-radius:8px;padding:0 5px}
 .mp-warns{margin-top:8px;display:flex;flex-direction:column;gap:4px}
@@ -1120,6 +1155,15 @@ html.ask-fold .ask-rail{display:flex}
 .fx-tk code{font-family:ui-monospace,SFMono-Regular,monospace;font-size:10.5px;color:var(--muted);background:var(--surface-4);padding:1px 5px;border-radius:4px;flex:0 0 auto}
 .fx-tk .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fx-tk .st{margin-left:auto;color:var(--faint);font-size:10.5px;white-space:nowrap}
+/* 来信选登原文：每条都能点回 GOV 门户的信件详情页，编号就是页面 id。
+   样式和上面「关联工单」一排保持一致，只是整行变成链接。 */
+.fx-letters{display:flex;flex-direction:column;gap:7px}
+.fx-lt{display:flex;gap:8px;font-size:11.5px;color:var(--ink-2);align-items:center;min-width:0;text-decoration:none}
+.fx-lt:hover .tt{color:var(--brand);text-decoration:underline}
+.fx-lt code{font-family:ui-monospace,SFMono-Regular,monospace;font-size:10.5px;color:var(--muted);background:var(--surface-4);padding:1px 5px;border-radius:4px;flex:0 0 auto}
+.fx-lt .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fx-lt .st{margin-left:auto;color:var(--faint);font-size:10.5px;white-space:nowrap}
+.fx-lt .go{color:var(--brand);font-size:10.5px;flex:0 0 auto}
 .fx-note{margin-top:12px;font-size:10.5px;color:var(--faint);line-height:1.6;border-top:1px dashed var(--line-2);padding-top:8px}
 @media (max-width:900px){.fx-grid{grid-template-columns:1fr}}
 
@@ -1853,9 +1897,10 @@ html.embedded .drawer{top:0;height:100%}
 .kl-kind.oversight{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-ink)}
 .kl-kind.decision{background:var(--ok-bg);border-color:var(--ok-line);color:var(--ok)}
 .kl-kind.meeting{background:var(--brand-soft);color:var(--brand)}
-/* 上传文档不是系统产出的记录（可能过期、随时可删），用虚线边把它和四类记录
-   分开。不给第五种颜色：颜色已经用到四个语义色，再加一个就分不清了。 */
-.kl-kind.doc{background:var(--surface-2);border-style:dashed;border-color:var(--faint);color:var(--muted)}
+/* 上传文档（含「重点领域」这类挂了归类的库）不是系统产出的记录（可能过期、
+   随时可删），用虚线边把它和四类记录分开。不给第五种颜色：颜色已经用到四个
+   语义色，再加一个就分不清了。`.file` 收所有文件类，新加归类不必再改 CSS。 */
+.kl-kind.doc,.kl-kind.file{background:var(--surface-2);border-style:dashed;border-color:var(--faint);color:var(--muted)}
 /* 来源分组头：两路混排在清单里，光看每条的类目色块要连读十几条才反应过来
    「上半页是系统记录、下半页才是我传的文件」。只在翻目录时出现 —— 检索结果
    按分数排序，插组头会把「第一条最相关」这件事打乱。 */
@@ -2029,7 +2074,8 @@ html.embedded .drawer{top:0;height:100%}
 }
 .cal-nav-btn:hover{border-color:var(--brand);color:var(--brand)}
 .cal-nav-btn.ghost{color:var(--muted)}
-.cal-legend{margin-left:auto;font-size:10px;color:var(--faint)}
+/* 导航行原来右侧挂着一行 legend（「点日期看当天清单 · 事项来自…」），已整条撤掉：
+   点击指引靠格子 hover 手型和选中框就够，数据来源在弹窗标题下已经说过一次。 */
 /* minmax(0,1fr) 不是笔误：1fr 的最小值是 auto，格子里的标题又是 nowrap，
    一条长标题（「整理三季度经济运行分析材料」）会把这一列的**最小宽度**顶到
    比 1/7 还宽 —— 整行撑出容器，右边那列被推出画布，格子里的字索性溢到隔壁。
@@ -2068,7 +2114,9 @@ html.embedded .drawer{top:0;height:100%}
   font-size:9.5px;line-height:1.3;font-weight:400;letter-spacing:0;text-shadow:none
 }
 .cal-more{font-size:9px;color:var(--faint);flex:0 0 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cal-daylist{padding:6px 14px 0}
+/* 页脚那行说明撤掉之后，清单最后一条会贴着弹窗底边 —— 补一点下沿留白，
+   别让最后一张卡片看起来像被切掉。 */
+.cal-daylist{padding:6px 14px 8px}
 
 /* ---------------- 材料助手 ----------------
    纸张不跟随主题：它是一张纸，不是界面。深色主题下四周桌面是深色，纸仍然白底黑字——
@@ -2395,11 +2443,6 @@ html.embedded .drawer{top:0;height:100%}
 
 .cal-quiet{padding:12px 0 4px;font-size:11.5px;color:var(--muted)}
 .cal-empty{padding:30px 18px;text-align:center;color:var(--muted);font-size:12px;line-height:1.8}
-.cal-foot{
-  margin:14px 18px 0;padding-top:10px;border-top:1px solid var(--line);
-  font-size:10.5px;color:var(--faint);line-height:1.8;
-}
-.cal-foot b{color:var(--muted);font-weight:600}
 .cal-refresh{
   font:inherit;font-size:10.5px;padding:2px 8px;border-radius:5px;cursor:pointer;
   border:1px solid var(--line);background:var(--surface);color:var(--muted);
@@ -2458,7 +2501,7 @@ kbd{font:inherit;font-size:10.5px;background:var(--surface-3);border:1px solid v
 :root[data-theme="dark"] .drawer{box-shadow:0 26px 72px rgba(0,0,0,.75)}
 :root[data-theme="dark"] .modal-box{border:1px solid var(--line)}
 :root[data-theme="dark"] .id-menu,
-:root[data-theme="dark"] .es-menu{box-shadow:0 18px 46px rgba(0,0,0,.66)}
+:root[data-theme="dark"] .tool-menu{box-shadow:0 18px 46px rgba(0,0,0,.66)}
 
 /* ---------------- 深色下的"亮底白字" ----------------
    深色主题把 brand / danger 提亮了（不然深底上的链接看不清），副作用是
@@ -2979,31 +3022,8 @@ html.ask-fold .ask-rail{display:flex}
 .ask-head .fold-btn:hover{background:#f2f7ff; color:var(--hr-blue)}
 .fold-tx{font-size:11.5px; letter-spacing:.2px}
 
-/* 参谋 / 查找并排两格：等宽、等高。参考稿里它们是同一层级的两个入口 */
-.ask-tools{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:10px 14px 0; align-items:stretch}
-.expert-select{margin:0; min-width:0; border-color:var(--hr-line); background:var(--surface-2)}
-.ask-tools .es-label{font-size:11.5px; color:#6e8199}
-/* 箭头推到最右边：参考稿里它是贴着框右缘的，不跟着文字跑 */
-.ask-tools .es-caret{margin-left:auto}
-/* 查找入口：原来是浮在专家行右端的小放大镜（position:absolute），
-   现在做成「像搜索框的按钮」—— 点它展开上面的查找条，不是就地输入，
-   所以它必须还是 button；换成 input 会把上一处/下一处/计数那一整套逻辑推翻。 */
-.find-open{
-  /* z-index 必须归零。旧规则是「浮在专家行右端的 24×24 小放大镜」，带了 z-index:4；
-     改成 grid 的一格之后 position 变 static，但 grid 项的 z-index 不定位也生效 ——
-     它于是排到根层叠上下文的第 4 层，而账户菜单虽然自己 z-index:70，却整个被
-     .hero（z-index:2）这个层叠上下文圈住了，对外只等效于 2。结果这一格按钮
-     正好压在菜单「外观」那一行上（实测 y 155–186 / 行 152–186），把「外观」
-     和右侧的主题提示盖掉，只剩左边的调色板图标露着。 */
-  position:static; right:auto; top:auto; width:auto; height:auto; min-width:0; z-index:auto;
-  display:flex; align-items:center; justify-content:space-between; gap:8px;
-  padding:7px 10px; border:1px solid var(--hr-line); border-radius:8px;
-  background:var(--surface-2); color:#6e8199;
-  font:inherit; font-size:11.5px; text-align:left; cursor:pointer;
-}
-.find-open .fo-tx{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.find-open:hover{background:#f2f7ff; border-color:#cfe0f8; color:#4a7bd6}
-.find-open svg{width:15px; height:15px; flex:0 0 auto; color:var(--hr-blue); stroke-width:1.9}
+/* 参谋 / 查找原来在会话上方并排两格，现在都收进输入框下沿的工具行
+   （「参谋 ▾ · 附材料 · 🔍」）。会话上方那一行撤掉，消息区多出约 40px。 */
 .thread{padding:4px 16px 8px}
 .thread-empty{color:#8b9ab0; font-size:12.5px; line-height:2; padding-top:26px}
 
@@ -3023,15 +3043,18 @@ html.ask-fold .ask-rail{display:flex}
 }
 .inputbar textarea:focus{border:0; background:transparent; box-shadow:none}
 .ib-row{display:flex; align-items:center; justify-content:space-between; gap:8px; flex:0 0 auto}
+/* 左半：参谋 / 附材料 / 查找 三颗同级的小钮。左边外扩 5px 抵掉第一颗自带的
+   内边距，让「＋」的字标和输入框的左缘对齐。 */
+.ib-left{display:flex; align-items:center; gap:3px; min-width:0; margin-left:-5px}
 .inputbar .attach{
-  border:0; background:transparent; padding:0; height:24px; gap:5px;
+  border:0; background:transparent; padding:0 7px; height:24px; gap:5px; border-radius:6px;
   font-size:11.5px; color:#8b9ab0;
 }
-.inputbar .attach:hover{background:transparent; border-color:transparent; color:var(--hr-blue)}
+.inputbar .attach:hover{background:#f2f7ff; border-color:transparent; color:var(--hr-blue)}
 .inputbar .attach .att-scope{border-left-color:#e6eef9; color:#a9b6c8}
 .inputbar #go{
   width:56px; height:26px; border-radius:6px; font-size:12px; font-weight:600;
-  background:#1a63d8; letter-spacing:1px;
+  background:#1a63d8; letter-spacing:1px; flex:0 0 auto;
 }
 .inputbar #go:hover{background:#1555bd}
 .attach-list{margin-bottom:8px}
@@ -3083,6 +3106,24 @@ html.ask-fold .ask-rail{display:flex}
 :root[data-theme="dark"] .cst-name{color:#b9c7db}
 :root[data-theme="dark"] .bar i::after{background:var(--surface)}
 :root[data-theme="dark"] .inputbar{background:var(--surface-2)}
+/* 参谋钮 / 参谋菜单：浅色的 #eff5ff / #eef4ff / #25303f 在深色下会发光，
+   换成同色相的暗底与浅字。 */
+:root[data-theme="dark"] .expert-select:hover,
+:root[data-theme="dark"] .inputbar .attach:hover,
+:root[data-theme="dark"] .inputbar .ib-ic:hover{background:#1b2a42}
+/* 深色下「亮底白字」那条规则（.inputbar button{color:#0b1220}）是为发送这颗实心
+   蓝钮写的，但它连工具行里的透明钮一起翻了色 —— 附材料和查找在深底上成了黑字。
+   这两颗是描边/透明底，字色得留在灰蓝，hover 才换品牌蓝。 */
+:root[data-theme="dark"] .inputbar .attach,
+:root[data-theme="dark"] .inputbar .ib-ic{color:#93a4bb}
+:root[data-theme="dark"] .inputbar .attach:hover,
+:root[data-theme="dark"] .inputbar .ib-ic:hover{color:var(--hr-blue)}
+:root[data-theme="dark"] .expert-select.has{background:#1b2a42}
+:root[data-theme="dark"] .expert-select.has:hover{background:#22344f}
+:root[data-theme="dark"] .expert-select .es-badge{border-color:#31415a;color:#8fa2ba}
+:root[data-theme="dark"] .es-item b{color:#e7eef8}
+:root[data-theme="dark"] .es-item.on{background:#1b2a42}
+:root[data-theme="dark"] .es-item:hover{background:#1f2c40}
 :root[data-theme="dark"] .kpi-illu{opacity:.8}
 
 </style>
@@ -3194,28 +3235,8 @@ html.ask-fold .ask-rail{display:flex}
       </div>
     </div>
     <div class="ask-body">
-    <!-- 参谋选择与会话内查找并排一行，各占一半。设计稿里这两件事是同一层级的
-         两个入口，一左一右；原来一个占满整行、另一个缩成右端的小放大镜，
-         看着像「查东西」是附属功能，其实它和选参谋一样常用。 -->
-    <div class="ask-tools">
-      <!-- 专家是「当前对话的参谋」，单选。全组叫参谋团，放在菜单最后一项，
-           不是并排一堆胶囊 —— 一次只能有一个角色在对话中，选谁就谁答。
-           没选人时这一行只剩「AI参谋 ▾」，不写「不召唤」这种占位词。 -->
-      <div class="expert-select" id="expertSelect" tabindex="0" role="button" aria-haspopup="true" aria-expanded="false">
-        <span class="es-label">选择AI参谋</span>
-        <b class="es-name" id="esName"></b>
-        <span class="es-state" id="esState"></span>
-        <svg class="es-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
-        <div class="es-menu" id="esMenu" hidden></div>
-      </div>
-      <!-- 查找入口做成一条「像输入框的按钮」：设计稿给的样式是搜索框的样子，
-           但点它不是就地输入，而是展开下面那条查找栏（带上一处/下一处/计数），
-           所以它必须还是按钮 —— 换成 input 会把查找栏的整套交互推翻。 -->
-      <button class="find-open" id="findBtn" title="在本会话里查找（Ctrl+F）" aria-label="在本会话里查找">
-        <span class="fo-tx">在本会话中查找</span>
-        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-3.6-3.6"/></svg>
-      </button>
-    </div>
+    <!-- 参谋 / 查找原来在消息区上方并排占一整行，现在都收进输入框下沿的工具行：
+         会话先给消息，选人这种「开问之前调一下」的事贴着输入框更顺手。 -->
     <!-- 会话内查找：长会话里回头找「上次那个 8.9% 是哪一轮说的」，靠滚动翻已经
          不现实。只滚动 + 临时描边，不改写 DOM —— 改写会把复制、折叠、收藏的
          事件绑定一起弄断。 -->
@@ -3227,7 +3248,7 @@ html.ask-fold .ask-rail{display:flex}
       <button data-find="close" title="关闭查找" aria-label="关闭查找">✕</button>
     </div>
     <div class="thread" id="thread">
-      <div class="thread-empty" id="threadEmpty">今天能帮您做什么？选择AI参谋对专业领域提问。<br>可以查会议资料、查统计数据、查项目进展等。</div>
+      <div class="thread-empty" id="threadEmpty">今天能帮您做什么？在输入框下方选一位参谋，对专业领域提问。<br>可以查会议资料、查统计数据、查项目进展等。</div>
     </div>
     <div class="ask-foot">
       <!-- 附件芯片：没挂材料时整行不占位。出现在两种时候 —— 刚选好等着发的
@@ -3236,13 +3257,30 @@ html.ask-fold .ask-rail{display:flex}
       <div class="attach-list" id="attachList" hidden></div>
       <div class="inputbar">
         <textarea id="q" rows="3" placeholder="请输入您的问题…" autocomplete="off"></textarea>
-        <!-- 这一行是输入框的「工具条」：左边挂材料、右边发送。做成一份独立的
-             行，输入区才是一整块干净的写字的地方，不再被两个按钮夹在中间。 -->
+        <!-- 这一行是输入框的「工具条」：左边挂参谋、挂材料、查找，右边发送。做成一份
+             独立的行，输入区才是一整块干净的写字的地方，不再被几个按钮夹在中间。 -->
         <div class="ib-row">
-          <button class="attach" id="attachBtn" title="随这一问附材料：月报、统计表、政策文件（txt / md / csv / Word / Excel / PDF，最多 5 个、合计 3 万字）。传上来就存在本机材料库里、挂到当前会话，之后的追问（「表里第 7 行是多少」）不用再传一遍；点芯片上的 ✕ 从本会话摘掉。表格会按「期次 + 指标」与系统指标逐期对照。要长期检索，用知识库右上角的「上传入库」。" aria-label="随本会话附参考材料（可追问，点 ✕ 摘掉）">
-            <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.5-8.5a3.5 3.5 0 0 1 4.9 4.9l-8.5 8.5a2 2 0 0 1-2.8-2.8l7.7-7.7"/></svg>
-            <span>附材料</span><span class="att-scope">可追问</span>
-          </button>
+          <div class="ib-left">
+            <!-- 参谋是「当前对话的那一位」，单选。入口收成一颗小钮（字标 + 名字 + 箭头），
+                 点开从输入框上沿弹一整面菜单 —— 名单、分组、一句话说明都在里面。
+                 没选人时只写「选择参谋」，不写「不召唤」这种占位词。 -->
+            <div class="expert-select" id="expertSelect" tabindex="0" role="button"
+                 aria-haspopup="true" aria-expanded="false" aria-label="选择AI参谋">
+              <i class="es-badge" id="esBadge">＋</i>
+              <b class="es-name" id="esName">选择参谋</b>
+              <span class="es-state" id="esState"></span>
+              <svg class="es-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+            </div>
+            <button class="attach" id="attachBtn" title="随这一问附材料：月报、统计表、政策文件（txt / md / csv / Word / Excel / PDF，最多 5 个、合计 3 万字）。传上来就存在本机材料库里、挂到当前会话，之后的追问（「表里第 7 行是多少」）不用再传一遍；点芯片上的 ✕ 从本会话摘掉。表格会按「期次 + 指标」与系统指标逐期对照。要长期检索，用知识库右上角的「上传入库」。" aria-label="随本会话附参考材料（可追问，点 ✕ 摘掉）">
+              <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.4 8.4a5 5 0 0 1-7.1-7.1l8.5-8.5a3.5 3.5 0 0 1 4.9 4.9l-8.5 8.5a2 2 0 0 1-2.8-2.8l7.7-7.7"/></svg>
+              <span>附材料</span><span class="att-scope">可追问</span>
+            </button>
+            <!-- 查找：点它展开消息区上方那条查找栏（上一处/下一处/计数），
+                 不是就地输入，所以它还是 button，不是 input。 -->
+            <button class="ib-ic" id="findBtn" title="在本会话里查找（Ctrl+F）" aria-label="在本会话里查找">
+              <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-3.6-3.6"/></svg>
+            </button>
+          </div>
           <!-- 这里以前有个「整理提问」按钮：把口语、错别字按指标字典改写一遍再发。
                现在这件事由后端在「一个指标都没命中」时自动做（ask._should_autofix），
                按钮撤掉不是因为功能不重要，而是因为把系统该做的判断派给用户 ——
@@ -3250,8 +3288,12 @@ html.ask-fold .ask-rail{display:flex}
           <button id="go">发送</button>
         </div>
         <input type="file" id="attachInput" multiple hidden>
+        <!-- 参谋菜单：贴着输入框上沿整面弹出，和斜杠层同一个位置。选项就是参谋名单
+             本身（+ 秘书团 / 不使用参谋），和斜杠唤起共用同一个出口，不可能选出
+             不一样的状态。 -->
+        <div class="tool-menu" id="esMenu" hidden></div>
         <!-- 斜杠唤起层：输入框以 / 开头时才出现。选项就是参谋名单本身，
-             选中等价于点上面那个下拉 —— 两条入口共用同一个出口，不可能选出
+             选中等价于点上面那个菜单 —— 两条入口共用同一个出口，不可能选出
              不一样的状态。 -->
         <div class="slash-menu" id="slashMenu" hidden></div>
       </div>
@@ -3271,6 +3313,17 @@ html.ask-fold .ask-rail{display:flex}
       <div class="desk-hd">
         <span class="dh-who" id="deskWho" title="当前演示身份；切换可看别人的配置">—</span>
         <button class="mini sec-act" id="deskCustom" title="选择显示哪些板块、谁排前面">自定义</button>
+      </div>
+      <div class="desk-sec desk-ov" data-block="oversight">
+        <div class="sec-head">
+          <h3>督办列表</h3>
+          <span class="sec-count" id="ovListCount">—</span>
+          <span class="sec-count" id="ovListBasis" title="按责任单位收窄：只列本单位主办或协办的事项"></span>
+          <button class="mini sec-act" id="ovListAll" title="打开督办台账：签收、报进展、提交办结都在那儿">台账</button>
+        </div>
+        <!-- 和「重点注意事项」长得一样是有意的：同一本台账的两种看法，行内元素位置一改
+             就得重新认一遍。区别只在筛法——这块一件不筛，含已办结。 -->
+        <div class="follow" id="ovList"></div>
       </div>
       <div class="desk-sec" data-block="watch">
         <div class="sec-head">
@@ -3875,6 +3928,13 @@ function kpiIllu(i) {
   return `<span class="kpi-illu" aria-hidden="true"><img src="${KPI_ILLUS[i % KPI_ILLUS.length]}" alt=""></span>`;
 }
 
+/* 演示值：这几条指标还没接统计月报，数是编的。不给标记，页面看着就跟真数一样权威，
+   而「材料上 -9.4%、系统答 +5.6%」正是这么被发现的。 */
+function demoTag(k) {
+  if (!k.demo) return "";
+  return `<span class="per per-mute" title="该指标尚未接入统计月报真数，当前数值为演示数据">演示</span>`;
+}
+
 function kpiCard(k, opts = {}) {
   // 期次说明挪到卡片最下面一行：标题行放得下就放，放不下就会把长标题挤成两行，
   // 整排卡片高度立刻对不齐。放底部既不影响对齐，也更像一张「票据」的落款。
@@ -3889,7 +3949,7 @@ function kpiCard(k, opts = {}) {
       ${opts.illu || ""}
       <div class="k">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
-        <span class="kt">${esc(k.name)}</span>
+        <span class="kt">${esc(k.name)}</span>${demoTag(k)}
       </div>
       <div class="vrow">
         <div class="v mono">${esc(k.display)}<small class="${k.unit === "%" ? "pct" : ""}">${esc(k.unit)}</small></div>
@@ -4228,6 +4288,13 @@ function renderFxDetail() {
   const tks = (f.tickets || []).map(([no, tt, st]) => `
     <div class="fx-tk"><code>${esc(no)}</code><span class="tt">${esc(tt)}</span><span class="st">${esc(st)}</span></div>`).join("");
 
+  /* 来信选登原文：焦点主题不是编的，诉求和答复都是门户上公开过的原话。
+     编号 = 信件详情页 id，点开能查到同一句；没有对应公开来信时不渲染这块。 */
+  const lts = (f.letters || []).map(([no, tt, st, url]) => `
+    <a class="fx-lt" href="${esc(url)}" target="_blank" rel="noopener" title="${esc(tt)} · 点开看原文">
+      <code>${esc(no)}</code><span class="tt">${esc(tt)}</span><span class="st">${esc(st)}</span><span class="go">原文 ↗</span>
+    </a>`).join("");
+
   main.innerHTML = `
     <div class="ov-h"><h4>${esc(f.title)}</h4><span class="ov-id">${esc(f.id)} · 首次出现 ${esc(f.first_seen || "—")}</span></div>
     <div class="ov-tags">
@@ -4241,6 +4308,11 @@ function renderFxDetail() {
           <h5>诉求详情</h5>
           <p class="fx-detail">${esc(f.detail || "暂无详情。")}</p>
         </div>
+        ${lts ? `<div class="fx-panel">
+          <h5>来信选登原文<span class="num">${(f.letters || []).length} 封</span></h5>
+          <div class="fx-letters">${lts}</div>
+          <div class="fx-cap">${esc(f.letters_note || "")}诉求与答复均为溧阳市政府门户「来信选登」公开原文，点标题可逐字核对。</div>
+        </div>` : ""}
         <div class="fx-panel">
           <h5>关联工单<span class="num">${(f.tickets || []).length} 件</span></h5>
           <div class="fx-tickets">${tks || `<span class="hint" style="margin:0">暂无关联工单。</span>`}</div>
@@ -4270,7 +4342,7 @@ function renderFxDetail() {
         </div>
       </div>
     </div>
-    <div class="fx-note">数据口径：民情焦点为 ${esc("12345 热线、市长信箱、「我的溧阳」APP、网格员上报")}四渠道聚类结果，演示数据不含真实个人信息。转办与办理状态以 12345 平台工单为准。</div>`;
+    <div class="fx-note">数据口径：民情焦点为 ${esc("12345 热线、市长信箱、「我的溧阳」APP、网格员上报")}四渠道聚类结果；焦点主题与诉求原文取自溧阳市政府门户「来信选登」公开信件（栏目入口 liyang.gov.cn/class/KPAAQDDK，月收信量参照《2026年10月信件办理情况》：25 件受理、25 件办结、1 件公开）。件数、人数、走势为演示编排，不含真实个人信息；转办与办理状态以 12345 平台工单为准。</div>`;
 }
 
 /* ---------- 问答 ---------- */
@@ -4489,6 +4561,9 @@ function meetBlock(d, ref) {
       <label class="${cls("attendees")} full"><span>参会单位${tag("attendees")}</span>
         <input data-mpf="attendees" value="${esc((d.attendees || []).join("、"))}"
           placeholder="市住建局、市城管局"${units ? ` title="台账里的单位：${esc(units)}"` : ""}></label>
+      <label class="mp-f full"><span>议题（每行一条）</span>
+        <textarea data-mpf="topics" rows="3"
+          placeholder="一行一条；这几条会原样进通知正文的「会议议题」">${esc((d.topics || []).join("\n"))}</textarea></label>
     </div>
     ${warns ? `<div class="mp-warns">${warns}</div>` : ""}
     <div class="mp-acts">
@@ -4920,6 +4995,11 @@ async function commitMeet(card) {
     place: pick("place"),
     host: pick("host"),
     attendees: pick("attendees").split(/[,，、/\s]+/).map((s) => s.trim()).filter(Boolean),
+    // 议题必须跟着走。早先这里只交了五个字段，模型解析出的分条议题在确认环节
+    // 就没了：会议详情里议题为空，通知正文的「会议议题」一节整段消失 ——
+    // 一场会通知下来，收件人只看到时间地点，不知道要研究什么。
+    // 会议没有改字段的接口，这一格填错了只能删了重建。
+    topics: pick("topics").split(/\n+/).map((s) => s.trim()).filter(Boolean),
   };
   if (!draft.title) return toast("议题不能为空——没有议题的会议无法生成通知");
   if (!draft.held_at) return toast("会议时间不能为空");
@@ -5667,30 +5747,36 @@ function currentExpertMode() {
 function renderExpertSelect() {
   const name = $("#esName");
   const state = $("#esState");
+  const badge = $("#esBadge");
   const menu = $("#esMenu");
   if (!name || !menu) return;
 
   const cur = EXP.list.find((e) => e.id === EXP.cur);
+  const bar = $("#expertSelect");
   state.classList.toggle("on", !!cur);
   if (EXP.cur === "__all") {
     name.textContent = "AI秘书团";
     // 团模式不召唤参谋，所以这里不能再写「（3 位）」—— 那会让人以为下面还有三张卡
     state.textContent = "（办事）";
+    if (badge) badge.textContent = "团";
   } else if (cur) {
     name.textContent = cur.name;
     state.textContent = "（对话中）";
     state.classList.add("on");
+    // 字标用参谋自己的首字：一眼认人，比一个统一的「专」字有用
+    if (badge) badge.textContent = cur.avatar || "参";
   } else {
-    // 没选人时这一行空着：「不使用参谋」只在菜单里是一个可点的选项，
-    // 不在行上占一个「不召唤」的标签 —— 那等于给「不需要」起个名字，还得配一句解释。
-    name.textContent = "";
-    state.textContent = EXP.list.length ? "" : "（名单未加载）";
+    // 没选人时钮上就写「选择参谋」，不写「不召唤」这种占位词 —— 那等于给「不需要」
+    // 起个名字，还得配一句解释。取消的出口在菜单里的「不使用参谋」。
+    name.textContent = EXP.list.length ? "选择参谋" : "参谋未加载";
+    state.textContent = "";
+    if (badge) badge.textContent = "＋";
   }
 
-  // 悬停给一句人话：这行现在是「还没选」还是「正在对话中」，以及怎么退出来。
+  // 悬停给一句人话：这颗钮现在是「还没选」还是「正在对话中」，以及怎么退出来。
   // 只靠名字和「（对话中）」说不清，尤其用户想问「怎么取消」的时候。
-  const bar = $("#expertSelect");
   if (bar) {
+    bar.classList.toggle("has", !!EXP.cur);
     bar.title = EXP.cur === "__all"
       ? "当前：AI秘书团 · 受令、拟办、派活、催办；不做参谋解读，不出参谋卡 · 点开可更换，或选「不使用参谋」取消"
       : cur
@@ -5698,31 +5784,30 @@ function renderExpertSelect() {
         : "点开选择参谋；不选就是直接问数";
   }
 
-  const item = (eid, avatar, label, hint, on, cls = "", brief = "") =>
+  // 一行 = 字标 + 名字 + 一句说明（放不下省略，完整版在 title 里）+ 选中的「已选」。
+  // 形状照参考稿：名字加粗，说明紧跟其后用弱化色，不另起一行。
+  const row = (eid, avatar, label, hint, desc, on, cls = "") =>
     `<div class="es-item ${cls} ${on ? "on" : ""}" data-eid="${esc(eid)}" title="${esc(hint)}">` +
-    `<i>${esc(avatar)}</i>${esc(label)}${brief ? `<span class="es-brief">（${esc(brief)}）</span>` : ""}${on ? "<em>已选</em>" : ""}</div>`;
-
-  // 「不使用参谋」：显式的取消项，固定在第一行。
-  // 再点一次已选中的那位也能取消，但这条只写在 item 的 title 里，实际没人找得到 ——
-  // 用户的原话是「不想用参谋了，却不能不选」。空态本来是空白，但菜单里必须有一个
-  // 能回到空白的出口，否则这排菜单看起来就是单选题。
-  const noneOn = !EXP.cur;
-  const noneRow =
-    `<div class="es-item none ${noneOn ? "on" : ""}" data-eid="" title="不用参谋：直接给数、不补解读，随时可以再选">` +
-    `<i>×</i>不使用参谋${noneOn ? "<em>已选</em>" : ""}</div>`;
+    `<i>${esc(avatar)}</i><b>${esc(label)}</b>` +
+    `<span class="es-desc">${esc(desc)}</span>${on ? "<em>已选</em>" : ""}</div>`;
 
   const hintOf = (id2, text) => (EXP.cur === id2 ? "已选，再点一次取消" : text);
   menu.innerHTML =
-    noneRow +
+    // 第一组：参谋名单本身。条数写进标题，名单增减时不用改文案。
+    `<div class="tm-hd"><b>AI参谋</b><span>共 ${EXP.list.length} 位 · 选中后由它解读这条对话</span></div>` +
     EXP.list
-      .map((e) => item(e.id, e.avatar, e.name, hintOf(e.id, e.focus), EXP.cur === e.id, "", e.brief || ""))
+      .map((e) => row(e.id, e.avatar, e.name, hintOf(e.id, e.focus), e.focus || e.brief || "", EXP.cur === e.id))
       .join("") +
-    // AI秘书团：名单多于 1 位就出现。它**不是参谋团** —— 一位参谋都不叫、一张
-    // 解读卡都不出，所以文案里不再写「一次最多 N 位」：秘书的活是受令办事，
-    // 要解读请单选一位参谋。交办（拟办 / 派活）只有这个入口能做。
+    // 第二组：办事 / 取消。AI秘书团**不是参谋团** —— 一位参谋都不叫、一张解读卡
+    // 都不出；它出现是为了受令办事（拟办 / 派活 / 催办），所以不放在参谋名单里。
+    `<div class="tm-hd sep"><b>快捷功能</b><span>办事 / 取消</span></div>` +
     (EXP.list.length > 1
-      ? item("__all", "团", "AI秘书团", hintOf("__all", "受令、拟办、往下派活、催办、查指示办理情况。不参与指标解读，不出参谋卡 —— 要解读请单选一位参谋"), EXP.cur === "__all", "sep", "受令办事 · 不参与解读")
-      : "");
+      ? row("__all", "团", "AI秘书团", hintOf("__all", "受令、拟办、往下派活、催办、查指示办理情况。不参与指标解读，不出参谋卡 —— 要解读请单选一位参谋"), "受令、拟办、派活、催办，不参与解读", EXP.cur === "__all")
+      : "") +
+    // 「不使用参谋」：显式的取消项。再点一次已选中的那位也能取消，但这条只写在
+    // item 的 title 里，实际没人找得到 —— 用户的原话是「不想用参谋了，却不能不选」。
+    // 菜单里必须有一个能回到空白的出口，否则这排菜单看起来就是单选题。
+    row("", "×", "不使用参谋", "不用参谋：直接给数、不补解读，随时可以再选", "直接给数、不补解读", !EXP.cur, "none");
 }
 
 function selectExpert(eid) {
@@ -5733,6 +5818,9 @@ function selectExpert(eid) {
   try { localStorage.setItem("ocgov.expert", EXP.cur || ""); } catch (e) { /* 隐私模式 */ }
   closeExpertMenu();
   renderExpertSelect();
+  // 选完人就回到输入框：这一步只是开问前的设置，不该多占一次点击。
+  const q = $("#q");
+  if (q) q.focus();
 }
 
 function closeExpertMenu() {
@@ -5740,7 +5828,8 @@ function closeExpertMenu() {
   if (!box) return;
   box.classList.remove("open");
   box.setAttribute("aria-expanded", "false");
-  $("#esMenu").hidden = true;
+  const m = $("#esMenu");
+  if (m) m.hidden = true;
 }
 
 /* ---------- 斜杠唤起：在输入框里打 / 直接点将 ----------
@@ -5826,6 +5915,8 @@ function renderSlash() {
 function openSlash() {
   // 名单还没回来就不弹：弹一个空盒子比不弹更像故障
   if (!EXP.list.length) return;
+  // 和参谋菜单抢同一块位置，后开的这层把前一层收掉
+  closeExpertMenu();
   SLASH.open = true;
   SLASH.idx = 0;
   $("#slashMenu").hidden = false;
@@ -6810,7 +6901,7 @@ function friendlyError(raw) {
   return "服务端出错了，可以重试；反复失败请检查模型配置";
 }
 
-const EMPTY_TXT = `今天能帮您做什么？选择AI参谋对专业领域提问。<br>可以查会议资料、查统计数据、查项目进展等。`;
+const EMPTY_TXT = `今天能帮您做什么？在输入框下方选一位参谋，对专业领域提问。<br>可以查会议资料、查统计数据、查项目进展等。`;
 
 /* 首屏示例。后端 /api/ask/examples 一直提供，前端却从没调用过 —— 样式和
    [data-ask] 的处理器（全局委托里那段）早就写好了，只是没有人生成元素。
@@ -7296,7 +7387,7 @@ function renderKbUpload() {
 
   $("#kbMain").innerHTML = `
     <div class="kl-h">
-      <span class="kl-kind doc">上传文档</span>
+      <span class="kl-kind doc file">上传文档</span>
       <h4>上传政策文件、报告</h4>
     </div>
     <div class="kl-sec">
@@ -8142,6 +8233,26 @@ let PP = { people: [], max: 8 };
 let ACCT_ACTIONS = {};
 let WS = null;
 
+/* 当前身份的角色（leader / secretary / dept-leader / bureau）。
+   来源两处：登录后以 session 里的 role 为准（可信），未登录的演示浏览按 /api/people
+   给的 role 兜底（不可信，但演示态本来就没有真身份）。界面只拿它决定"罗盘露不露"，
+   真正的读写收窄仍在服务端 —— 别把这里的判断当权限。 */
+let ROLE = "";
+
+function roleOfPerson(pid) {
+  const p = (PP.people || []).find((x) => x.id === pid);
+  return (p && p.role) || "";
+}
+
+/* 委办局（单位账号）看不到城市罗盘。
+   罗盘是全市口径：一个局上去，一屏没有哪个数是他能改的，而第一眼该看的是本单位
+   的账。所以这里不是"收窄"而是"不出现"——页签摘掉，视图也不许切过去。 */
+function applyRoleGate() {
+  const noCompass = ROLE === "bureau";
+  document.querySelectorAll('.cp-tabs a[data-nav="compass"]').forEach((a) => { a.hidden = noCompass; });
+  if (noCompass && VIEW === "compass") switchView("desk");
+}
+
 async function loadPeople() {
   try {
     const d = await (await fetch("/api/people")).json();
@@ -8246,6 +8357,9 @@ function renderIdMenu() {
     logout: async () => {
       await doLogout();
       AUTHD = false;
+      // 回到演示视角：角色退回本地身份的那个，罗盘页签按它重判（登出后看不到 session 了）
+      ROLE = roleOfPerson(PID.get());
+      applyRoleGate();
       renderIdMenu();
       // 登出后回到演示视角：工作台/提醒按当前本地 PID（未登录的演示身份）重拉
       await loadWorkspace();
@@ -8333,6 +8447,9 @@ async function submitLogin() {
   const changed = person !== PID.get();
   PID.set(person);
   const who = await refreshAuth();
+  // 换了角色就要重判罗盘露不露：从单位账号切回市长，页签得回来
+  ROLE = (who && who.role) || roleOfPerson(person);
+  applyRoleGate();
   // 会话是按身份存的：换了身份就清掉当前会话、重拉列表，否则屏幕留的是上一个人的聊天记录。
   if (changed) {
     THREAD = null;
@@ -8379,7 +8496,7 @@ function applyPerson(p) {
 // 否则"自定义"就只是换个问法问人，页面实际不动。
 function applyLayout(layout) {
   const desk = $("#viewDesk");
-  const ids = Array.isArray(layout) && layout.length ? layout : ["watch", "feed", "follow"];
+  const ids = Array.isArray(layout) && layout.length ? layout : ["oversight", "watch", "feed", "follow"];
   // 先全藏，下面按顺序放回来的自然就显示 —— 顺序 = appendChild 的先后
   desk.querySelectorAll(".desk-sec[data-block]").forEach((el) => { el.hidden = true; });
   ids.forEach((id) => {
@@ -8410,6 +8527,7 @@ async function loadWorkspace() {
     renderDeskTabs();
     // 先落 SAVED 再渲染：收藏卡就在这个网格里，顺序反了会先画一遍空网格
     renderWatch(d);
+    renderOversight(d);
     renderFeed(d);
     renderFollow(d);
     syncStars();
@@ -8483,6 +8601,65 @@ function renderFollow(d) {
              title="${esc((i.risk_reasons || []).join("；") || "按时限推进中")} · 点击查看督办详情">
         <span class="fdot ${tone}"></span>
         <div class="fl"><b>${esc(i.title)}</b><span>${esc(i.assignee)} · ${esc(i.status)} · ${esc(i.deadline)} 前${riskChip}${srcTag}</span></div>
+        <div class="fbar"><i class="${tone}" style="width:${w}%"></i></div>
+        <span class="fnum ${tone}">${esc(pct)} · ${esc(left)}</span>
+      </div>`;
+    })
+    .join("");
+}
+
+// 督办列表：本单位主办 ∪ 协办的全部事项，含已办结。
+// 和上面「重点注意事项」的区别不是样式，是口径 —— 那块只留需要注意的（还把正常项
+// 滤掉），这块一件不筛。单位账号进来先看这个清单：「我这儿一共几件、都到哪一步」。
+// 收窄在服务端做（按 person.units），这里不再过滤一次：前端再筛一遍就会出现
+// 「列表里有、点开详情 404」这种两套口径。
+function renderOversight(d) {
+  const o = d && d.oversight;
+  // 老服务进程没有这个字段（后端加了接口、前端先热更新）：别显示成「本单位没有事项」，
+  // 那是一句假话 —— 台账里可能明明有账，只是这一版服务没给。
+  if (!o) {
+    $("#ovListCount").textContent = "";
+    $("#ovListBasis").textContent = "";
+    $("#ovList").innerHTML = `<div class="frow" style="cursor:default">
+      <span class="fdot muted"></span>
+      <div class="fl"><b>督办列表没取到数据</b><span>服务端还是旧版本：重启一次服务（start-app.cmd）即可显示</span></div></div>`;
+    return;
+  }
+  const items = o.items || [];
+  $("#ovListBasis").textContent = o.basis || "";
+  $("#ovListCount").textContent = items.length
+    ? `共 ${items.length} 项${o.open !== items.length ? ` · 在办 ${o.open}` : ""}`
+    : "";
+  if (!items.length) {
+    $("#ovList").innerHTML = `<div class="frow" style="cursor:default">
+      <span class="fdot muted"></span>
+      <div class="fl"><b>本单位还没有督办事项</b><span>市里交办到本单位的事会自动出现在这里</span></div></div>`;
+    return;
+  }
+  $("#ovList").innerHTML = items
+    .map((i) => {
+      const tone = esc(i.tone || "muted");
+      const left = i.closed
+        ? "已办结"
+        : i.days_left < 0
+          ? `逾期 ${-i.days_left} 天`
+          : i.days_left === 0
+            ? "今日到期"
+            : `剩 ${i.days_left} 天`;
+      // 已办结的进度没意义了：办结就是 100%，台账里没报过进度也按完成画
+      const w = i.closed ? 100 : Math.max(0, Math.min(100, Number(i.progress) || 0));
+      const pct = i.closed ? "已办结" : i.progress > 0 ? `${i.progress}%` : "未报进展";
+      // 流程类风险（签收超时/停滞）挂在单位后面，和「重点注意事项」同一个写法
+      const flowRisk = i.risk === "签收超时" || i.risk === "停滞";
+      const riskChip = flowRisk
+        ? `<span class="frisk ${tone}" title="${esc((i.risk_reasons || []).join("；"))}">${esc(i.risk)}</span>`
+        : "";
+      // 本单位只是协办：标出来，免得点开发现签不了收，以为坏了
+      const ccTag = i.role_in_item === "cc" ? `<span class="frisk">协办</span>` : "";
+      return `<div class="frow" data-ovrow="${esc(i.id)}"
+             title="${esc((i.risk_reasons || []).join("；") || "按时限推进中")} · 点击查看督办详情">
+        <span class="fdot ${tone}"></span>
+        <div class="fl"><b>${esc(i.title)}</b><span>${esc(i.assignee)} · ${esc(i.status)} · ${esc(i.deadline)} 前${riskChip}${ccTag}</span></div>
         <div class="fbar"><i class="${tone}" style="width:${w}%"></i></div>
         <span class="fnum ${tone}">${esc(pct)} · ${esc(left)}</span>
       </div>`;
@@ -9544,7 +9721,7 @@ function dcRenderSide() {
 function dcFormBulletin() {
   const b = DC.bulletin;
   return `
-    <div><div class="dc-lab"><b>任务 / 事项</b></div><textarea class="dc-up-text" id="govTask" rows="3" placeholder="例：高铁东站周边路网配套工程管线迁改">${esc(b.task)}</textarea></div>
+    <div><div class="dc-lab"><b>任务 / 事项</b></div><textarea class="dc-up-text" id="govTask" rows="3" placeholder="例：三和王家村城中村环境综合整治">${esc(b.task)}</textarea></div>
     <div><div class="dc-lab"><b>责任落实部门 / 单位</b></div><input class="dm-input" id="govUnit" placeholder="例：市住建局" value="${esc(b.unit)}"></div>
     <div><div class="dc-lab"><b>责任人</b></div><input class="dm-input" id="govOwner" placeholder="例：张三" value="${esc(b.owner)}"></div>
     <div><div class="dc-lab"><b>时限</b></div><input class="dm-input" id="govDue" type="date" value="${esc(b.due)}"></div>
@@ -9586,7 +9763,7 @@ function dcFormWs() {
 
   return `
     <div><div class="dc-lab"><b>事由</b><span>进标题也进缘由</span></div>
-      <textarea class="dc-up-text" id="wsSubject" rows="2" placeholder="例：高铁东站周边路网配套工程管线迁改资金">${esc(w.subject)}</textarea></div>
+      <textarea class="dc-up-text" id="wsSubject" rows="2" placeholder="例：老年人智能技术培训经费">${esc(w.subject)}</textarea></div>
     <div><div class="dc-lab"><b>依据</b><span>可空</span></div>
       <input class="dm-input" id="wsBasis" placeholder="例：市政府第 12 次常务会议部署" value="${esc(w.basis)}"></div>
     <div><div class="dc-lab"><b>主送机关</b></div>
@@ -10552,47 +10729,45 @@ function dcRenderWsPaper() {
 const DC_GOV_SAMPLE = {
   bulletin: {
     org: "溧阳市人民政府办公室",
-    no: "溧政办通〔2026〕01 号",
-    title: "关于推进老旧小区改造工作的督办通报",
-    to: "各镇（区）人民政府，市各委办局、市各直属单位：",
+    no: "溧政办通〔2026〕12 号",
+    title: "关于 2026 年重点民生实事票决项目推进情况的督办通报",
+    to: "各镇（街道）人民政府（办事处），市各委办局、市各直属单位：",
     paras: [
-      "为推动重点民生实事落地见效，现将「老旧小区改造」督办事项及要求通报如下：",
-      "<b>一、督办事项。</b>年内完成 12 个老旧小区的水电气管网、屋面防水和加装电梯改造，11 月底前完成竣工验收。",
-      "<b>二、责任与时限。</b>责任落实部门（单位）：市住建局；责任人：×××；办结时限：2026 年 11 月 30 日。",
-      "<b>三、工作要求。</b>请市住建局高度重视，对照时限倒排工期、挂图作战，每周五前将进展情况报市政府办公室；对推进不力、进度滞后的，将予以通报批评。",
+      "11 月 25 日，市人大常委会视察 2026 年重点民生实事票决项目实施情况后指出，要全力做好扫尾攻坚，紧盯剩余项目时序节点，确保年度目标任务顺利完成。现将有关督办事项通报如下：",
+      "<b>一、督办事项。</b>全溧护育工程 41 个「爱心暖托班」、全溧颐养工程 4000 人次老年人智能技术培训、全溧安居工程三和王家村城中村环境综合整治尚未完成，须在年内收口。",
+      "<b>二、责任与时限。</b>责任落实部门（单位）：市民政局、市住建局、团市委；办结时限：2026 年 12 月 31 日。",
+      "<b>三、工作要求。</b>请各责任单位对照时限倒排工期，每周五前将进展情况报市政府办公室；对推进不力、进度滞后的，将予以通报批评。",
     ],
     tail: "",
     cc: "",
-    tip: "样例 · 填好左侧四项要素，点「套用红头 · 生成公文」，纸面就换成你的公文",
+    tip: "样例 · 文号为样例；事项取自 11-25 市人大常委会视察通报。填好左侧四项要素点「套用红头 · 生成公文」，纸面就换成你的公文",
   },
   qingshi: {
-    org: "溧阳市住房和城乡建设局",
-    no: "溧住建〔2026〕15 号",
-    title: "关于申请追加城市防洪排涝专项资金的请示",
+    org: "溧阳市教育局",
+    no: "溧教〔2026〕21 号",
+    title: "关于申请 3 所学校心理辅导室标准化改造经费的请示",
     to: "溧阳市人民政府：",
     paras: [
-      "今年汛期我市累计降雨量较常年偏多，老城区排水管网负荷已接近上限。为在明年汛前完成 3 处易涝点改造和 2 座排涝泵站更新，现就追加专项资金事项请示如下：",
-      "<b>一、资金用途。</b>用于易涝点管网改造、泵站设备更新及施工期临时排水，专款专用，单独建账。",
-      "<b>二、实施安排。</b>拟于 12 月完成招标，明年 4 月底前完工，汛前投入运行。",
+      "根据《2026 年度溧阳市民生实事项目责任分解落实方案》，我局承担 3 所学校心理辅导室标准化改造任务，需提档升级接待室、个辅室、团辅室等功能区域。目前 3 所学校已全部完成改造并投用，现就改造经费事项请示如下：",
+      "<b>一、资金用途。</b>用于 3 所学校心理辅导室功能区域改造、设备购置及验收检测，专款专用，单独建账。",
+      "<b>二、实施情况。</b>燕湖小学「湖心屿」心理辅导室已建成投用，其余 2 所同步完成，11 月 25 日市人大常委会视察已现场核验。",
     ],
     tail: "妥否，请批示。",
     cc: "抄送：市财政局。",
-    tip: "样例 · 填好事由和事项、勾上要引的台账或指标，点「装配文稿」",
+    tip: "样例 · 文号为样例；事由取自 2026 年度民生实事第 2 类「全溧优学工程」。填好事由和事项、勾上要引的台账或指标，点「装配文稿」",
   },
   tongzhi: {
-    org: "溧阳市人民政府办公室",
-    no: "溧政办发〔2026〕42 号",
-    title: "关于做好今冬明春供热保障工作的通知",
-    to: "各镇（区）人民政府，市各有关部门：",
+    org: "溧阳市人民政府",
+    no: "溧政发〔2026〕1 号",
+    title: "市政府关于印发 2026 年《政府工作报告》重点任务分解落实方案的通知",
+    to: "各镇（街道）人民政府（办事处），溧阳高新区、溧阳经济开发区管委会，天目湖旅游度假区、现代农业产业示范园管理办公室，市各委办局、直属企事业单位：",
     paras: [
-      "为保障群众温暖过冬，现就今冬明春供热保障工作有关事项通知如下：",
-      "<b>一、抓紧设备检修。</b>各供热单位在 11 月 15 日前完成锅炉、管网、换热站检修调试，隐患整改闭环。",
-      "<b>二、保障热源供应。</b>落实燃煤、天然气储备，签订保供协议，确保极端天气下连续稳定供热。",
-      "<b>三、畅通诉求渠道。</b>公布报修电话，接到报修后 2 小时内到场，一般故障 24 小时内修复。",
+      "市第十七届人民代表大会第五次会议审议通过了《政府工作报告》，明确了 2026 年经济社会发展目标和重点任务。为推动各项任务落地落实，经市政府常务会议审议通过，现将 2026 年《政府工作报告》重点任务分解落实方案印发给你们，请认真贯彻落实。",
+      "<b>附件：</b>2026 年《政府工作报告》重点任务分解落实方案（序号 / 目标名称 / 工作标准 / 市政府分管领导 / 牵头单位 / 责任单位）。",
     ],
-    tail: "请认真抓好落实。",
-    cc: "抄送：市委办公室，市人大常委会办公室，市政协办公室。",
-    tip: "样例 · 填好事由和事项、勾上要引的台账或指标，点「装配文稿」",
+    tail: "",
+    cc: "（此件公开发布）",
+    tip: "样例 · 全文照 2026-04-10 市政府门户网站公开件；文号、标题、主送单位均为原文",
   },
 };
 
@@ -10744,7 +10919,6 @@ function renderAgenda() {
     <b>${y} 年 ${m + 1} 月</b>
     <button class="cal-nav-btn" id="calNext" title="下一月">›</button>
     <button class="cal-nav-btn ghost" id="calToday">回到本月</button>
-    <span class="cal-legend">点日期看当天清单 · 事项来自督办时限、领导交办与会议安排</span>
   </div>`);
 
   // 月历网格：周一开头；只画本月日期，事件取窗口内的分组
@@ -10770,8 +10944,10 @@ function renderAgenda() {
 
   parts.push(`<div class="cal-daylist" id="calDayList"></div>`);
 
-  parts.push(`<div class="cal-foot"><b>口径</b> · ${esc(d.rule)}<br>
-    ${esc(d.basis)}；生成于 ${esc(d.generated_at)}。切换身份后按各自分管范围重算，右上角可刷新。</div>`);
+  // 页脚原来还有一行「口径 + 分管单位 + 生成于」，三件事在别处都已经说过：
+  // 口径在弹窗标题下那句说明里，分管单位在「今日重点」右上角，生成时间对使用者没意义。
+  // 同一句话写四遍不是严谨，是把要读的东西淹掉 —— 所以这里只留标题区那一处。
+
   $("#calBody").innerHTML = parts.join("");
   $("#calRefresh").onclick = () => refreshCal();
   $("#calPrev").onclick = () => { const v = CAL.view; v.m--; if (v.m < 0) { v.m = 11; v.y--; } renderAgenda(); };
@@ -10784,18 +10960,25 @@ function renderAgenda() {
   renderCalDay();
 }
 
-/* 选中日期的当天清单：有排期按原时间线渲染，没有就说清楚 */
+/* 选中日期的当天清单：有排期按原时间线渲染，没有就说一句。
+   窗口外的日期本来就没取数，说「没有排期」等于替系统撒谎 —— 两种情况分开说。 */
 function renderCalDay() {
   const d = CAL.data;
   const holder = $("#calDayList");
   if (!holder || !d) return;
-  const g = (d.groups || []).find((x) => x.date === CAL.view.sel);
+  const sel = CAL.view.sel || "";
+  const g = (d.groups || []).find((x) => x.date === sel);
+  const w = d.window || {};
+  const outside = w.days && w.from && w.to && (sel < w.from || sel > w.to);
+  const quiet = outside
+    ? `${esc(sel)} 在 ${w.days} 天窗口外，日历只按窗口取数。`
+    : `${esc(sel)} 没有排期。`;
   holder.innerHTML = g
     ? `<div class="cal-day ${g.is_today ? "today" : ""}">
         <div class="cal-day-hd"><b>${esc(g.label)}</b><span class="d">${esc(g.month_day)} ${esc(g.weekday)}</span><span class="n">${g.items.length} 件</span></div>
         ${g.items.map(calRow).join("")}
       </div>`
-    : `<div class="cal-quiet">${esc(CAL.view.sel || "")} 没有排期。督办时限、领导交办和已定时间的会议才会出现在日历上。</div>`;
+    : `<div class="cal-quiet">${quiet}</div>`;
 }
 
 /* 领导交办详情：从日程点进来，数据直接读 /api/directive/<令号>（和台账同源）。
@@ -11018,6 +11201,9 @@ function renderMeetDetail(m) {
       <span class="mt-tag ${m.status === "draft" || m.status === "planned" ? "" : "done"}">${esc(STATUS_CN[m.status] || m.status)}</span>
     </div>
     <p class="mt-meta">${where}</p>
+    ${(m.topics || []).length
+      ? `<div class="mt-meta mt-topics"><b>议题</b>${(m.topics || []).map((t, i) => `${i + 1}. ${esc(t)}`).join("　")}</div>`
+      : (planned ? `<div class="mt-meta" style="color:var(--warn)">没有填议题 —— 通知正文里会缺「会议议题」一节，收件人只知道几点在哪开会。</div>` : "")}
     ${wmLine}
     <div class="mt-acts">
       ${planned
@@ -11827,7 +12013,7 @@ function newMeetingForm() {
       <label>会议标题<input id="mtf_title" placeholder="市政府第13次常务会议"></label>
       <label>会议时间<input id="mtf_held" placeholder="2026-11-02 09:00"></label>
       <label>主持<input id="mtf_host" placeholder="市长"></label>
-      <label>参会单位（逗号分隔）<input id="mtf_att" placeholder="市住建局, 市城管局"></label>
+      <label>参会单位（逗号分隔）<input id="mtf_att" placeholder="市工信局, 市商务局"></label>
       <label class="full">会议记录原文<textarea id="mtf_text" placeholder="粘贴纪要、速记稿或会议录音转写文本…"></textarea></label>
     </div>
     <div class="mt-acts"><button class="mini" id="mtf_save">保存</button>
@@ -11835,16 +12021,19 @@ function newMeetingForm() {
       <span class="hint" style="margin:6px 0 0">保存后再点「解析议定事项」；解析和落库是两步，中间你自己看一遍</span></div>
     <div class="mt-warn info">会议助手不接录音转写。要处理录音，先用别的工具转成文字再粘进来——本服务不假装能听音视频。</div>`;
 
+  // 示例就是官网 2026-11-25 经济运行分析会的纪要节选，粘进去能直接解析出三条议定事项
   $("#mtf_demo").onclick = () => {
-    $("#mtf_title").value = "市政府第13次常务会议";
-    $("#mtf_held").value = "2026-11-02 09:00";
-    $("#mtf_host").value = "市长";
-    $("#mtf_att").value = "市住建局, 市城管局, 市交通运输局";
+    $("#mtf_title").value = "市政府经济运行分析会";
+    $("#mtf_held").value = "2026-11-25 09:00";
+    $("#mtf_host").value = "市长 巢彬";
+    $("#mtf_att").value = "市发改委, 市工信局, 市商务局, 市税务局";
     $("#mtf_text").value = [
-      "一、关于高铁东站周边路网配套工程。会议听取了市住建局的汇报。会议议定：由市住建局牵头，市交通运输局配合，11月20日前完成管线迁改和路面恢复，验收标准为管线全部入地并通过竣工验收。",
-      "二、关于冬季供暖保障。会议议定：由市城管局负责，11月10日前完成全市供热管网排查，形成隐患清单并逐项整改，确保按期开栓供暖。",
-      "三、关于12345热线反映的停车难问题。会议要求市城管局牵头，年底前完成主城区停车泊位施划，具体数量另行研究。",
-      "四、会议强调，各项工作要压实责任，确保落实到位。",
+      "11月25日上午，市政府召开经济运行分析会，分析当前全市经济运行情况，部署年末收官攻坚任务，谋划明年开局工作。",
+      "会议指出，要全力以赴稳定工业增长。聚焦重点薄弱环节，逐项开展专项调度；逐户摸排产值波动企业，及时协调要素保障。",
+      "会议明确，由市工信局负责，12月10日前完成产值波动企业逐户摸排，报送要素保障需求清单。",
+      "会议明确，由市发改委负责，12月15日前逐个破解重大项目开工竣工滞后问题，加快形成实物工作量。",
+      "会议明确，由市发改委、市商务局负责，12月10日前分析社零流失原因，提出促消费活动方案。",
+      "会议强调，要统筹发展和安全，精准防范财税、金融、劳资等重点领域风险。",
     ].join("\n\n");
   };
 
@@ -11894,130 +12083,71 @@ const OV_TONE = { 逾期: "danger", 今日到期: "warn", 临期: "warn", 签收
    **节点只写日期和事由，不写完成状态** —— 状态由 ovNodes() 按事项当前
    状态和进度算，写死就会出现「已办结还挂着 2/4 完成」。 */
 const OV_ENRICH = {
-  "DB2026-0027": {
-    owner: "张伟（市住建局城市建设科）", issued_at: "2026-09-10",
+  /* 任务节点来自台账里真实的事件流（交办、进展、办结），只做「计划节点」这一层展示。
+     责任人姓名不写：官网公文只公开到责任单位，个人姓名属于内部信息，编一个
+     「张伟（市住建局城市建设科）」比空着更糟。服务端给了 owner 就用服务端的。 */
+  "DB2026-0018": {
     nodes: [
-      { date: "09-10", label: "常务会议交办，明确牵头分工" },
-      { date: "09-25", label: "完成管线迁改方案会审" },
-      { date: "10-20", label: "路基与管网施工" },
-      { date: "10-28", label: "竣工验收并申请办结" },
-    ],
-    events: [
-      { ts: "2026-09-10 10:00", type: "交办", text: "市政府第 12 次常务会议定事项，交市住建局牵头", actor: "市政府办" },
-      { ts: "2026-09-12 09:30", type: "签收", text: "签收，明确责任人为张伟", actor: "市住建局", from_status: "待签收", to_status: "办理中" },
-      { ts: "2026-09-25 16:20", type: "进展", text: "管线迁改方案通过会审", actor: "张伟", percent: 30 },
-      { ts: "2026-10-21 10:30", type: "进展", text: "路基完成 70%，雨污水管网推进中", actor: "张伟", percent: 72 },
-      { ts: "2026-10-27 09:00", type: "催办", text: "逾期 5 天，请倒排工期并反馈赶工安排", actor: "市政府办" },
-    ],
-  },
-  "DB2026-0030": {
-    owner: "李娜（市市场监管局食品科）", issued_at: "2026-10-08",
-    nodes: [
-      { date: "10-08", label: "专项检查方案下发" },
-      { date: "10-22", label: "完成 62 所学校全覆盖检查" },
-      { date: "10-30", label: "问题隐患整改复查" },
-      { date: "11-01", label: "办结归档" },
-    ],
-    events: [
-      { ts: "2026-10-08 09:00", type: "交办", text: "秋季校园食品安全专项检查任务下发", actor: "市政府办" },
-      { ts: "2026-10-09 11:00", type: "签收", text: "签收，明确责任人为李娜", actor: "市市场监管局", from_status: "待签收", to_status: "办理中" },
-      { ts: "2026-10-22 17:40", type: "进展", text: "62 所学校全覆盖检查，发现隐患 14 处", actor: "李娜", percent: 90 },
-      { ts: "2026-10-30 15:10", type: "进展", text: "隐患整改复查全部通过", actor: "李娜", percent: 96 },
-      { ts: "2026-11-01 09:00", type: "催办", text: "已到时限，请尽快提交办结", actor: "市政府办" },
-    ],
-  },
-  "DB2026-0029": {
-    owner: "王强（市城管局市政设施管理科）", issued_at: "2026-09-26",
-    nodes: [
-      { date: "09-26", label: "治理方案审定" },
-      { date: "10-25", label: "新增泊位 1,200 个" },
-      { date: "10-28", label: "38 个场库错时共享开放" },
-      { date: "11-03", label: "办结审核（待市政府办确认）" },
-    ],
-    events: [
-      { ts: "2026-09-26 10:30", type: "交办", text: "12345 高频诉求「停车难」专项治理立项", actor: "市政府办" },
-      { ts: "2026-09-27 14:00", type: "签收", text: "签收，明确责任人为王强", actor: "市城管局", from_status: "待签收", to_status: "办理中" },
-      { ts: "2026-10-25 18:00", type: "进展", text: "新增泊位 1,200 个，38 个场库错时共享", actor: "王强", percent: 100 },
-      { ts: "2026-10-31 09:20", type: "提请办结", text: "提交办结材料，待市政府办审核", actor: "王强", from_status: "办理中", to_status: "待审核" },
-    ],
-  },
-  "DB2026-0035": {
-    owner: "刘洋（市城管局燃气供热科）", issued_at: "2026-10-20",
-    nodes: [
-      { date: "10-20", label: "预案编制任务交办" },
-      { date: "10-23", label: "签收确认" },
-      { date: "11-05", label: "预案编制完成" },
-      { date: "11-10", label: "报市应急管理局备案" },
-    ],
-    events: [
-      { ts: "2026-10-20 09:00", type: "交办", text: "冬季供暖保障预案编制与报备任务下发", actor: "市政府办" },
-      { ts: "2026-10-24 09:00", type: "提醒", text: "签收超时，系统自动提醒", actor: "系统" },
-      { ts: "2026-10-28 10:00", type: "催办", text: "请尽快签收并启动预案编制", actor: "市政府办" },
-    ],
-  },
-  "DB2026-0033": {
-    owner: "陈斌（市生态环境局水生态科）", issued_at: "2026-10-18",
-    nodes: [
-      { date: "10-18", label: "排查任务交办" },
-      { date: "10-21", label: "签收确认" },
-      { date: "11-08", label: "排查建库、一口一档" },
-      { date: "11-20", label: "分类整治销号" },
-    ],
-    events: [
-      { ts: "2026-10-18 15:00", type: "交办", text: "入河排污口排查整治任务交办（省交办件）", actor: "市政府办" },
-      { ts: "2026-10-22 09:00", type: "提醒", text: "签收超时，系统自动提醒", actor: "系统" },
-      { ts: "2026-10-29 11:30", type: "催办", text: "请先签收，再排排查计划", actor: "市政府办" },
+      { date: "02-06", label: "民生实事任务下达" },
+      { date: "06-30", label: "1 所学校改造完成" },
+      { date: "11-18", label: "3 所学校全部投用" },
+      { date: "11-26", label: "视察核验后确认办结" },
     ],
   },
   "DB2026-0025": {
-    owner: "周敏（市大数据局数据资源科）", issued_at: "2026-09-05",
     nodes: [
-      { date: "09-05", label: "接入方案与接口规范确认" },
-      { date: "09-28", label: "部门接口联调" },
-      { date: "10-31", label: "数据归集（已停滞 12 天）" },
-      { date: "11-10", label: "平台试运行" },
-      { date: "11-15", label: "验收上线" },
-    ],
-    events: [
-      { ts: "2026-09-05 09:30", type: "交办", text: "城市运行管理服务平台数据接入任务交办", actor: "市政府办" },
-      { ts: "2026-09-06 10:00", type: "签收", text: "签收，明确责任人为周敏", actor: "市大数据局", from_status: "待签收", to_status: "办理中" },
-      { ts: "2026-09-28 16:00", type: "进展", text: "8 个部门接口联调完成", actor: "周敏", percent: 45 },
-      { ts: "2026-10-31 17:00", type: "提醒", text: "已 12 天无新进展，判定停滞", actor: "系统" },
+      { date: "02-06", label: "整治任务下达" },
+      { date: "09-15", label: "车位改造 110 个完成" },
+      { date: "11-24", label: "公厕封顶、驿站收尾" },
+      { date: "12-10", label: "竣工验收" },
     ],
   },
-  "DB2026-0018": {
-    owner: "赵磊（市住建局旧改办）", issued_at: "2026-08-15",
+  "DB2026-0027": {
     nodes: [
-      { date: "08-15", label: "年度改造计划下达" },
-      { date: "08-30", label: "施工许可办理" },
-      { date: "09-18", label: "21 个小区集中开工" },
-      { date: "09-30", label: "办结归档" },
+      { date: "03-02", label: "培训任务下达" },
+      { date: "07-31", label: "累计培训 1680 人次" },
+      { date: "10-15", label: "累计 2720 人次" },
+      { date: "11-20", label: "完成 4000 人次" },
     ],
-    events: [
-      { ts: "2026-08-15 09:00", type: "交办", text: "第二批老旧小区改造年度任务下达", actor: "市政府办" },
-      { ts: "2026-08-16 10:30", type: "签收", text: "签收，明确责任人为赵磊", actor: "市住建局", from_status: "待签收", to_status: "办理中" },
-      { ts: "2026-09-18 09:18", type: "进展", text: "21 个小区集中开工仪式举行", actor: "赵磊", percent: 90 },
-      { ts: "2026-09-30 15:00", type: "办结", text: "全部小区开工，办结归档", actor: "赵磊", from_status: "办理中", to_status: "已办结" },
+  },
+  "DB2026-0029": {
+    nodes: [
+      { date: "02-06", label: "建设任务下达" },
+      { date: "06-30", label: "场地改造完成" },
+      { date: "11-02", label: "中心投入试运行" },
+      { date: "11-24", label: "提交办结审核" },
+    ],
+  },
+  "DB2026-0030": {
+    nodes: [
+      { date: "02-06", label: "筛查任务下达" },
+      { date: "06-30", label: "危险因素调查 2.1 万人" },
+      { date: "10-31", label: "筛查覆盖率 72%" },
+      { date: "12-31", label: "年度筛查完成" },
     ],
   },
   "DB2026-0031": {
-    owner: "孙洁（市发改委审批服务科）", issued_at: "2026-10-15",
     nodes: [
-      { date: "10-15", label: "容缺受理清单编制启动" },
-      { date: "10-26", label: "清单初稿（28 项）" },
-      { date: "11-12", label: "部门会签" },
-      { date: "11-30", label: "印发实施" },
+      { date: "04-10", label: "任务分解到镇街" },
+      { date: "07-15", label: "上半年新增 7800 人" },
+      { date: "10-20", label: "累计新增 11700 人" },
+      { date: "12-31", label: "完成 1.5 万人" },
     ],
-    events: [
-      { ts: "2026-10-15 10:00", type: "交办", text: "重大项目「容缺受理」清单落地任务交办", actor: "市政府办" },
-      { ts: "2026-10-16 09:40", type: "签收", text: "签收，明确责任人为孙洁", actor: "市发改委", from_status: "待签收", to_status: "办理中" },
-      { ts: "2026-10-26 17:00", type: "进展", text: "清单初稿 28 项，征求部门意见中", actor: "孙洁", percent: 40 },
+  },
+  "DB2026-0033": {
+    nodes: [
+      { date: "11-25", label: "培训任务下达" },
+      { date: "12-20", label: "228 人培训考核完成" },
+    ],
+  },
+  "DB2026-0035": {
+    nodes: [
+      { date: "11-27", label: "开办任务下达" },
+      { date: "12-31", label: "41 个班次全部开办" },
     ],
   },
 };
 
-/* 紧急度：由风险类别 + 是否重点督办推出三档。逾期一律「高」；
-   临期、停滞、签收超时看事项分量；办结回落「低」。 */
 function ovUrgency(it) {
   if (it.status === "已办结") return ["ok", "低"];
   if (it.risk === "逾期") return ["danger", "高"];
@@ -12707,12 +12837,22 @@ async function boot() {
   renderBoards(OV.boards, OV.focus);
   renderAlerts();
   await loadPeople();
+  // 角色在身份目录里就定了（/api/people 一并带回来），不必等登录接口才知道。
+  // 先按它摘一次罗盘页签：单位账号的首屏不该先闪一下「城市罗盘」再消失。
+  ROLE = roleOfPerson(PID.get());
+  applyRoleGate();
   await loadExperts();
   await loadWorkspace();
   // 登录态：启动时问一次后端，决定右上角显示「已登录」还是「演示视角·未登录」。
   // 不阻塞首屏；未登录时读操作照常（演示全量），写操作会被拦并引导登录。
   // 拿到角色后顺手决定落哪一屏：单位账号直接进工作台，不必自己去找页签。
-  refreshAuth().then((w) => { renderIdMenu(); defaultView(w); }).catch(() => {});
+  refreshAuth().then((w) => {
+    // 登录后以 session 的角色为准（可信）；没登录就还用目录里那个
+    ROLE = (w && w.role) || roleOfPerson(PID.get());
+    renderIdMenu();
+    applyRoleGate();
+    defaultView(w);
+  }).catch(() => {});
 
   // 模型配置 + 最近一次会话（没有会话就停在空态，不自动建空记录）
   await loadModels();
@@ -12775,6 +12915,10 @@ async function boot() {
 // 所以必须一起收：只切 <a> 的话，上一张工作台页签的蓝底会留在原地，
 // 变成「城市罗盘」和「默认工作台」两块同时选中，看着像两个板块都开着。
 function switchView(which) {
+  // 委办局没有罗盘这一屏。别处还有几处 switchView("compass")（问完数回罗盘、
+  // 预警条跳转），光把页签藏起来不够 —— 那些调用会切出一个没有入口的视图，
+  // 用户一旦切过去就回不来。所以在这里统一改成落工作台。
+  if (ROLE === "bureau" && which !== "desk") which = "desk";
   const isDesk = which === "desk";
   VIEW = isDesk ? "desk" : "compass";
   $("#viewCompass").hidden = isDesk;
@@ -12793,8 +12937,11 @@ function switchView(which) {
    收藏了 #oversight 的人不希望一登录就被顶回工作台。 */
 function defaultView(who) {
   if (location.hash) return;
-  // role=bureau 就是「一个单位」：14 个单位账号和生态环境局那个演示身份都是它
-  if (who && who.role === "bureau") switchView("desk");
+  // role=bureau 就是「一个单位」：28 个单位账号和生态环境局那个演示身份都是它。
+  // 未登录时 who 是 null（没有 session），这时按本地身份的 role 兜底 ——
+  // 演示浏览也要能看出"单位账号落在工作台"。
+  const role = (who && who.role) || ROLE;
+  if (role === "bureau") switchView("desk");
 }
 
 /* ---------- 知识库 ----------
@@ -12811,8 +12958,13 @@ const KB_KINDS = [
   { id: "oversight", label: "督办事项" },
   { id: "decision", label: "会议议定" },
   { id: "meeting", label: "会议记录" },
-  { id: "doc", label: "上传文档" },
 ];
+/* 文件类的 chip 由服务端给（分类库上挂的归类），这里只是没有服务端响应时的兜底。
+   兜底里必须有 doc —— 文件进了库却看不见，比多一个陌生 chip 糟得多。
+   顺序也由服务端定：具体归类在前，「上传文档」这个兜底类在最后。 */
+let KB_DOC_KINDS = [{ id: "doc", label: "上传文档" }];
+const KB_IS_DOC = (k) => KB_DOC_KINDS.some((x) => x.id === k);
+const KB_CHIPS = () => [...KB_KINDS, ...KB_DOC_KINDS];
 /* pane：右边显示的是清单选中项的原文（""），还是上传面板（"upload"）。
    上传面板和清单共用右半边，靠这个标记挡住「加载完清单顺手画了第一项」，
    否则点开上传到一半会被一次后台刷新顶掉。 */
@@ -12861,6 +13013,21 @@ async function loadKb(opts = {}) {
   }
   KB.items = d.items || [];
   KB.counts = d.counts || {};
+  // 文件类的 chip 由服务端给：分类库上挂了归类，这里就多一个 chip，前端不用改。
+  // 服务端漏了 doc 就补回去 —— 兜底类消失，那些没挂归类的文件就再也点不到。
+  if (Array.isArray(d.doc_kinds) && d.doc_kinds.length) {
+    const rest = d.doc_kinds.filter((k) => k && k.id && k.id !== "doc");
+    const docChip = d.doc_kinds.find((k) => k && k.id === "doc") || { id: "doc", label: "上传文档" };
+    KB_DOC_KINDS = [...rest, docChip];
+  } else {
+    KB_DOC_KINDS = [{ id: "doc", label: "上传文档" }];
+  }
+  // 停着的 chip 这批响应里没了（库被删、库上的归类被改）：退回「全部」再取一次。
+  // 只重试一次 —— 服务端持续对不上时，重试会把页面卡在这个来回里。
+  if (KB.kind && !KB_CHIPS().some((k) => k.id === KB.kind)) {
+    KB.kind = "";
+    if (!opts.fallback) return loadKb({ ...opts, fallback: true });
+  }
   KB.searching = !!(d.query || "").trim();
   renderKbChips();
   renderKbList();
@@ -12892,7 +13059,7 @@ function kbEmptyHtml() {
   }
   // 上传文档这一类空着，多半是还没建库。直接把人带到本页的上传面板，
   // 不再跳去另一个弹窗 —— 那个弹窗已经并进来了。
-  if (KB.kind === "doc") {
+  if (KB_IS_DOC(KB.kind)) {
     return `<div class="kl-empty">还没有上传过文档。<br>政策文件、报告、汇报材料传上来之后，会在这里按文件列出来，也能被搜索命中。<br><button class="mini" data-kbjump="upload" style="margin-top:10px">上传文档</button></div>`;
   }
   return `<div class="kl-empty">这一类下还没有记录。</div>`;
@@ -12900,15 +13067,16 @@ function kbEmptyHtml() {
 
 function renderKbChips() {
   const total = Object.values(KB.counts).reduce((a, b) => a + b, 0);
-  $("#kbChips").innerHTML = KB_KINDS.map((k) => {
+  $("#kbChips").innerHTML = KB_CHIPS().map((k) => {
     const n = k.id ? (KB.counts[k.id] || 0) : total;
     return `<button type="button" class="ov-chip ${KB.kind === k.id ? "on" : ""}" data-kbkind="${k.id}">${esc(k.label)}<b>${n}</b></button>`;
   }).join("");
 }
 
-/* 一条记录属于哪个来源：doc 是人上传的文件（rag），其余四类都是系统自己产出的
-   记录（knowledge）。清单混排时靠它分组，别处不要再各写一份判断。 */
-function kbSrc(it) { return it.kind === "doc" ? "doc" : "sys"; }
+/* 一条记录属于哪个来源：文件（rag）是人传的，其余四类都是系统自己产出的
+   记录（knowledge）。清单混排时靠它分组，别处不要再各写一份判断。
+   「重点领域」这类挂了归类的库也是文件，只是归类比「上传文档」具体。 */
+function kbSrc(it) { return KB_IS_DOC(it.kind) ? "doc" : "sys"; }
 
 const KB_SRC = {
   sys: { label: "系统记录", note: "指标口径 / 督办台账 / 会议记录，带编号可回原处" },
@@ -12921,11 +13089,11 @@ function kbCardHtml(it, i) {
   const sub = [s.department, it.kind === "metric" ? "" : s.period].filter(Boolean).join(" · ");
   // 上传文档的 id 是 doc_xxx，对用户没有意义；块数也是内部概念。给文件大小 ——
   // 那才是人在认一份文件时会看的东西（章节和字数在右边阅读视图的头部）。
-  const tail = it.kind === "doc" ? (s.report || "") : it.id;
+  const tail = KB_IS_DOC(it.kind) ? (s.report || "") : it.id;
   return `
     <div class="ov-card ${KB.sel === kbKey(it) ? "on" : ""}" data-kbi="${i}">
       <div class="ov-card-top">
-        <span class="kl-kind ${esc(it.kind)}">${esc(it.kind_label)}</span>
+        <span class="kl-kind ${esc(it.kind)}${KB_IS_DOC(it.kind) ? " file" : ""}">${esc(it.kind_label)}</span>
         <span style="font-size:10px;color:var(--faint);margin-left:auto;white-space:nowrap">${esc(tail)}</span>
       </div>
       <b>${kbHl(it.title, KB.q)}</b>
@@ -13216,7 +13384,7 @@ function renderDocReader() {
     <div class="kl-docwrap">
       <div class="kl-dochead">
         <div class="kl-h">
-          <span class="kl-kind doc">上传文档</span>
+          <span class="kl-kind ${esc(doc.kb_kind || "doc")} file">${esc(doc.kb_label || "上传文档")}</span>
           <h4>${esc(doc.name || "")}</h4>
           ${vBadge}
         </div>
@@ -13267,7 +13435,7 @@ function renderKbPreview(it) {
   // 上传时间和切块数。硬套系统记录那四格，会有一半写着「—」。
   // 上传文档不是"一条记录"，是一份文件：它有章节、有长度、检索命中要落到
   // 某一节上。所以它走自己的阅读视图，不套系统记录那套四格字段。
-  if (it.kind === "doc") return renderDocPreview(it);
+  if (KB_IS_DOC(it.kind)) return renderDocPreview(it);
   const jump = kbJump(it);
   // 引句只在它不出现在正文里时才单独列。指标条目的 quote 就是口述定义那一句，
   // 而正文第一句也是它 —— 原样摆两遍，读的人会以为是两段不同的原文。
@@ -13297,7 +13465,7 @@ function renderKbPreview(it) {
   const body = it.text || (it.kind === "meeting" ? "这场会议还没有录入纪要原文，只有时间、主持人和参会单位。" : "（无正文）");
   $("#kbMain").innerHTML = `
     <div class="kl-h">
-      <span class="kl-kind ${esc(it.kind)}">${esc(it.kind_label)}</span>
+      <span class="kl-kind ${esc(it.kind)}${KB_IS_DOC(it.kind) ? " file" : ""}">${esc(it.kind_label)}</span>
       <h4>${esc(it.title)}</h4>
     </div>
     <div class="kl-meta">${cells.join("")}</div>
@@ -13318,7 +13486,7 @@ function kbJump(it) {
   if (it.kind === "oversight") return `<button class="mini" data-kbjump="oversight" data-kbid="${esc(it.id)}">打开台账办理详情</button>`;
   // 上传文档的写入动作就在这一页：删除在预览底部，上传/建库在右上角。
   // 它的按钮由 renderDocReader 直接给（那份文件有章节和命中导航，不是一条记录）。
-  if (it.kind === "doc" && ref.kb_id) {
+  if (KB_IS_DOC(it.kind) && ref.kb_id) {
     return `<button class="mini" data-kbdocdel="${esc(it.id)}">删除这份文件</button>
       <button class="mini" data-kbjump="upload" data-kbid="${esc(ref.kb_id)}">管理分类库</button>`;
   }
@@ -13420,7 +13588,7 @@ document.addEventListener("click", (e) => {
   // 文档预览底部的「删除这份文档」：写接口，未登录时由 handleWriteDeny 给登录引导
   const kbDocDel = e.target.closest("[data-kbdocdel]");
   if (kbDocDel) {
-    const it = KB.items.find((x) => x.kind === "doc" && x.id === kbDocDel.dataset.kbdocdel);
+    const it = KB.items.find((x) => KB_IS_DOC(x.kind) && x.id === kbDocDel.dataset.kbdocdel);
     if (it) deleteKbDoc(it);
     return;
   }
@@ -13523,6 +13691,8 @@ document.addEventListener("click", (e) => {
   // 默认表的调整，改默认的人会发现改了却不生效
   if (e.target.closest("#wmReset")) return saveWatch(null, "已恢复默认关注");
   if (e.target.closest("#feedReadAll")) return markSeen([]);
+  // 督办列表右上角的「台账」：直接开整本台账（那块只有本单位的事，台账里能筛能办）
+  if (e.target.closest("#ovListAll")) return openOversight();
 
   // 管理跟进 / 自定义板块里的行是动态生成的，只能走委托
   const fmid = e.target.closest("[data-fid]");
@@ -13547,6 +13717,11 @@ document.addEventListener("click", (e) => {
   // 我分管的未结事项：点进督办详情，能在那儿签收/反馈/办结
   const frow = e.target.closest("[data-follow]");
   if (frow) return openOversight(frow.dataset.follow);
+
+  // 督办列表的行：同一个出口（台账详情），不在工作台上再做一个详情面板 ——
+  // 签收/报进展/上传佐证都在那儿，两份 UI 迟早只改一份。
+  const ovrow = e.target.closest("[data-ovrow]");
+  if (ovrow) return openOversight(ovrow.dataset.ovrow);
 
   const wrow = e.target.closest("[data-wcode]");
   if (wrow) return toggleWatch(wrow.dataset.wcode);
@@ -13577,8 +13752,9 @@ document.addEventListener("click", (e) => {
   const aset = e.target.closest("[data-accent-set]");
   if (aset) { THEME.setAccent(aset.dataset.accentSet); renderThemeModal(); return; }
 
-  // 专家下拉的点击由 #expertSelect 自己处理（见文件末尾的绑定），这里不再接 data-eid：
-  // 菜单项和整行开合是两种语义，混在全局委托里容易和别的 data-* 规则抢。 
+  // 参谋菜单的点击由 #expertSelect（开合）和 #esMenu（选人）各自处理（见文件末尾
+  // 的绑定），这里不再接 data-eid：菜单项和开合是两种语义，混在全局委托里容易和
+  // 别的 data-* 规则抢。
 
   const metric = e.target.closest("[data-metric]");
   if (metric) return showMetric(metric.dataset.metric);
@@ -13851,20 +14027,26 @@ document.querySelectorAll("[data-model-pill]").forEach((p) => {
   p.onclick = () => openSettings("model");
 });
 
-/* ---------- 专家下拉：点整行开合，点菜单项定人 ----------
-   单独绑而不是走全局委托：菜单项和「开合」是两种语义，混进 data-* 规则里
-   容易和别的分支抢事件。 */
+/* ---------- 参谋菜单：点小钮开合，点菜单项定人 ----------
+   菜单现在挂在 .inputbar 上（不再套在钮里面）—— 它要贴着输入框上沿整面弹出，
+   套在一颗 24px 高的钮里就只能跟着钮的宽度走。所以两处分开绑：
+   钮负责开合，菜单负责选人。 */
 $("#expertSelect").onclick = (e) => {
-  const item = e.target.closest(".es-item");
-  if (item) return selectExpert(item.dataset.eid);
+  e.stopPropagation();
   const box = $("#expertSelect");
   const open = !box.classList.contains("open");
   box.classList.toggle("open", open);
   box.setAttribute("aria-expanded", String(open));
   $("#esMenu").hidden = !open;
+  // 两层不共存：参谋菜单和斜杠层抢同一块位置，后开的那层把前一层收掉
+  if (open) closeSlash();
+};
+$("#esMenu").onclick = (e) => {
+  const item = e.target.closest(".es-item");
+  if (item) selectExpert(item.dataset.eid);
 };
 document.addEventListener("click", (e) => {
-  if (!e.target.closest("#expertSelect")) closeExpertMenu();
+  if (!e.target.closest("#expertSelect") && !e.target.closest("#esMenu")) closeExpertMenu();
   // 点别处收掉斜杠层，但**不清输入框**：清掉等于替用户删字
   if (!e.target.closest(".inputbar")) closeSlash();
 });

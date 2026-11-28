@@ -366,6 +366,25 @@ def _auto_items(fields: dict[str, Any], facts: list[dict[str, Any]], kind: str) 
     return out[:MAX_ITEMS]
 
 
+def _clean_subject(text: str) -> str:
+    """事由只留「关于什么」——引导词「关于」和文种尾巴由标题装配时补一次。
+
+    模型常把整句标题当 subject 传进来（「关于 1—9 月经济运行情况的通报」），
+    而标题是 `f"关于{subject}的{文种}"` 拼的，于是纸上就成了
+    「关于关于…的通报的通知」。审校只会报「标题没以文种结尾」，指不到真原因。
+    只在这两种明显是整句标题的形态下剥，正常事由（「开展安全生产大检查」）不动。
+    """
+    s = str(text or "").strip().rstrip("。；;.")
+    if s.startswith("关于"):
+        s = s[2:].strip()
+    # 「…情况的通报（补充说明）」这种，文种后面还挂着东西；按第一个「的+文种」
+    # 截断即可 —— 标题只需要「关于什么」，后面是不是还有说明都不属于事由。
+    m = re.search(r"的[^的，。；]{0,8}(通知|通报|请示|报告)", s)
+    if m:
+        s = s[: m.start()].strip()
+    return s
+
+
 def build(
     kind: str = "qingshi",
     fields: dict[str, Any] | None = None,
@@ -382,7 +401,7 @@ def build(
 
     org = str(fields.get("org") or K["org"]).strip()
     to = str(fields.get("to") or K["to"]).strip()
-    subject = str(fields.get("subject") or "").strip()
+    subject = _clean_subject(str(fields.get("subject") or ""))
     if not subject:
         warnings.append("还没写事由。标题和缘由段都要用它，先补一句「关于什么」。")
 

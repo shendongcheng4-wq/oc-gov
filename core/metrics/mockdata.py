@@ -91,6 +91,50 @@ METRICS: dict[str, dict[str, Any]] = {
         "target_note": "年度目标 6.5%",
         "api": "GET /api/metrics/GY_VA_GROWTH",
     },
+    # 下面两个是 2026-11 补的绝对额指标：真数表里有产值、用电，指标字典里却只有
+    # 增速，于是「规上工业总产值多少」永远答「库里没有」，模型拿增加值增速顶上。
+    # 它们没有演示序列 —— 只有 realdata 里那两期真数，问别的期次直接说没有。
+    "GY_OUTPUT": {
+        "code": "GY_OUTPUT",
+        "name": "规模以上工业总产值",
+        "aliases": ["规上工业总产值", "工业总产值", "规上产值", "工业产值", "总产值"],
+        "unit": "亿元",
+        "direction": "positive",
+        "department": "市统计局",
+        "report": "《规模以上工业生产月报》",
+        "frequency": "月",
+        "cumulative": True,
+        "kind": "total",
+        "real_only": True,
+        "definition": (
+            "规模以上工业企业（年主营业务收入 2000 万元及以上）当期完成的工业总产值，"
+            "按现价计算，年内累计。"
+        ),
+        "caveats": [
+            "现价口径，增速含价格因素，与按可比价计算的增加值增速不是一回事，不能相互印证。",
+            "只含规上企业，不含规下企业与个体户。",
+        ],
+        "api": "GET /api/metrics/GY_OUTPUT",
+    },
+    "ELEC_GY": {
+        "code": "ELEC_GY",
+        "name": "工业用电量",
+        "aliases": ["工业用电量", "工业用电", "用电量", "用电"],
+        "unit": "亿千瓦时",
+        "direction": "positive",
+        "department": "市统计局",
+        "report": "《能源统计月报》",
+        "frequency": "月",
+        "cumulative": True,
+        "kind": "total",
+        "real_only": True,
+        "definition": "全社会用电量中第二产业（工业）部分，年内累计，实物量指标。",
+        "caveats": [
+            "实物量指标，可用于交叉验证产值增速：产值增、用电增得更慢，说明单位产值电耗在降。",
+            "含企业自备电厂发电量，与供电公司售电量不是同一口径。",
+        ],
+        "api": "GET /api/metrics/ELEC_GY",
+    },
     "FAI_PROGRESS": {
         "code": "FAI_PROGRESS",
         "name": "市重大项目年度投资完成率",
@@ -255,6 +299,33 @@ METRICS: dict[str, dict[str, Any]] = {
         ],
         "api": "GET /api/metrics/FAI_GROWTH",
     },
+    # 绝对额口径。增速（上面那条）和总额是两张表、两个数，谁也不能替谁答：
+    # 「固投下降 9.4%」和「固投 290.86 亿」要同时拿得到，才说得清「降了多少、还剩多少」。
+    "FAI_TOTAL": {
+        "code": "FAI_TOTAL",
+        "name": "固定资产投资额",
+        "aliases": [
+            "固定资产投资额", "固定资产投资总额", "固投总额", "固投额",
+            "投资总额", "固投总量",
+        ],
+        "unit": "亿元",
+        "direction": "positive",
+        "department": "市统计局",
+        "report": "《固定资产投资统计月报》",
+        "frequency": "月",
+        "cumulative": True,
+        "kind": "total",
+        "real_only": True,
+        "definition": (
+            "年内累计完成的固定资产投资额，按可比口径计算，"
+            "不含农户投资，含房地产开发投资，起点为计划总投资 500 万元以上项目。"
+        ),
+        "caveats": [
+            "累计口径：1 月至当月末累计，不做环比。",
+            "与市重大项目的「完成投资额」不是同一范围：后者只含列入清单的项目。",
+        ],
+        "api": "GET /api/metrics/FAI_TOTAL",
+    },
     "INVEST_SIGNED": {
         "code": "INVEST_SIGNED",
         "name": "招商引资新签约亿元以上项目数",
@@ -306,6 +377,12 @@ METRICS: dict[str, dict[str, Any]] = {
 # --------------------------------------------------------------------------
 # 数值：与 PERIODS 一一对应（2024-11 ~ 2026-10）
 # --------------------------------------------------------------------------
+
+# 只有真数、没有演示序列的指标（产值、用电、固投额）。`_VALUES` 里没有它们，
+# 取数一律走 realdata.REAL_PERIOD —— 编不出来的东西就不要编。
+REAL_ONLY: frozenset[str] = frozenset(
+    code for code, m in METRICS.items() if m.get("real_only")
+)
 
 _VALUES: dict[str, list[float]] = {
     "GY_VA_GROWTH": [
@@ -481,7 +558,11 @@ def _round(value: float, code: str) -> float:
     if unit == "%":
         return round(value, 2)
     if unit == "亿元":
-        return round(value, 1)
+        # 保留两位：统计表给到分的量级（1300.07、290.86），四舍五入到一位
+        # 会变成 1300.1，对着材料核数时对不上账。
+        return round(value, 2)
+    if unit == "亿千瓦时":
+        return round(value, 2)
     return round(value, 0)
 
 
@@ -566,10 +647,44 @@ def target_note(result: dict[str, Any]) -> str | None:
     return "已完成年度目标"
 
 
+def _realdata():
+    """懒加载真数覆盖层。拿不到就当没有 —— 指标查询不该因为一个可选模块挂掉。"""
+    try:
+        import realdata  # noqa: PLC0415
+
+        return realdata
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def period_real(code: str, period: str) -> dict[str, Any] | None:
+    """某指标某一期是否已接入统计月报真数。
+
+    给「附件表格 × 指标库逐期对照」用（core/metrics/extdata.py）。`query_metric`
+    的 `series` 永远是演示序列，真数只覆盖 `value`（见那边的 `real_override` 注释），
+    照 series 做对照会把真数期判成「不一致」—— 实测传一份 9 月月报进去，GDP 报
+    「差 13.57 亿」、财政收入报「量级差十倍」，其实两边是同一张表。
+    """
+    rd = _realdata()
+    return rd.real_period_value(code, period) if rd else None
+
+
 def list_metrics() -> list[dict[str, Any]]:
     latest = latest_available()
+    rd = _realdata()
     out = []
     for code, meta in METRICS.items():
+        if code in REAL_ONLY:
+            periods = rd.periods_of(code) if rd else []
+            latest_period = _period_label(periods[-1]) if periods else None
+            latest_value = (
+                _round(rd.real_period_value(code, periods[-1])["value"], code)
+                if periods
+                else None
+            )
+        else:
+            latest_period = _period_label(latest)
+            latest_value = _round(_VALUES[code][_index(latest)], code)
         out.append(
             {
                 "code": code,
@@ -577,9 +692,11 @@ def list_metrics() -> list[dict[str, Any]]:
                 "unit": meta["unit"],
                 "department": meta["department"],
                 "frequency": meta["frequency"],
-                "latest_period": _period_label(latest),
-                "latest_value": _round(_VALUES[code][_index(latest)], code),
+                "latest_period": latest_period,
+                "latest_value": latest_value,
                 "definition": meta["definition"],
+                # 只有真数、没有演示序列的指标：调用方据此知道「没有更早的期次」
+                "real_only": code in REAL_ONLY,
             }
         )
     return out
@@ -601,6 +718,74 @@ def get_metric(code: str) -> dict[str, Any]:
     }
 
 
+def _real_only_query(code: str, period: str | None, today: date | None = None) -> dict[str, Any]:
+    """只有真数的指标（产值、用电、固投额）：只答已接入的期次。
+
+    这几条没有演示序列，问没接入的期次就直说没有 —— 回落 mock 会答出一个
+    「10 月的数」，那比不答更糟。
+    """
+    meta = METRICS[code]
+    rd = _realdata()
+    periods = rd.periods_of(code) if rd else []
+    if not periods:
+        return {
+            "ok": False, "error": "no_data", "code": code, "name": meta["name"],
+            "message": f"{meta['name']}还没有接入统计部门的真数。",
+        }
+    if period is None:
+        end = periods[-1]
+    elif period in periods:
+        end = period
+    else:
+        shown = "、".join(_period_label(p) for p in periods)
+        want = _period_label(period) if period in PERIODS else str(period)
+        return {
+            "ok": False,
+            "error": "no_data",
+            "code": code,
+            "name": meta["name"],
+            "requested_period": period,
+            "available_periods": periods,
+            "latest": periods[-1],
+            "message": (
+                f"{meta['name']}目前只接入 {shown} 的真数，{want}还没有数据；"
+                f"最近可得为 {_period_label(periods[-1])}。"
+            ),
+        }
+
+    rec = rd.real_period_value(code, end) or {}
+    points = [
+        {
+            "period": p,
+            "label": _period_label(p),
+            "value": _round(rd.real_period_value(code, p)["value"], code),
+        }
+        for p in periods
+    ]
+    return {
+        "ok": True,
+        "code": code,
+        "name": meta["name"],
+        "unit": meta["unit"],
+        "period": end,
+        "period_label": _period_label(end),
+        "value": _round(rec["value"], code),
+        "mom": None,
+        "mom_note": "累计口径不做环比" if meta.get("cumulative") else None,
+        # 真数表只给了同比，没给上年同期绝对量 —— 绝对增量算不出来，置空
+        "yoy": None,
+        "yoy_pct": rec.get("yoy"),
+        "yoy_note": "统计局口径同比",
+        "kind": meta.get("kind", "rate"),
+        "target": meta.get("target"),
+        "series": points,
+        "source": rd.real_period_source(code, end),
+        "caveats": meta["caveats"],
+        "real_override": False,
+        "demo": False,
+    }
+
+
 def query_metric(
     code: str,
     period: str | None = None,
@@ -610,6 +795,19 @@ def query_metric(
     """取单指标时序。months 为回溯月数（1 = 只要最新一期）。"""
     if code not in METRICS:
         return {"ok": False, "error": "unknown_metric", "code": code}
+
+    meta = METRICS[code]
+    rd = _realdata()
+    real_periods = rd.periods_of(code) if rd else []
+
+    if code in REAL_ONLY:
+        return _real_only_query(code, period, today)
+
+    # 有真数的指标：不指定期次时按「最近一期真数」答。以前这里落到 PERIODS 的
+    # 末位（2026-10），答出来的是演示序列 —— 材料上 94.9 亿、系统答 345.6 亿，
+    # 就是这么来的。
+    if period is None and real_periods:
+        period = real_periods[-1]
 
     resolved = resolve_period(period, today)
     if not resolved["ok"]:
@@ -624,6 +822,24 @@ def query_metric(
         }
 
     end = resolved["period"]
+
+    # 真数覆盖之后的期次（例如 10 月）不再回落演示序列：宁可说「没接入」，
+    # 也不答一个编出来的当期数。
+    if period is not None and real_periods and end > real_periods[-1]:
+        return {
+            "ok": False,
+            "error": "no_data",
+            "code": code,
+            "name": meta["name"],
+            "requested_period": end,
+            "available_periods": real_periods,
+            "latest": real_periods[-1],
+            "message": (
+                f"{meta['name']}的 {_period_label(end)}真数尚未接入，"
+                f"最近可得为 {_period_label(real_periods[-1])}。"
+            ),
+        }
+
     end_idx = _index(end)
     start_idx = max(0, end_idx - max(1, months) + 1)
     points = [
@@ -646,7 +862,9 @@ def query_metric(
         if unit == "%":
             return round(cur - base, 2)
         if unit == "亿元":
-            return round(cur - base, 1)
+            return round(cur - base, 2)
+        if unit == "亿千瓦时":
+            return round(cur - base, 2)
         return round(cur - base, 0)
 
     result = {
@@ -667,39 +885,51 @@ def query_metric(
         "series": points,
         "source": source_of(code, end),
         "caveats": METRICS[code]["caveats"],
+        # 没被真数覆盖的一律标演示：界面上可以据此打「演示值」，模型据此别把它
+        # 说成统计局的数。
+        "demo": True,
     }
 
-    # 真实值覆盖：只覆盖「当期大数」（value / 增速 / source），
-    # 走势 series 保持 mock（真实年度值没有月度走势，历史曲线仍用演示序列）。
-    # 历史期次（period 明确指定且非最新）不覆盖 —— 那是演示序列的地盘。
+    # 真实值覆盖：先逐期（统计月报有的期次），再年度（公报数）。
     #
-    # `real_override` 必须带出去：覆盖之后 value 是 2025 年公报值，series 仍停在
-    # 2026-10，两者不同期、不同口径。调用方（指标抽屉、答案气泡）拿到这个标记
-    # 才知道「这条曲线不能挨着这个数画」，否则 1746.3 底下画一条末点 1428.7 的线，
-    # 看上去就是掉了 300 亿。
-    try:
-        import realdata  # noqa: PLC0415
-
-        real = realdata.real_annual_value(code)
-    except Exception:
-        real = None
-    if real is not None and (period is None or end == latest_available(today)):
+    # `real_override` 必须带出去：覆盖之后 value 是真数，series 仍是演示序列，
+    # 两者不同口径。调用方（指标抽屉、答案气泡）拿到这个标记才知道「这条曲线
+    # 不能挨着这个数画」，否则会被读成「年内掉了 300 亿」。
+    real = rd.real_period_value(code, end) if rd else None
+    if real is not None:
         result["value"] = _round(real["value"], code)
-        result["period"] = f"{real['year']}-12"
-        result["period_label"] = f"{real['year']}年（全年）"
+        # yoy 是「绝对增量」，真数表只给了同比、没给上年同期绝对量，算不出来；
+        # 增速类指标（%）的 value 本身就是增速，再写一遍会变成「同比上升 -9.4%」。
+        result["yoy"] = None
+        result["yoy_pct"] = None if meta["unit"] == "%" else real.get("yoy")
+        result["yoy_note"] = "统计局口径同比"
+        result["mom"] = None
+        result["mom_note"] = "累计口径不做环比"
+        src = rd.real_period_source(code, end)
+        if src:
+            result["source"] = src
+        result["real_override"] = True
+        result["demo"] = False
+        return result
+
+    annual = rd.real_annual_value(code) if rd else None
+    if annual is not None and end == f"{annual['year']}-12":
+        result["value"] = _round(annual["value"], code)
+        result["period_label"] = f"{annual['year']}年（全年）"
         # yoy 是「绝对增量」（亿元/户/项），公报只给了可比价增速，没给上年同期
         # 绝对量，算不出来 —— 只能置空，增速放 yoy_pct。
         # 曾经把百分比直接写进 yoy，问数按绝对增量读，GDP 就被写成
         # 「同比增加 5 亿元」。也不能拿总量和增速反推上年数：
         # 总量是现价、增速是可比价，两者不能相互推算（见指标的 caveats）。
         result["yoy"] = None
-        result["yoy_pct"] = real["yoy"]
+        result["yoy_pct"] = annual["yoy"]
         result["yoy_note"] = "可比价增速"
-        rs = realdata.real_source(code)
+        rs = rd.real_source(code)
         if rs:
             result["source"] = rs
         # 值来自公报、序列仍是演示：这条标记给展示层判定用，不参与任何计算。
         result["real_override"] = True
+        result["demo"] = False
     return result
 
 
@@ -784,6 +1014,8 @@ def compare_metrics(codes: list[str], period: str | None = None, today: date | N
                     "yoy": result["yoy"],
                     "period_label": result["period_label"],
                     "source": result["source"],
+                    # 并排比的时候也要能看出哪一行是演示值
+                    "demo": bool(result.get("demo")),
                 }
             )
         else:
@@ -800,40 +1032,56 @@ def compare_metrics(codes: list[str], period: str | None = None, today: date | N
         "rows": rows,
     }
 # --------------------------------------------------------------------------
-# 民情焦点（12345 工单聚类）
+# 民情焦点（多渠诉求聚类 + 可核查的来信原文）
 #
 # 罗盘卡片只显示 title / meta / tag；点开焦点弹窗要的是下面这套明细：
-# 诉求详情、关联工单、渠道分布、反馈人数、焦点词、14 日走势。
+# 诉求详情、来信选登原文、关联工单、渠道分布、反馈人数、焦点词、14 日走势。
 #
-# 演示数据，不含任何真实个人信息。真实接入时换掉 FOCUS_TOPICS 的来源
-# （改成 12345 平台聚类结果），下面的字段形状和聚合逻辑都不用动。
+# 三条焦点的**主题与诉求原文**取自溧阳市人民政府门户「政民互动 · 来信选登」
+# 的公开信件，字段 texts 是信件原文/答复原文的摘引，letters 里的编号就是
+# 信件详情页的 id，点开能查到同一句话：
+#   - 18842《东方花园学区划分》2025-12-11 留言 / 12-15 答复
+#   - 18818《戴埠镇村燃气通气时间咨询》2025-11-15 留言 / 11-18 答复
+#   - 18786《免费人才公寓的定义》2025-10-09 留言 / 10-10 答复
+#   - 18902《青年人才购房补贴咨询》2026-02-02 留言 / 当日答复
+#   入口：https://www.liyang.gov.cn/class/KPAAQDDK（栏目「来信选登」）
+#   规模参照《2026年10月信件办理情况》：本站点当月收信 25 件、办结 25 件、
+#   公开 1 件（https://www.liyang.gov.cn/html/czly/2026/AMKPAQEN_1101/242222.html）
 #
-# 口径提醒：channels 各项相加 = 工单**件数**；people 是**按联系人去重**后
-# 的人数。两者不是一个口径（一人多次来电只计 1 人、一件工单可能涉及多人），
-# 所以 F3 会出现「1 件工单 / 37 人」这种看着不搭的组合 —— 那是对的。
+# 演示数据：焦点**件数/人数/走势**是按演示需要编排的，来信原文与答复口径是
+# 真实的；不含任何真实个人信息（来信人姓名已不出现）。真实接入时换掉
+# FOCUS_TOPICS 的来源（改成 12345 平台聚类结果），字段形状和聚合逻辑都不用动。
+#
+# 口径提醒：channels 各项相加 = 诉求**件数**；people 是**按联系人去重**后
+# 的人数。两者不是一个口径（一人多次来电只计 1 人、一件工单/一封来信可能
+# 代表多人），所以 F3 会出现「1 件 / 37 人」这种看着不搭的组合 —— 那是对的。
 # --------------------------------------------------------------------------
+
+_LETTER_URL = "https://www.liyang.gov.cn/index.php?m=letter&c=index&a=show&id="
 
 FOCUS_TOPICS: list[dict[str, Any]] = [
     {
         "id": "F1",
-        "title": "小区停车位收费争议诉求集中",
+        "title": "城区初中学区归属咨询集中",
         "meta": "受理 128 件 · 环比 ↑42%",
         "tag": "集中",
         "tone": "warn",
-        "type": "物业管理 / 收费争议",
-        "state": "集中处置中",
+        "type": "教育 / 招生入学",
+        "state": "集中答复中",
         "state_tone": "warn",
-        "first_seen": "2026-10-19",
+        "first_seen": "2026-11-16",
         "detail": (
-            "阳光花园、锦绣江南等 4 个小区业主集中反映：物业在未公示收费标准的前提下"
-            "上调地下车位租金，涨幅 30%—50%，且拒绝开具发票。业主要求公开成本构成、"
-            "退还多收部分，并由街道牵头组织物业与业主代表协商。"
-            "市住建局已介入核实，街道正在组织三方协商会。"
+            "东方花园、燕山美林等小区业主反复来电：孩子上哪个初中、施教区明年会不会调。"
+            "业主援引市教育局对《东方花园学区划分》的答复原文——“根据 2025 年初中施教区"
+            "划分情况，东方花园初中施教区为溧阳市实验初级中学”，希望明确新一年度是否延续、"
+            "二手房落户是否影响入学排序。市教育局现行口径为“以当年公布的施教区划分为准”，"
+            "并留咨询电话 87220727；业主诉求是在新一轮划分方案公布前给出预告，"
+            "避免下手买房时踩空。"
         ),
         "tickets": [
-            ["TZ20261019032", "阳光花园停车收费未公示", "已转办"],
-            ["TZ20261021088", "地下车位租金上调 40%", "办理中"],
-            ["TZ20261023015", "业主拒缴停车费被限制入场", "已办结"],
+            ["TZ20261116032", "东方花园初中施教区归属", "已转办"],
+            ["TZ20261118088", "二手房落户是否影响入学排序", "办理中"],
+            ["TZ20261120015", "施教区调整何时公布", "已办结"],
         ],
         "channels": [
             ["12345 热线", 98],
@@ -841,64 +1089,84 @@ FOCUS_TOPICS: list[dict[str, Any]] = [
             ["「我的溧阳」APP", 11],
             ["网格员上报", 5],
         ],
-        "source": "12345 热线 · 市政务服务和数据管理局",
+        "source": "12345 热线 · 市教育局",
+        "letters": [
+            ["18842", "东方花园学区划分", "已答复",
+             _LETTER_URL + "18842"],
+        ],
+        "letters_note": "2025-12-11 留言、12-15 答复，答复单位：溧阳市人民政府；答复时限 4 天。",
         "people": 96,
         "people_delta": "较昨日 ↑12 人",
-        "keywords": [["停车费", 82], ["收费标准", 61], ["物业", 47], ["退还", 23]],
+        "keywords": [["施教区", 78], ["学区", 61], ["实验初中", 43], ["落户", 23]],
         "trend": [3, 4, 3, 5, 6, 4, 7, 9, 8, 11, 13, 12, 15, 18],
     },
     {
         "id": "F2",
-        "title": "农贸市场周边流动摊贩占道反弹",
-        "meta": "涉及 6 个市场 · 连续 3 日",
+        "title": "农村燃气通气进度入冬前反弹",
+        "meta": "涉及 5 个镇 · 连续 2 周",
         "tag": "反弹",
         "tone": "info",
-        "type": "城市管理 / 市容环境",
-        "state": "常态巡查",
+        "type": "公用事业 / 燃气",
+        "state": "专项核查中",
         "state_tone": "info",
-        "first_seen": "2026-10-16",
+        "first_seen": "2026-11-12",
         "detail": (
-            "城南、北门等 6 个农贸市场周边早市时段流动摊贩占道经营反弹，摊贩沿人行道"
-            "摆摊至机动车道，早高峰通行受阻；部分水产摊位污水直排路面。"
-            "城管局已恢复每日 6:30—9:00 定点值守，并联合市场监管排查市场内空置摊位。"
+            "戴埠镇高桥村委村民来信：村里 8—9 月预埋的燃气管道已完工，想知道什么时候通气。"
+            "主管部门答复原文——“目前正在进行整改与打压，预计下月通气”，该件答复满意度为"
+            "“非常满意”。同类来电集中在天目湖、社渚等镇，问的都是同一件事：管道埋好了、"
+            "路面回填了，气什么时候进户。入冬前两周集中出现，属于每年采暖季前的规律性反弹。"
         ),
         "tickets": [
-            ["TZ20261027061", "城南农贸市场早市占道", "已交办"],
-            ["TZ20261028009", "摊贩污水直排路面", "核查中"],
+            ["TZ20261112061", "戴埠镇高桥村燃气通气时间", "已交办"],
+            ["TZ20261114009", "管道已埋未通气", "核查中"],
         ],
         "channels": [
             ["12345 热线", 41],
             ["网格员上报", 15],
             ["「我的溧阳」APP", 7],
         ],
-        "source": "12345 热线 · 市城管局巡查",
+        "source": "12345 热线 · 市住建局",
+        "letters": [
+            ["18818", "戴埠镇村燃气通气时间咨询", "已答复",
+             _LETTER_URL + "18818"],
+        ],
+        "letters_note": "2025-11-15 留言、11-18 答复，答复单位：溧阳市人民政府；满意度“非常满意”。",
         "people": 54,
         "people_delta": "较昨日 ↑6 人",
-        "keywords": [["占道经营", 38], ["早市", 26], ["污水", 12], ["噪音", 9]],
+        "keywords": [["通气", 38], ["燃气管道", 26], ["打压", 12], ["入户", 9]],
         "trend": [4, 3, 5, 4, 6, 5, 4, 6, 7, 6, 8, 9, 8, 10],
     },
     {
         "id": "F3",
-        "title": "某企业欠薪线索涉 37 人",
-        "meta": "9月28日受理 · 已转人社局核查",
+        "title": "某企业 37 人租房补贴不予受理",
+        "meta": "11月10日受理 · 已转人社局核查",
         "tag": "转办",
         "tone": "muted",
-        "type": "劳动保障 / 欠薪",
+        "type": "人才服务 / 补贴",
         "state": "转办核查",
         "state_tone": "muted",
-        "first_seen": "2026-09-28",
+        "first_seen": "2026-11-10",
         "detail": (
-            "某机械加工企业自 8 月起拖欠 37 名职工工资，另欠缴部分社保。"
-            "线索由一名职工代表反映，工单已转市人社局劳动监察大队核查，"
-            "目前处于调查取证阶段，尚未立案。"
-            "该件为一件工单代表多人诉求，故件数与人数不同口径。"
+            "某企业职工来信：申报英才榜租房补贴被拒，理由为“单位已提供免费人才公寓的"
+            "不再享受该政策”。来信称单位提供的是集体宿舍、且每月收取房租水电（已提供扣费"
+            "明细），“一没有享受到人才公寓、二还是收费的集体宿舍”，不应被拒。"
+            "答复原文——“一是单位已提供宿舍予以居住；二是通过了解，企业收费内容为宿舍水电费"
+            "以及宿舍管理相关成本支出费用，不含房租”。该企业同批 37 名职工情况相同，"
+            "由 1 人代表来信，故件数与人数不同口径。另有研究生同日询问自考学历能否享受购房补贴券。"
         ),
-        "tickets": [["TZ20260928147", "某机械加工企业欠薪", "已转人社局核查"]],
-        "channels": [["12345 热线", 1]],
-        "source": "工单 TZ20260928147",
+        "tickets": [["TZ20261110147", "某企业 37 人租房补贴不予受理", "已转人社局核查"]],
+        "channels": [["市长信箱", 1]],
+        "source": "市长信箱 · 来信选登 18786、18902",
+        "letters": [
+            ["18786", "免费人才公寓的定义", "已答复",
+             _LETTER_URL + "18786"],
+            ["18902", "青年人才购房补贴咨询", "已答复",
+             _LETTER_URL + "18902"],
+        ],
+        "letters_note": "18786：2025-10-09 留言、10-10 答复；18902：2026-02-02 留言、当日答复。",
         "people": 37,
         "people_delta": "较昨日 —（无新增反映人）",
-        "keywords": [["欠薪", 37], ["工资", 31], ["社保", 14]],
+        "keywords": [["租房补贴", 37], ["人才公寓", 31], ["集体宿舍", 14]],
         "trend": [1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0],
     },
 ]
